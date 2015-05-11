@@ -468,8 +468,6 @@ ssize_t strbuf_write(struct strbuf *sb, FILE *f)
 }
 
 
-#define STRBUF_MAXLINK (2*PATH_MAX)
-
 int strbuf_readlink(struct strbuf *sb, const char *path, size_t hint)
 {
 	size_t oldalloc = sb->alloc;
