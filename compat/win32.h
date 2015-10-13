@@ -6,7 +6,7 @@
 #include <windows.h>
 #endif
 
-static inline int file_attr_to_st_mode (DWORD attr)
+#include "compat/win32/lazyload.h"
 {
 	int fMode = S_IREAD;
 	if (attr & FILE_ATTRIBUTE_DIRECTORY)
