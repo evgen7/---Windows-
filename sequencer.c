@@ -250,6 +250,10 @@ static int write_message(const void *buf, size_t len, const char *filename,
 		rollback_lock_file(&msg_file);
 		return error_errno(_("could not write eol to '%s"), filename);
 	}
+	if (append_eol && write(msg_fd, "\n", 1) < 0) {
+		rollback_lock_file(&msg_file);
+		return error_errno(_("Could not write eol to '%s"), filename);
+	}
 	if (commit_lock_file(&msg_file) < 0) {
 		rollback_lock_file(&msg_file);
 		return error(_("failed to finalize '%s'."), filename);
@@ -985,6 +989,16 @@ static int read_populate_todo(struct todo_list *todo_list,
 				return error(_("cannot revert during a cherry-pick."));
 	}
 
+	return 0;
+}
+
+static int git_config_string_dup(char **dest,
+				 const char *var, const char *value)
+{
+	if (!value)
+		return config_error_nonbool(var);
+	free(*dest);
+	*dest = xstrdup(value);
 	return 0;
 }
 
