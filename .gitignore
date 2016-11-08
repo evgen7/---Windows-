@@ -261,6 +261,8 @@
 *.idb
 *.pdb
 *.ilk
+*.iobj
+*.ipdb
 *.dll
 .vs/
 *.manifest
