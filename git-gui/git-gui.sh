@@ -2201,8 +2201,13 @@ proc do_gitk {revs {is_submodule false}} {
 		}
 		eval exec $cmd $revs "--" "--" &
 
-		set env(GIT_DIR) $_gitdir
-		set env(GIT_WORK_TREE) $_gitworktree
+		if {$old_GIT_DIR ne {}} {
+			set env(GIT_DIR) $old_GIT_DIR
+			set env(GIT_WORK_TREE) $_gitworktree
+		} else {
+			unset env(GIT_DIR)
+			unset env(GIT_WORK_TREE)
+		}
 		cd $pwd
 
 		ui_status $::starting_gitk_msg
