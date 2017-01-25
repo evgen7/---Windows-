@@ -928,6 +928,17 @@ revert_attrs:
 	return rc;
 }
 
+#undef strftime
+size_t mingw_strftime(char *s, size_t max,
+		      const char *format, const struct tm *tm)
+{
+	size_t ret = strftime(s, max, format, tm);
+
+	if (!ret && errno == EINVAL)
+		die("invalid strftime format: '%s'", format);
+	return ret;
+}
+
 unsigned int sleep (unsigned int seconds)
 {
 	Sleep(seconds*1000);
@@ -2626,12 +2637,6 @@ int readlink(const char *path, char *buf, size_t bufsiz)
 	char tmpbuf[MAX_LONG_PATH];
 	int len;
 
-	/* fail if symlinks are disabled */
-	if (!has_symlinks) {
-		errno = ENOSYS;
-		return -1;
-	}
-
 	if (xutftowcs_long_path(wpath, path) < 0)
 		return -1;
 
@@ -3065,6 +3070,10 @@ static void maybe_redirect_std_handles(void)
 
 #if defined(_MSC_VER)
 
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
+
 /*
  * This routine sits between wmain() and "main" in git.exe.
  * We receive UNICODE (wchar_t) values for argv and env.
@@ -3088,6 +3097,10 @@ int msc_startup(int argc, wchar_t **w_argv, wchar_t **w_env)
 	char *buffer = NULL;
 	int maxlen;
 	int k, exit_status;
+
+#ifdef _DEBUG
+	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
+#endif
 
 #ifdef USE_MSVC_CRTDBG
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);

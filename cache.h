@@ -173,6 +173,9 @@ struct cache_entry {
 	unsigned int ce_flags;
 	unsigned int ce_namelen;
 	unsigned int index;	/* for link extension */
+	unsigned int precompute_hash_state;
+	unsigned int precompute_hash_name;
+	unsigned int precompute_hash_dir;
 	struct object_id oid;
 	char name[FLEX_ARRAY]; /* more */
 };
@@ -228,6 +231,19 @@ struct cache_entry {
 #if CE_EXTENDED_FLAGS & 0x803FFFFF
 #error "CE_EXTENDED_FLAGS out of range"
 #endif
+
+/*
+ * Bit set if preload-index precomputed the hash value(s)
+ * for this cache-entry.
+ */ 
+#define CE_PRECOMPUTE_HASH_STATE__SET   (1 << 0)
+/*
+ * Bit set if precompute-index also precomputed the hash value
+ * for the parent directory.
+ */ 
+#define CE_PRECOMPUTE_HASH_STATE__DIR   (1 << 1)
+
+void precompute_istate_hashes(struct cache_entry *ce);
 
 /* Forward structure decls */
 struct pathspec;
@@ -559,6 +575,7 @@ extern int daemonize(void);
 /* Initialize and use the cache information */
 struct lock_file;
 extern int read_index(struct index_state *);
+extern void preload_index(struct index_state *, const struct pathspec *pathspec);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
@@ -571,6 +588,7 @@ extern int write_locked_index(struct index_state *, struct lock_file *lock, unsi
 extern int discard_index(struct index_state *);
 extern int unmerged_index(const struct index_state *);
 extern int verify_path(const char *path);
+extern int strcmp_offset(const char *s1_in, const char *s2_in, int *first_change);
 extern int index_dir_exists(struct index_state *istate, const char *name, int namelen);
 extern void adjust_dirname_case(struct index_state *istate, char *name);
 extern struct cache_entry *index_file_exists(struct index_state *istate, const char *name, int namelen, int igncase);
