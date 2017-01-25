@@ -2209,6 +2209,10 @@ proc do_gitk {revs {is_submodule false}} {
 
 		if {$old_GIT_DIR ne {}} {
 			set env(GIT_DIR) $old_GIT_DIR
+			set env(GIT_WORK_TREE) $_gitworktree
+		} else {
+			unset env(GIT_DIR)
+			unset env(GIT_WORK_TREE)
 		}
 		cd $pwd
 
