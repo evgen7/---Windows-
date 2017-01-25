@@ -494,16 +494,19 @@ static HANDLE swap_osfhnd(int fd, HANDLE new_handle)
 	 * It is because of this implicit close() that we created the
 	 * copy of the original.
 	 *
-	 * Note that we need to update the cached console handle to the
-	 * duplicated one because the dup2() call will implicitly close
-	 * the original one.
+	 * Note that the OS can recycle HANDLE (numbers) just like it
+	 * recycles fd (numbers), so we must update the cached value
+	 * of "console".  You can use GetFileType() to see that
+	 * handle and _get_osfhandle(fd) may have the same number
+	 * value, but they refer to different actual files now.
 	 *
 	 * Note that dup2() when given target := {0,1,2} will also
 	 * call SetStdHandle(), so we don't need to worry about that.
 	 */
+	dup2(new_fd, fd);
 	if (console == handle)
 		console = duplicate;
-	dup2(new_fd, fd);
+	handle = INVALID_HANDLE_VALUE;
 
 	/* Close the temp fd.  This explicitly closes "new_handle"
 	 * (because it has been associated with it).

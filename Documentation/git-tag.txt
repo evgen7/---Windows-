@@ -15,7 +15,7 @@ SYNOPSIS
 'git tag' [-n[<num>]] -l [--contains <commit>] [--points-at <object>]
 	[--column[=<options>] | --no-column] [--create-reflog] [--sort=<key>]
 	[--format=<format>] [--[no-]merged [<commit>]] [<pattern>...]
-'git tag' -v [--format=<format>] <tagname>...
+'git tag' -v <tagname>...
 
 DESCRIPTION
 -----------

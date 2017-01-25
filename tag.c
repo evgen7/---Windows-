@@ -3,7 +3,6 @@
 #include "commit.h"
 #include "tree.h"
 #include "blob.h"
-#include "gpg-interface.h"
 
 const char *tag_type = "tag";
 
@@ -25,9 +24,7 @@ static int run_gpg_verify(const char *buf, unsigned long size, unsigned flags)
 
 	ret = check_signature(buf, payload_size, buf + payload_size,
 				size - payload_size, &sigc);
-
-	if (!(flags & GPG_VERIFY_OMIT_STATUS))
-		print_signature_buffer(&sigc, flags);
+	print_signature_buffer(&sigc, flags);
 
 	signature_check_clear(&sigc);
 	return ret;

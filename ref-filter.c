@@ -1361,7 +1361,7 @@ static struct ref_array_item *new_ref_array_item(const char *refname,
 	return ref;
 }
 
-static int ref_kind_from_refname(const char *refname)
+static int filter_ref_kind(struct ref_filter *filter, const char *refname)
 {
 	unsigned int i;
 
@@ -1374,7 +1374,11 @@ static int ref_kind_from_refname(const char *refname)
 		{ "refs/tags/", FILTER_REFS_TAGS}
 	};
 
-	if (!strcmp(refname, "HEAD"))
+	if (filter->kind == FILTER_REFS_BRANCHES ||
+	    filter->kind == FILTER_REFS_REMOTES ||
+	    filter->kind == FILTER_REFS_TAGS)
+		return filter->kind;
+	else if (!strcmp(refname, "HEAD"))
 		return FILTER_REFS_DETACHED_HEAD;
 
 	for (i = 0; i < ARRAY_SIZE(ref_kind); i++) {
@@ -1383,15 +1387,6 @@ static int ref_kind_from_refname(const char *refname)
 	}
 
 	return FILTER_REFS_OTHERS;
-}
-
-static int filter_ref_kind(struct ref_filter *filter, const char *refname)
-{
-	if (filter->kind == FILTER_REFS_BRANCHES ||
-	    filter->kind == FILTER_REFS_REMOTES ||
-	    filter->kind == FILTER_REFS_TAGS)
-		return filter->kind;
-	return ref_kind_from_refname(refname);
 }
 
 /*
@@ -1594,7 +1589,8 @@ static int cmp_ref_sorting(struct ref_sorting *s, struct ref_array_item *a, stru
 	return (s->reverse) ? -cmp : cmp;
 }
 
-static int compare_refs(const void *a_, const void *b_, void *ref_sorting)
+static struct ref_sorting *ref_sorting;
+static int compare_refs(const void *a_, const void *b_)
 {
 	struct ref_array_item *a = *((struct ref_array_item **)a_);
 	struct ref_array_item *b = *((struct ref_array_item **)b_);
@@ -1610,7 +1606,8 @@ static int compare_refs(const void *a_, const void *b_, void *ref_sorting)
 
 void ref_array_sort(struct ref_sorting *sorting, struct ref_array *array)
 {
-	QSORT_S(array->items, array->nr, compare_refs, sorting);
+	ref_sorting = sorting;
+	QSORT(array->items, array->nr, compare_refs);
 }
 
 static void append_literal(const char *cp, const char *ep, struct ref_formatting_state *state)
@@ -1672,16 +1669,6 @@ void show_ref_array_item(struct ref_array_item *info, const char *format, int qu
 	fwrite(final_buf->buf, 1, final_buf->len, stdout);
 	pop_stack_element(&state.stack);
 	putchar('\n');
-}
-
-void pretty_print_ref(const char *name, const unsigned char *sha1,
-		const char *format)
-{
-	struct ref_array_item *ref_item;
-	ref_item = new_ref_array_item(name, sha1, 0);
-	ref_item->kind = ref_kind_from_refname(name);
-	show_ref_array_item(ref_item, format, 0);
-	free_array_item(ref_item);
 }
 
 /*  If no sorting option is given, use refname to sort as default */

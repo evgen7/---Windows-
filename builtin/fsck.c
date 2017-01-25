@@ -205,6 +205,8 @@ static void check_reachable_object(struct object *obj)
 	if (!(obj->flags & HAS_OBJ)) {
 		if (has_sha1_pack(obj->oid.hash))
 			return; /* it is in pack - forget about it */
+		if (connectivity_only && has_object_file(&obj->oid))
+			return;
 		printf("missing %s %s\n", typename(obj->type),
 			describe_object(obj));
 		errors_found |= ERROR_REACHABLE;
@@ -223,7 +225,7 @@ static void check_unreachable_object(struct object *obj)
 	 * to complain about it being unreachable (since it does
 	 * not exist).
 	 */
-	if (!(obj->flags & HAS_OBJ))
+	if (!obj->parsed)
 		return;
 
 	/*
@@ -360,6 +362,18 @@ static int fsck_obj(struct object *obj)
 	return 0;
 }
 
+static int fsck_sha1(const unsigned char *sha1)
+{
+	struct object *obj = parse_object(sha1);
+	if (!obj) {
+		errors_found |= ERROR_OBJECT;
+		return error("%s: object corrupt or missing",
+			     sha1_to_hex(sha1));
+	}
+	obj->flags |= HAS_OBJ;
+	return fsck_obj(obj);
+}
+
 static int fsck_obj_buffer(const unsigned char *sha1, enum object_type type,
 			   unsigned long size, void *buffer, int *eaten)
 {
@@ -386,7 +400,7 @@ static void fsck_handle_reflog_sha1(const char *refname, unsigned char *sha1,
 
 	if (!is_null_sha1(sha1)) {
 		obj = lookup_object(sha1);
-		if (obj && (obj->flags & HAS_OBJ)) {
+		if (obj) {
 			if (timestamp && name_objects)
 				add_decoration(fsck_walk_options.object_names,
 					obj,
@@ -474,41 +488,9 @@ static void get_default_heads(void)
 	}
 }
 
-static struct object *parse_loose_object(const unsigned char *sha1,
-					 const char *path)
-{
-	struct object *obj;
-	void *contents;
-	enum object_type type;
-	unsigned long size;
-	int eaten;
-
-	if (read_loose_object(path, sha1, &type, &size, &contents) < 0)
-		return NULL;
-
-	if (!contents && type != OBJ_BLOB)
-		die("BUG: read_loose_object streamed a non-blob");
-
-	obj = parse_object_buffer(sha1, type, size, contents, &eaten);
-
-	if (!eaten)
-		free(contents);
-	return obj;
-}
-
 static int fsck_loose(const unsigned char *sha1, const char *path, void *data)
 {
-	struct object *obj = parse_loose_object(sha1, path);
-
-	if (!obj) {
-		errors_found |= ERROR_OBJECT;
-		error("%s: object corrupt or missing: %s",
-		      sha1_to_hex(sha1), path);
-		return 0; /* keep checking other objects */
-	}
-
-	obj->flags = HAS_OBJ;
-	if (fsck_obj(obj))
+	if (fsck_sha1(sha1))
 		errors_found |= ERROR_OBJECT;
 	return 0;
 }
@@ -602,79 +584,6 @@ static int fsck_cache_tree(struct cache_tree *it)
 	return err;
 }
 
-static void mark_object_for_connectivity(const unsigned char *sha1)
-{
-	struct object *obj = lookup_object(sha1);
-
-	/*
-	 * Setting the object type here isn't strictly necessary for a
-	 * connectivity check. In most cases, our walk will expect a certain
-	 * type (e.g., a tree referencing a blob) and will use lookup_blob() to
-	 * assign the type. But doing it here has two advantages:
-	 *
-	 *   1. When the fsck_walk code looks at objects that _don't_ come from
-	 *      links (e.g., the tip of a ref), it may complain about the
-	 *      "unknown object type".
-	 *
-	 *   2. This serves as a nice cross-check that the graph links are
-	 *      sane. So --connectivity-only does not check that the bits of
-	 *      blobs are not corrupted, but it _does_ check that 100644 tree
-	 *      entries point to blobs, and so forth.
-	 *
-	 * Unfortunately we can't just use parse_object() here, because the
-	 * whole point of --connectivity-only is to avoid reading the object
-	 * data more than necessary.
-	 */
-	if (!obj || obj->type == OBJ_NONE) {
-		enum object_type type = sha1_object_info(sha1, NULL);
-		switch (type) {
-		case OBJ_BAD:
-			error("%s: unable to read object type",
-			      sha1_to_hex(sha1));
-			break;
-		case OBJ_COMMIT:
-			obj = (struct object *)lookup_commit(sha1);
-			break;
-		case OBJ_TREE:
-			obj = (struct object *)lookup_tree(sha1);
-			break;
-		case OBJ_BLOB:
-			obj = (struct object *)lookup_blob(sha1);
-			break;
-		case OBJ_TAG:
-			obj = (struct object *)lookup_tag(sha1);
-			break;
-		default:
-			error("%s: unknown object type %d",
-			      sha1_to_hex(sha1), type);
-		}
-
-		if (!obj || obj->type == OBJ_NONE) {
-			errors_found |= ERROR_OBJECT;
-			return;
-		}
-	}
-
-	obj->flags |= HAS_OBJ;
-}
-
-static int mark_loose_for_connectivity(const unsigned char *sha1,
-				       const char *path,
-				       void *data)
-{
-	mark_object_for_connectivity(sha1);
-	return 0;
-}
-
-static int mark_packed_for_connectivity(const unsigned char *sha1,
-					struct packed_git *pack,
-					uint32_t pos,
-					void *data)
-{
-	mark_object_for_connectivity(sha1);
-	return 0;
-}
-
 static char const * const fsck_usage[] = {
 	N_("git fsck [<options>] [<object>...]"),
 	NULL
@@ -731,41 +640,38 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 	git_config(fsck_config, NULL);
 
 	fsck_head_link();
-	if (connectivity_only) {
-		for_each_loose_object(mark_loose_for_connectivity, NULL, 0);
-		for_each_packed_object(mark_packed_for_connectivity, NULL, 0);
-	} else {
+	if (!connectivity_only) {
 		fsck_object_dir(get_object_directory());
 
 		prepare_alt_odb();
 		for (alt = alt_odb_list; alt; alt = alt->next)
 			fsck_object_dir(alt->path);
+	}
 
-		if (check_full) {
-			struct packed_git *p;
-			uint32_t total = 0, count = 0;
-			struct progress *progress = NULL;
+	if (check_full) {
+		struct packed_git *p;
+		uint32_t total = 0, count = 0;
+		struct progress *progress = NULL;
 
-			prepare_packed_git();
+		prepare_packed_git();
 
-			if (show_progress) {
-				for (p = packed_git; p; p = p->next) {
-					if (open_pack_index(p))
-						continue;
-					total += p->num_objects;
-				}
-
-				progress = start_progress(_("Checking objects"), total);
-			}
+		if (show_progress) {
 			for (p = packed_git; p; p = p->next) {
-				/* verify gives error messages itself */
-				if (verify_pack(p, fsck_obj_buffer,
-						progress, count))
-					errors_found |= ERROR_PACK;
-				count += p->num_objects;
+				if (open_pack_index(p))
+					continue;
+				total += p->num_objects;
 			}
-			stop_progress(&progress);
+
+			progress = start_progress(_("Checking objects"), total);
 		}
+		for (p = packed_git; p; p = p->next) {
+			/* verify gives error messages itself */
+			if (verify_pack(p, fsck_obj_buffer,
+					progress, count))
+				errors_found |= ERROR_PACK;
+			count += p->num_objects;
+		}
+		stop_progress(&progress);
 	}
 
 	heads = 0;
@@ -775,11 +681,9 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 		if (!get_sha1(arg, sha1)) {
 			struct object *obj = lookup_object(sha1);
 
-			if (!obj || !(obj->flags & HAS_OBJ)) {
-				error("%s: object missing", sha1_to_hex(sha1));
-				errors_found |= ERROR_OBJECT;
+			/* Error is printed by lookup_object(). */
+			if (!obj)
 				continue;
-			}
 
 			obj->used = 1;
 			if (name_objects)
@@ -790,7 +694,6 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 			continue;
 		}
 		error("invalid parameter: expected sha1, got '%s'", arg);
-		errors_found |= ERROR_OBJECT;
 	}
 
 	/*
@@ -798,7 +701,7 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 	 * default ones from .git/refs. We also consider the index file
 	 * in this case (ie this implies --cache).
 	 */
-	if (!argc) {
+	if (!heads) {
 		get_default_heads();
 		keep_cache_objects = 1;
 	}
