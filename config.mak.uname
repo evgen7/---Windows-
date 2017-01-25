@@ -355,8 +355,7 @@ ifeq ($(uname_S),Windows)
 	NO_STRCASESTR = YesPlease
 	NO_STRLCPY = YesPlease
 	NO_MEMMEM = YesPlease
-	# NEEDS_LIBICONV = YesPlease
-	NO_ICONV = YesPlease
+	NEEDS_LIBICONV = YesPlease
 	NO_STRTOUMAX = YesPlease
 	NO_MKDTEMP = YesPlease
 	NO_MKSTEMPS = YesPlease
@@ -377,7 +376,6 @@ ifeq ($(uname_S),Windows)
 	NO_REGEX = YesPlease
 	NO_GETTEXT = YesPlease
 	NO_PYTHON = YesPlease
-	BLK_SHA1 = YesPlease
 	ETAGS_TARGET = ETAGS
 	NO_INET_PTON = YesPlease
 	NO_INET_NTOP = YesPlease
@@ -422,12 +420,16 @@ ifeq ($(uname_S),Windows)
 	# Optionally enable memory leak reporting.
 	# BASIC_CLFAGS += -DUSE_MSVC_CRTDBG
 	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
+	# Always give "-Zi" to the compiler and "-debug" to linker (even in
+	# release mode) to force a PDB to be generated (like RelWithDebInfo).
+	BASIC_CFLAGS += -Zi
+	BASIC_LDFLAGS += -debug
 ifndef DEBUG
-	BASIC_CFLAGS += -GL -Os -MD
-	BASIC_LDFLAGS += -LTCG
+	BASIC_CFLAGS += -GL -Gy -O2 -Oy- -MD -DNDEBUG
+	BASIC_LDFLAGS += -release -LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO /DEBUGTYPE:CV,FIXUP
 	AR += -LTCG
 else
-	BASIC_CFLAGS += -Zi -MDd -DDEBUG -D_DEBUG
+	BASIC_CFLAGS += -MDd -DDEBUG -D_DEBUG
 endif
 	X = .exe
 
@@ -583,11 +585,19 @@ else
 	ifeq ($(shell expr "$(uname_R)" : '2\.'),2)
 		# MSys2
 		prefix = /usr/
+		# Enable DEP
+		BASIC_LDFLAGS += -Wl,--nxcompat
+		# Enable ASLR (unless debugging)
+		ifneq (,$(findstring -O,$(CFLAGS)))
+			BASIC_LDFLAGS += -Wl,--dynamicbase
+		endif
 		ifeq (MINGW32,$(MSYSTEM))
 			prefix = /mingw32
+			BASIC_LDFLAGS += -Wl,--pic-executable,-e,_mainCRTStartup
 		endif
 		ifeq (MINGW64,$(MSYSTEM))
 			prefix = /mingw64
+			BASIC_LDFLAGS += -Wl,--pic-executable,-e,mainCRTStartup
 		else
 			COMPAT_CFLAGS += -D_USE_32BIT_TIME_T
 			BASIC_LDFLAGS += -Wl,--large-address-aware
