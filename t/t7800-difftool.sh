@@ -23,8 +23,6 @@ prompt_given ()
 	test "$prompt" = "Launch 'test-tool' [Y/n]? branch"
 }
 
-# NEEDSWORK: lose all the PERL prereqs once legacy-difftool is retired.
-
 # Create a file on master and change it on branch
 test_expect_success 'setup' '
 	echo master >file &&
