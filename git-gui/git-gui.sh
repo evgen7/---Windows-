@@ -275,10 +275,6 @@ proc is_Cygwin {} {
 				set _iscygwin 0
 			} else {
 				set _iscygwin 1
-				# Handle MSys2 which is only cygwin when MSYSTEM is MSYS.
-				if {[info exists ::env(MSYSTEM)] && $::env(MSYSTEM) ne "MSYS"} {
-					set _iscygwin 0
-				}
 			}
 		} else {
 			set _iscygwin 0
@@ -1230,6 +1226,12 @@ set have_tk85 [expr {[package vcompare $tk_version "8.5"] >= 0}]
 if {![info exists env(SSH_ASKPASS)]} {
 	set env(SSH_ASKPASS) [gitexec git-gui--askpass]
 }
+if {![info exists env(GIT_ASKPASS)]} {
+	set env(GIT_ASKPASS) [gitexec git-gui--askpass]
+}
+if {![info exists env(GIT_ASK_YESNO)]} {
+	set env(GIT_ASK_YESNO) [gitexec git-gui--askyesno]
+}
 
 ######################################################################
 ##
@@ -1325,9 +1327,6 @@ if {[lindex $_reponame end] eq {.git}} {
 } else {
 	set _reponame [lindex $_reponame end]
 }
-
-set env(GIT_DIR) $_gitdir
-set env(GIT_WORK_TREE) $_gitworktree
 
 ######################################################################
 ##
@@ -1602,13 +1601,11 @@ proc run_prepare_commit_msg_hook {} {
 	if {[file isfile [gitdir MERGE_MSG]]} {
 		set pcm_source "merge"
 		set fd_mm [open [gitdir MERGE_MSG] r]
-		fconfigure $fd_mm -encoding utf-8
 		puts -nonewline $fd_pcm [read $fd_mm]
 		close $fd_mm
 	} elseif {[file isfile [gitdir SQUASH_MSG]]} {
 		set pcm_source "squash"
 		set fd_sm [open [gitdir SQUASH_MSG] r]
-		fconfigure $fd_sm -encoding utf-8
 		puts -nonewline $fd_pcm [read $fd_sm]
 		close $fd_sm
 	} else {
@@ -2153,7 +2150,7 @@ set starting_gitk_msg [mc "Starting gitk... please wait..."]
 
 proc do_gitk {revs {is_submodule false}} {
 	global current_diff_path file_states current_diff_side ui_index
-	global _gitdir _gitworktree
+	global _gitworktree
 
 	# -- Always start gitk through whatever we were loaded with.  This
 	#    lets us bypass using shell process on Windows systems.
@@ -2165,12 +2162,19 @@ proc do_gitk {revs {is_submodule false}} {
 	} else {
 		global env
 
+		if {[info exists env(GIT_DIR)]} {
+			set old_GIT_DIR $env(GIT_DIR)
+		} else {
+			set old_GIT_DIR {}
+		}
+
 		set pwd [pwd]
 
 		if {!$is_submodule} {
 			if {![is_bare]} {
 				cd $_gitworktree
 			}
+			set env(GIT_DIR) [file normalize [gitdir]]
 		} else {
 			cd $current_diff_path
 			if {$revs eq {--}} {
@@ -2191,18 +2195,15 @@ proc do_gitk {revs {is_submodule false}} {
 				}
 				set revs $old_sha1...$new_sha1
 			}
-			# GIT_DIR and GIT_WORK_TREE for the submodule are not the ones
-			# we've been using for the main repository, so unset them.
-			# TODO we could make life easier (start up faster?) for gitk
-			# by setting these to the appropriate values to allow gitk
-			# to skip the heuristics to find their proper value
-			unset env(GIT_DIR)
-			unset env(GIT_WORK_TREE)
+			if {[info exists env(GIT_DIR)]} {
+				unset env(GIT_DIR)
+			}
 		}
 		eval exec $cmd $revs "--" "--" &
 
-		set env(GIT_DIR) $_gitdir
-		set env(GIT_WORK_TREE) $_gitworktree
+		if {$old_GIT_DIR ne {}} {
+			set env(GIT_DIR) $old_GIT_DIR
+		}
 		cd $pwd
 
 		ui_status $::starting_gitk_msg
@@ -2223,20 +2224,22 @@ proc do_git_gui {} {
 		error_popup [mc "Couldn't find git gui in PATH"]
 	} else {
 		global env
-		global _gitdir _gitworktree
 
-		# see note in do_gitk about unsetting these vars when
-		# running tools in a submodule
-		unset env(GIT_DIR)
-		unset env(GIT_WORK_TREE)
+		if {[info exists env(GIT_DIR)]} {
+			set old_GIT_DIR $env(GIT_DIR)
+			unset env(GIT_DIR)
+		} else {
+			set old_GIT_DIR {}
+		}
 
 		set pwd [pwd]
 		cd $current_diff_path
 
 		eval exec $exe gui &
 
-		set env(GIT_DIR) $_gitdir
-		set env(GIT_WORK_TREE) $_gitworktree
+		if {$old_GIT_DIR ne {}} {
+			set env(GIT_DIR) $old_GIT_DIR
+		}
 		cd $pwd
 
 		ui_status $::starting_gitk_msg
@@ -2493,28 +2496,13 @@ proc force_first_diff {after} {
 	}
 }
 
-proc toggle_or_diff {mode w args} {
+proc toggle_or_diff {w x y} {
 	global file_states file_lists current_diff_path ui_index ui_workdir
 	global last_clicked selected_paths
 
-	if {$mode eq "click"} {
-		foreach {x y} $args break
-		set pos [split [$w index @$x,$y] .]
-		foreach {lno col} $pos break
-	} else {
-		if {$last_clicked ne {}} {
-			set lno [lindex $last_clicked 1]
-		} else {
-			set lno [expr {int([lindex [$w tag ranges in_diff] 0])}]
-		}
-		if {$mode eq "toggle"} {
-			set col 0; set y 2
-		} else {
-			incr lno [expr {$mode eq "up" ? -1 : 1}]
-			set col 1
-		}
-	}
-
+	set pos [split [$w index @$x,$y] .]
+	set lno [lindex $pos 0]
+	set col [lindex $pos 1]
 	set path [lindex $file_lists($w) [expr {$lno - 1}]]
 	if {$path eq {}} {
 		set last_clicked {}
@@ -2522,7 +2510,6 @@ proc toggle_or_diff {mode w args} {
 	}
 
 	set last_clicked [list $w $lno]
-	focus $w
 	array unset selected_paths
 	$ui_index tag remove in_sel 0.0 end
 	$ui_workdir tag remove in_sel 0.0 end
@@ -2602,7 +2589,7 @@ proc add_range_to_selection {w x y} {
 	global file_lists last_clicked selected_paths
 
 	if {[lindex $last_clicked 0] ne $w} {
-		toggle_or_diff click $w $x $y
+		toggle_or_diff $w $x $y
 		return
 	}
 
@@ -3011,7 +2998,7 @@ bind all <$M1B-Key-W> {destroy [winfo toplevel %W]}
 
 set subcommand_args {}
 proc usage {} {
-	set s "[mc usage:] $::argv0 $::subcommand $::subcommand_args"
+	set s "usage: $::argv0 $::subcommand $::subcommand_args"
 	if {[tk windowingsystem] eq "win32"} {
 		wm withdraw .
 		tk_messageBox -icon info -message $s \
@@ -3143,7 +3130,7 @@ gui {
 	# fall through to setup UI for commits
 }
 default {
-	set err "[mc usage:] $argv0 \[{blame|browser|citool}\]"
+	set err "usage: $argv0 \[{blame|browser|citool}\]"
 	if {[tk windowingsystem] eq "win32"} {
 		wm withdraw .
 		tk_messageBox -icon error -message $err \
@@ -3182,38 +3169,16 @@ if {$use_ttk} {
 }
 pack .vpane -anchor n -side top -fill both -expand 1
 
-# -- Working Directory File List
-
-textframe .vpane.files.workdir -height 100 -width 200
-tlabel .vpane.files.workdir.title -text [mc "Unstaged Changes"] \
-	-background lightsalmon -foreground black
-ttext $ui_workdir -background white -foreground black \
-	-borderwidth 0 \
-	-width 20 -height 10 \
-	-wrap none \
-	-takefocus 1 -highlightthickness 1\
-	-cursor $cursor_ptr \
-	-xscrollcommand {.vpane.files.workdir.sx set} \
-	-yscrollcommand {.vpane.files.workdir.sy set} \
-	-state disabled
-${NS}::scrollbar .vpane.files.workdir.sx -orient h -command [list $ui_workdir xview]
-${NS}::scrollbar .vpane.files.workdir.sy -orient v -command [list $ui_workdir yview]
-pack .vpane.files.workdir.title -side top -fill x
-pack .vpane.files.workdir.sx -side bottom -fill x
-pack .vpane.files.workdir.sy -side right -fill y
-pack $ui_workdir -side left -fill both -expand 1
-
 # -- Index File List
 #
-textframe .vpane.files.index -height 100 -width 200
+${NS}::frame .vpane.files.index -height 100 -width 200
 tlabel .vpane.files.index.title \
 	-text [mc "Staged Changes (Will Commit)"] \
 	-background lightgreen -foreground black
-ttext $ui_index -background white -foreground black \
+text $ui_index -background white -foreground black \
 	-borderwidth 0 \
 	-width 20 -height 10 \
 	-wrap none \
-	-takefocus 1 -highlightthickness 1\
 	-cursor $cursor_ptr \
 	-xscrollcommand {.vpane.files.index.sx set} \
 	-yscrollcommand {.vpane.files.index.sy set} \
@@ -3225,8 +3190,26 @@ pack .vpane.files.index.sx -side bottom -fill x
 pack .vpane.files.index.sy -side right -fill y
 pack $ui_index -side left -fill both -expand 1
 
-# -- Insert the workdir and index into the panes
+# -- Working Directory File List
 #
+${NS}::frame .vpane.files.workdir -height 100 -width 200
+tlabel .vpane.files.workdir.title -text [mc "Unstaged Changes"] \
+	-background lightsalmon -foreground black
+text $ui_workdir -background white -foreground black \
+	-borderwidth 0 \
+	-width 20 -height 10 \
+	-wrap none \
+	-cursor $cursor_ptr \
+	-xscrollcommand {.vpane.files.workdir.sx set} \
+	-yscrollcommand {.vpane.files.workdir.sy set} \
+	-state disabled
+${NS}::scrollbar .vpane.files.workdir.sx -orient h -command [list $ui_workdir xview]
+${NS}::scrollbar .vpane.files.workdir.sy -orient v -command [list $ui_workdir yview]
+pack .vpane.files.workdir.title -side top -fill x
+pack .vpane.files.workdir.sx -side bottom -fill x
+pack .vpane.files.workdir.sy -side right -fill y
+pack $ui_workdir -side left -fill both -expand 1
+
 .vpane.files add .vpane.files.workdir
 .vpane.files add .vpane.files.index
 if {!$use_ttk} {
@@ -3309,7 +3292,7 @@ if {![is_enabled nocommit]} {
 #
 ${NS}::frame .vpane.lower.commarea.buffer
 ${NS}::frame .vpane.lower.commarea.buffer.header
-set ui_comm .vpane.lower.commarea.buffer.frame.t
+set ui_comm .vpane.lower.commarea.buffer.t
 set ui_coml .vpane.lower.commarea.buffer.header.l
 
 if {![is_enabled nocommit]} {
@@ -3352,25 +3335,20 @@ if {![is_enabled nocommit]} {
 	pack .vpane.lower.commarea.buffer.header.new -side right
 }
 
-textframe .vpane.lower.commarea.buffer.frame
-ttext $ui_comm -background white -foreground black \
+text $ui_comm -background white -foreground black \
 	-borderwidth 1 \
 	-undo true \
 	-maxundo 20 \
 	-autoseparators true \
-	-takefocus 1 \
-	-highlightthickness 1 \
 	-relief sunken \
 	-width $repo_config(gui.commitmsgwidth) -height 9 -wrap none \
 	-font font_diff \
-	-yscrollcommand {.vpane.lower.commarea.buffer.frame.sby set}
-${NS}::scrollbar .vpane.lower.commarea.buffer.frame.sby \
+	-yscrollcommand {.vpane.lower.commarea.buffer.sby set}
+${NS}::scrollbar .vpane.lower.commarea.buffer.sby \
 	-command [list $ui_comm yview]
-
-pack .vpane.lower.commarea.buffer.frame.sby -side right -fill y
-pack $ui_comm -side left -fill y
 pack .vpane.lower.commarea.buffer.header -side top -fill x
-pack .vpane.lower.commarea.buffer.frame -side left -fill y
+pack .vpane.lower.commarea.buffer.sby -side right -fill y
+pack $ui_comm -side left -fill y
 pack .vpane.lower.commarea.buffer -side left -fill y
 
 # -- Commit Message Buffer Context Menu
@@ -3468,13 +3446,12 @@ bind_button3 .vpane.lower.diff.header.path "tk_popup $ctxm %X %Y"
 
 # -- Diff Body
 #
-textframe .vpane.lower.diff.body
+${NS}::frame .vpane.lower.diff.body
 set ui_diff .vpane.lower.diff.body.t
-ttext $ui_diff -background white -foreground black \
+text $ui_diff -background white -foreground black \
 	-borderwidth 0 \
 	-width 80 -height 5 -wrap none \
 	-font font_diff \
-	-takefocus 1 -highlightthickness 1 \
 	-xscrollcommand {.vpane.lower.diff.body.sbx set} \
 	-yscrollcommand {.vpane.lower.diff.body.sby set} \
 	-state disabled
@@ -3829,10 +3806,10 @@ bind .   <$M1B-Key-r> ui_do_rescan
 bind .   <$M1B-Key-R> ui_do_rescan
 bind .   <$M1B-Key-s> do_signoff
 bind .   <$M1B-Key-S> do_signoff
-bind .   <$M1B-Key-t> { toggle_or_diff toggle %W }
-bind .   <$M1B-Key-T> { toggle_or_diff toggle %W }
-bind .   <$M1B-Key-u> { toggle_or_diff toggle %W }
-bind .   <$M1B-Key-U> { toggle_or_diff toggle %W }
+bind .   <$M1B-Key-t> do_add_selection
+bind .   <$M1B-Key-T> do_add_selection
+bind .   <$M1B-Key-u> do_unstage_selection
+bind .   <$M1B-Key-U> do_unstage_selection
 bind .   <$M1B-Key-j> do_revert_selection
 bind .   <$M1B-Key-J> do_revert_selection
 bind .   <$M1B-Key-i> do_add_all
@@ -3844,11 +3821,9 @@ bind .   <$M1B-Key-plus> {show_more_context;break}
 bind .   <$M1B-Key-KP_Add> {show_more_context;break}
 bind .   <$M1B-Key-Return> do_commit
 foreach i [list $ui_index $ui_workdir] {
-	bind $i <Button-1>       { toggle_or_diff click %W %x %y; break }
-	bind $i <$M1B-Button-1>  { add_one_to_selection %W %x %y; break }
-	bind $i <Shift-Button-1> { add_range_to_selection %W %x %y; break }
-	bind $i <Key-Up>         { toggle_or_diff up %W; break }
-	bind $i <Key-Down>       { toggle_or_diff down %W; break }
+	bind $i <Button-1>       "toggle_or_diff         $i %x %y; break"
+	bind $i <$M1B-Button-1>  "add_one_to_selection   $i %x %y; break"
+	bind $i <Shift-Button-1> "add_range_to_selection $i %x %y; break"
 }
 unset i
 
