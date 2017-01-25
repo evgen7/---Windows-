@@ -38,9 +38,9 @@ struct fsentry {
 		struct {
 			/* More stat members (only used for file entries). */
 			off64_t st_size;
-			time_t st_atime;
-			time_t st_mtime;
-			time_t st_ctime;
+			struct timespec st_atim;
+			struct timespec st_mtim;
+			struct timespec st_ctim;
 		};
 	};
 };
@@ -147,12 +147,13 @@ static struct fsentry *fseentry_create_entry(struct fsentry *list,
 
 	fse = fsentry_alloc(list, buf, len);
 
-	fse->st_mode = file_attr_to_st_mode(fdata->dwFileAttributes);
-	fse->st_size = (((off64_t) (fdata->nFileSizeHigh)) << 32)
-			| fdata->nFileSizeLow;
-	fse->st_atime = filetime_to_time_t(&(fdata->ftLastAccessTime));
-	fse->st_mtime = filetime_to_time_t(&(fdata->ftLastWriteTime));
-	fse->st_ctime = filetime_to_time_t(&(fdata->ftCreationTime));
+	fse->st_mode = file_attr_to_st_mode(fdata->dwFileAttributes,
+			fdata->dwReserved0);
+	fse->st_size = S_ISLNK(fse->st_mode) ? MAX_LONG_PATH :
+			fdata->nFileSizeLow | (((off_t) fdata->nFileSizeHigh) << 32);
+	filetime_to_timespec(&(fdata->ftLastAccessTime), &(fse->st_atim));
+	filetime_to_timespec(&(fdata->ftLastWriteTime), &(fse->st_mtim));
+	filetime_to_timespec(&(fdata->ftCreationTime), &(fse->st_ctim));
 
 	return fse;
 }
@@ -431,9 +432,9 @@ int fscache_lstat(const char *filename, struct stat *st)
 	st->st_nlink = 1;
 	st->st_mode = fse->st_mode;
 	st->st_size = fse->st_size;
-	st->st_atime = fse->st_atime;
-	st->st_mtime = fse->st_mtime;
-	st->st_ctime = fse->st_ctime;
+	st->st_atim = fse->st_atim;
+	st->st_mtim = fse->st_mtim;
+	st->st_ctim = fse->st_ctim;
 
 	/* don't forget to release fsentry */
 	fsentry_release(fse);
@@ -456,7 +457,8 @@ static struct dirent *fscache_readdir(DIR *base_dir)
 	if (!next)
 		return NULL;
 	dir->pfsentry = next;
-	dir->dirent.d_type = S_ISDIR(next->st_mode) ? DT_DIR : DT_REG;
+	dir->dirent.d_type = S_ISREG(next->st_mode) ? DT_REG :
+			S_ISDIR(next->st_mode) ? DT_DIR : DT_LNK;
 	dir->dirent.d_name = (char*) next->name;
 	return &(dir->dirent);
 }
