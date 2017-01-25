@@ -1,0 +1,335 @@
+Git 2.12 Release Notes
+======================
+
+Backward compatibility notes.
+
+ * Use of an empty string that is used for 'everything matches' is
+   still warned and Git asks users to use a more explicit '.' for that
+   instead.  The hope is that existing users will not mind this
+   change, and eventually the warning can be turned into a hard error,
+   upgrading the deprecation into removal of this (mis)feature.  That
+   is not scheduled to happen in the upcoming release (yet).
+
+ * The historical argument order "git merge <msg> HEAD <commit>..."
+   has been deprecated for quite some time, and will be removed in the
+   upcoming release.
+
+
+Updates since v2.11
+-------------------
+
+UI, Workflows & Features
+
+ * Various updates to "git p4".
+
+ * "git p4" didn't interact with the internal of .git directory
+   correctly in the modern "git-worktree"-enabled world.
+
+ * "git branch --list" and friends learned "--ignore-case" option to
+   optionally sort branches and tags case insensitively.
+
+ * In addition to %(subject), %(body), "log --pretty=format:..."
+   learned a new placeholder %(trailers).
+
+ * "git rebase" learned "--quit" option, which allows a user to
+   remove the metadata left by an earlier "git rebase" that was
+   manually aborted without using "git rebase --abort".
+
+ * "git clone --reference $there --recurse-submodules $super" has been
+   taught to guess repositories usable as references for submodules of
+   $super that are embedded in $there while making a clone of the
+   superproject borrow objects from $there; extend the mechanism to
+   also allow submodules of these submodules to borrow repositories
+   embedded in these clones of the submodules embedded in the clone of
+   the superproject.
+
+ * Porcelain scripts written in Perl are getting internationalized.
+
+ * "git merge --continue" has been added as a synonym to "git commit"
+   to conclude a merge that has stopped due to conflicts.
+
+ * Finer-grained control of what protocols are allowed for transports
+   during clone/fetch/push have been enabled via a new configuration
+   mechanism.
+
+ * "git shortlog" learned "--committer" option to group commits by
+   committer, instead of author.
+
+ * GitLFS integration with "git p4" has been updated.
+
+ * The isatty() emulation for Windows has been updated to eradicate
+   the previous hack that depended on internals of (older) MSVC
+   runtime.
+
+ * Some platforms no longer understand "latin-1" that is still seen in
+   the wild in e-mail headers; replace them with "iso-8859-1" that is
+   more widely known when conversion fails from/to it.
+   (merge df3755888b jc/latin-1 later to maint).
+
+ * "git grep" has been taught to optionally recurse into submodules.
+
+ * "git rm" used to refuse to remove a submodule when it has its own
+   git repository embedded in its working tree.  It learned to move
+   the repository away to $GIT_DIR/modules/ of the superproject
+   instead, and allow the submodule to be deleted (as long as there
+   will be no loss of local modifications, that is).
+
+ * A recent updates to "git p4" was not usable for older p4 but it
+   could be made to work with minimum changes.  Do so.
+
+ * "git diff" learned diff.interHunkContext configuration variable
+   that gives the default value for its --inter-hunk-context option.
+
+ * The prereleaseSuffix feature of version comparison that is used in
+   "git tag -l" did not correctly when two or more prereleases for the
+   same release were present (e.g. when 2.0, 2.0-beta1, and 2.0-beta2
+   are there and the code needs to compare 2.0-beta1 and 2.0-beta2).
+
+
+Performance, Internal Implementation, Development Support etc.
+
+ * Commands that operate on a log message and add lines to the trailer
+   blocks, such as "format-patch -s", "cherry-pick (-x|-s)", and
+   "commit -s", have been taught to use the logic of and share the
+   code with "git interpret-trailer".
+
+ * The default Travis-CI configuration specifies newer P4 and GitLFS.
+
+ * The "fast hash" that had disastrous performance issues in some
+   corner cases has been retired from the internal diff.
+
+ * The character width table has been updated to match Unicode 9.0
+
+ * Update the procedure to generate "tags" for developer support.
+   (merge 046e4c1c09 jk/make-tags-find-sources-tweak later to maint).
+
+ * The codeflow of setting NOATIME and CLOEXEC on file descriptors Git
+   opens has been simplified.
+   (merge b4d065df03 jc/git-open-cloexec later to maint).
+
+ * "git diff" and its family had two experimental heuristics to shift
+   the contents of a hunk to make the patch easier to read.  One of
+   them turns out to be better than the other, so leave only the
+   "--indent-heuristic" option and remove the other one.
+   (merge 3cde4e02ee jc/retire-compaction-heuristics later to maint).
+
+ * A new submodule helper "git submodule embedgitdirs" to make it
+   easier to move embedded .git/ directory for submodules in a
+   superproject to .git/modules/ (and point the latter with the former
+   that is turned into a "gitdir:" file) has been added.
+
+ * "git push \\server\share\dir" has recently regressed and then
+   fixed.  A test has retroactively been added for this breakage.
+
+ * Build updates for Cygwin.
+
+ * The implementation of "real_path()" was to go there with chdir(2)
+   and call getcwd(3), but this obviously wouldn't be usable in a
+   threaded environment.  Rewrite it to manually resolve relative
+   paths including symbolic links in path components.
+
+ * Adjust documentation to help AsciiDoctor render better while not
+   breaking the rendering done by AsciiDoc.
+
+
+Also contains various documentation updates and code clean-ups.
+
+Fixes since v2.10
+-----------------
+
+Unless otherwise noted, all the fixes since v2.9 in the maintenance
+track are contained in this release (see the maintenance releases'
+notes for details).
+
+ * We often decide if a session is interactive by checking if the
+   standard I/O streams are connected to a TTY, but isatty() that
+   comes with Windows incorrectly returned true if it is used on NUL
+   (i.e. an equivalent to /dev/null).  This has been fixed.
+
+ * "git svn" did not work well with path components that are "0", and
+   some configuration variable it uses were not documented.
+   (merge ea9a93dcc2 ew/svn-fixes later to maint).
+
+ * "git rev-parse --symbolic" failed with a more recent notation like
+   "HEAD^-1" and "HEAD^!".
+
+ * An empty directory in a working tree that can simply be nuked used
+   to interfere while merging or cherry-picking a change to create a
+   submodule directory there, which has been fixed..
+
+ * The code in "git push" to compute if any commit being pushed in the
+   superproject binds a commit in a submodule that hasn't been pushed
+   out was overly inefficient, making it unusable even for a small
+   project that does not have any submodule but have a reasonable
+   number of refs.
+
+ * "git push --dry-run --recurse-submodule=on-demand" wasn't
+   "--dry-run" in the submodules.
+
+ * The output from "git worktree list" was made in readdir() order,
+   and was unstable.
+
+ * mergetool.<tool>.trustExitCode configuration variable did not apply
+   to built-in tools, but now it does.
+
+ * "git p4" LFS support was broken when LFS stores an empty blob.
+
+ * A corner case in merge-recursive regression that crept in
+   during 2.10 development cycle has been fixed.
+
+ * Transport with dumb http can be fooled into following foreign URLs
+   that the end user does not intend to, especially with the server
+   side redirects and http-alternates mechanism, which can lead to
+   security issues.  Tighten the redirection and make it more obvious
+   to the end user when it happens.
+
+ * Update the error messages from the dumb-http client when it fails
+   to obtain loose objects; we used to give sensible error message
+   only upon 404 but we now forbid unexpected redirects that needs to
+   be reported with something sensible.
+
+ * When diff.renames configuration is on (and with Git 2.9 and later,
+   it is enabled by default, which made it worse), "git stash"
+   misbehaved if a file is removed and another file with a very
+   similar content is added.
+
+ * "git diff --no-index" did not take "--no-abbrev" option.
+
+ * "git difftool --dir-diff" had a minor regression when started from
+   a subdirectory, which has been fixed.
+
+ * "git commit --allow-empty --only" (no pathspec) with dirty index
+   ought to be an acceptable way to create a new commit that does not
+   change any paths, but it was forbidden, perhaps because nobody
+   needed it so far.
+
+ * Git 2.11 had a minor regression in "merge --ff-only" that competed
+   with another process that simultanously attempted to update the
+   index. We used to explain what went wrong with an error message,
+   but the new code silently failed.  The error message has been
+   resurrected.
+
+ * A pathname that begins with "//" or "\\" on Windows is special but
+   path normalization logic was unaware of it.
+
+ * "git pull --rebase", when there is no new commits on our side since
+   we forked from the upstream, should be able to fast-forward without
+   invoking "git rebase", but it didn't.
+
+ * The way to specify hotkeys to "xxdiff" that is used by "git
+   mergetool" has been modernized to match recent versions of xxdiff.
+
+ * Unlike "git am --abort", "git cherry-pick --abort" moved HEAD back
+   to where cherry-pick started while picking multiple changes, when
+   the cherry-pick stopped to ask for help from the user, and the user
+   did "git reset --hard" to a different commit in order to re-attempt
+   the operation.
+
+ * Code cleanup in shallow boundary computation.
+
+ * A recent update to receive-pack to make it easier to drop garbage
+   objects made it clear that GIT_ALTERNATE_OBJECT_DIRECTORIES cannot
+   have a pathname with a colon in it (no surprise!), and this in turn
+   made it impossible to push into a repository at such a path.  This
+   has been fixed by introducing a quoting mechanism used when
+   appending such a path to the colon-separated list.
+
+ * The function usage_msg_opt() has been updated to say "fatal:"
+   before the custom message programs give, when they want to die
+   with a message about wrong command line options followed by the
+   standard usage string.
+
+ * "git index-pack --stdin" needs an access to an existing repository,
+   but "git index-pack file.pack" to generate an .idx file that
+   corresponds to a packfile does not.
+
+ * Fix for NDEBUG builds.
+
+ * A lazy "git push" without refspec did not internally use a fully
+   specified refspec to perform 'current', 'simple', or 'upstream'
+   push, causing unnecessary "ambiguous ref" errors.
+
+ * "git p4" misbehaved when swapping a directory and a symbolic link.
+
+ * Even though an fix was attempted in Git 2.9.3 days, but running
+   "git difftool --dir-diff" from a subdirectory never worked. This
+   has been fixed.
+
+ * "git p4" that tracks multile p4 paths imported a single changelist
+   that touches files in these multiple paths as one commit, followed
+   by many empty commits.  This has been fixed.
+
+ * A potential but unlikely buffer overflow in Windows port has been
+   fixed.
+
+ * When the http server gives an incomplete response to a smart-http
+   rpc call, it could lead to client waiting for a full response that
+   will never come.  Teach the client side to notice this condition
+   and abort the transfer.
+
+ * Compression setting for producing packfiles were spread across
+   three codepaths, one of which did not honor any configuration.
+   Unify these so that all of them honor core.compression and
+   pack.compression variables the same way.
+   (merge 8de7eeb54b jc/compression-config later to maint).
+
+ * "git fast-import" sometimes mishandled while rebalancing notes
+   tree, which has been fixed.
+   (merge 405d7f4af6 mh/fast-import-notes-fix-new later to maint).
+
+ * Recent update to the default abbreviation length that auto-scales
+   lacked documentation update, which has been corrected.
+   (merge 48d5014dd4 jc/abbrev-autoscale-config later to maint).
+
+ * Leakage of lockfiles in the config subsystem has been fixed.
+   (merge c06fa62dfc nd/config-misc-fixes later to maint).
+
+ * It is natural that "git gc --auto" may not attempt to pack
+   everything into a single pack, and there is no point in warning
+   when the user has configured the system to use the pack bitmap,
+   leading to disabling further "gc".
+   (merge 1c409a705c dt/disable-bitmap-in-auto-gc later to maint).
+
+ * "git archive" did not read the standard configuration files, and
+   failed to notice a file that is marked as binary via the userdiff
+   driver configuration.
+   (merge 965cba2e7e jk/archive-zip-userdiff-config later to maint).
+
+ * "git blame --porcelain" misidentified the "previous" <commit, path>
+   pair (aka "source") when contents came from two or more files.
+   (merge 4e76832984 jk/blame-fixes later to maint).
+
+ * "git rebase -i" with a recent update started showing an incorrect
+   count when squashing more than 10 commits.
+   (merge 356b8ecff1 jk/rebase-i-squash-count-fix later to maint).
+
+ * "git <cmd> @{push}" on a detached HEAD used to segfault; it has
+   been corrected to error out with a message.
+   (merge b10731f43d km/branch-get-push-while-detached later to maint).
+
+ * Running "git add a/b" when "a" is a submodule correctly errored
+   out, but without a meaningful error message.
+   (merge 2d81c48fa7 sb/pathspec-errors later to maint).
+
+ * Typing ^C to pager, which usually does not kill it, killed Git and
+   took the pager down as a collateral damage in certain process-tree
+   structure.  This has been fixed.
+   (merge 46df6906f3 jk/execv-dashed-external later to maint).
+
+ * "git mergetool" without any pathspec on the command line that is
+   run from a subdirectory became no-op in Git v2.11 by mistake, which
+   has been fixed.
+
+ * Retire long unused/unmaintained gitview from the contrib/ area.
+   (merge 3120925c25 sb/remove-gitview later to maint).
+
+ * Tighten a test to avoid mistaking an extended ERE regexp engine as
+   a PRE regexp engine.
+   (merge 7675c7bd01 jk/grep-e-could-be-extended-beyond-posix later to maint).
+
+ * Other minor doc, test and build updates and code cleanups.
+   (merge f2627d9b19 sb/submodule-config-cleanup later to maint).
+   (merge 384f1a167b sb/unpack-trees-cleanup later to maint).
+   (merge 3f05402ac0 ad/bisect-terms later to maint).
+   (merge 874444b704 rh/diff-orderfile-doc later to maint).
+   (merge c68d2d7c2b ws/request-pull-code-cleanup later to maint).
