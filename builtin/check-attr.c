@@ -24,13 +24,12 @@ static const struct option check_attr_options[] = {
 	OPT_END()
 };
 
-static void output_attr(struct attr_check *check, const char *file)
+static void output_attr(int cnt, struct git_attr_check *check,
+	const char *file)
 {
 	int j;
-	int cnt = check->check_nr;
-
 	for (j = 0; j < cnt; j++) {
-		const char *value = check->check[j].value;
+		const char *value = check[j].value;
 
 		if (ATTR_TRUE(value))
 			value = "set";
@@ -43,38 +42,35 @@ static void output_attr(struct attr_check *check, const char *file)
 			printf("%s%c" /* path */
 			       "%s%c" /* attrname */
 			       "%s%c" /* attrvalue */,
-			       file, 0,
-			       git_attr_name(check->check[j].attr), 0, value, 0);
+			       file, 0, git_attr_name(check[j].attr), 0, value, 0);
 		} else {
 			quote_c_style(file, NULL, stdout, 0);
-			printf(": %s: %s\n",
-			       git_attr_name(check->check[j].attr), value);
+			printf(": %s: %s\n", git_attr_name(check[j].attr), value);
 		}
+
 	}
 }
 
-static void check_attr(const char *prefix,
-		       struct attr_check *check,
-		       int collect_all,
-		       const char *file)
+static void check_attr(const char *prefix, int cnt,
+	struct git_attr_check *check, const char *file)
 {
 	char *full_path =
 		prefix_path(prefix, prefix ? strlen(prefix) : 0, file);
-
-	if (collect_all) {
-		git_all_attrs(full_path, check);
-	} else {
-		if (git_check_attr(full_path, check))
+	if (check != NULL) {
+		if (git_check_attr(full_path, cnt, check))
 			die("git_check_attr died");
+		output_attr(cnt, check, file);
+	} else {
+		if (git_all_attrs(full_path, &cnt, &check))
+			die("git_all_attrs died");
+		output_attr(cnt, check, file);
+		free(check);
 	}
-	output_attr(check, file);
-
 	free(full_path);
 }
 
-static void check_attr_stdin_paths(const char *prefix,
-				   struct attr_check *check,
-				   int collect_all)
+static void check_attr_stdin_paths(const char *prefix, int cnt,
+	struct git_attr_check *check)
 {
 	struct strbuf buf = STRBUF_INIT;
 	struct strbuf unquoted = STRBUF_INIT;
@@ -88,7 +84,7 @@ static void check_attr_stdin_paths(const char *prefix,
 				die("line is badly quoted");
 			strbuf_swap(&buf, &unquoted);
 		}
-		check_attr(prefix, check, collect_all, buf.buf);
+		check_attr(prefix, cnt, check, buf.buf);
 		maybe_flush_or_die(stdout, "attribute to stdout");
 	}
 	strbuf_release(&buf);
@@ -103,7 +99,7 @@ static NORETURN void error_with_usage(const char *msg)
 
 int cmd_check_attr(int argc, const char **argv, const char *prefix)
 {
-	struct attr_check *check;
+	struct git_attr_check *check;
 	int cnt, i, doubledash, filei;
 
 	if (!is_bare_repository())
@@ -163,26 +159,28 @@ int cmd_check_attr(int argc, const char **argv, const char *prefix)
 			error_with_usage("No file specified");
 	}
 
-	check = attr_check_alloc();
-	if (!all_attrs) {
+	if (all_attrs) {
+		check = NULL;
+	} else {
+		check = xcalloc(cnt, sizeof(*check));
 		for (i = 0; i < cnt; i++) {
-			const struct git_attr *a = git_attr(argv[i]);
-
+			const char *name;
+			struct git_attr *a;
+			name = argv[i];
+			a = git_attr(name);
 			if (!a)
 				return error("%s: not a valid attribute name",
-					     argv[i]);
-			attr_check_append(check, a);
+					name);
+			check[i].attr = a;
 		}
 	}
 
 	if (stdin_paths)
-		check_attr_stdin_paths(prefix, check, all_attrs);
+		check_attr_stdin_paths(prefix, cnt, check);
 	else {
 		for (i = filei; i < argc; i++)
-			check_attr(prefix, check, all_attrs, argv[i]);
+			check_attr(prefix, cnt, check, argv[i]);
 		maybe_flush_or_die(stdout, "attribute to stdout");
 	}
-
-	attr_check_free(check);
 	return 0;
 }

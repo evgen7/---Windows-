@@ -811,13 +811,7 @@ static int grep_object(struct grep_opt *opt, const struct pathspec *pathspec,
 		strbuf_init(&base, PATH_MAX + len + 1);
 		if (len) {
 			strbuf_add(&base, name, len);
-
-			/* Add a delimiter if there isn't one already */
-			if (name[len - 1] != '/' && name[len - 1] != ':') {
-				/* rev: or rev:path/ */
-				char delim = obj->type == OBJ_COMMIT ? ':' : '/';
-				strbuf_addch(&base, delim);
-			}
+			strbuf_addch(&base, ':');
 		}
 		init_tree_desc(&tree, data, size);
 		hit = grep_tree(opt, pathspec, &tree, &base, base.len,

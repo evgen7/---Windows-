@@ -1,12 +1,9 @@
 #!/usr/bin/perl -w
 
-use strict;
-use warnings;
-
 my @menu = ();
 my $output = $ARGV[0];
 
-open my $tmp, '>', "$output.tmp";
+open TMP, '>', "$output.tmp";
 
 while (<STDIN>) {
 	next if (/^\\input texinfo/../\@node Top/);
@@ -14,13 +11,13 @@ while (<STDIN>) {
 	if (s/^\@top (.*)/\@node $1,,,Top/) {
 		push @menu, $1;
 	}
-	s/\(\@pxref\{\[(URLS|REMOTES)\]}\)//;
+	s/\(\@pxref{\[(URLS|REMOTES)\]}\)//;
 	s/\@anchor\{[^{}]*\}//g;
-	print $tmp $_;
+	print TMP;
 }
-close $tmp;
+close TMP;
 
-print '\input texinfo
+printf '\input texinfo
 @setfilename gitman.info
 @documentencoding UTF-8
 @dircategory Development
@@ -31,16 +28,16 @@ print '\input texinfo
 @top Git Manual Pages
 @documentlanguage en
 @menu
-';
+', $menu[0];
 
 for (@menu) {
 	print "* ${_}::\n";
 }
 print "\@end menu\n";
-open $tmp, '<', "$output.tmp";
-while (<$tmp>) {
+open TMP, '<', "$output.tmp";
+while (<TMP>) {
 	print;
 }
-close $tmp;
+close TMP;
 print "\@bye\n";
 unlink "$output.tmp";

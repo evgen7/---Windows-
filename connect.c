@@ -772,7 +772,6 @@ struct child_process *git_connect(int fd[2], const char *url,
 			int putty = 0, tortoiseplink = 0;
 			char *ssh_host = hostandport;
 			const char *port = NULL;
-			char *ssh_argv0 = NULL;
 			transport_check_allowed("ssh");
 			get_host_and_port(&ssh_host, &port);
 
@@ -793,15 +792,10 @@ struct child_process *git_connect(int fd[2], const char *url,
 			}
 
 			ssh = get_ssh_command();
-			if (ssh) {
-				char *split_ssh = xstrdup(ssh);
-				const char **ssh_argv;
+			if (!ssh) {
+				const char *base;
+				char *ssh_dup;
 
-				if (split_cmdline(split_ssh, &ssh_argv))
-					ssh_argv0 = xstrdup(ssh_argv[0]);
-				free(split_ssh);
-				free((void *)ssh_argv);
-			} else {
 				/*
 				 * GIT_SSH is the no-shell version of
 				 * GIT_SSH_COMMAND (and must remain so for
@@ -813,11 +807,8 @@ struct child_process *git_connect(int fd[2], const char *url,
 				if (!ssh)
 					ssh = "ssh";
 
-				ssh_argv0 = xstrdup(ssh);
-			}
-
-			if (ssh_argv0) {
-				const char *base = basename(ssh_argv0);
+				ssh_dup = xstrdup(ssh);
+				base = basename(ssh_dup);
 
 				tortoiseplink = !strcasecmp(base, "tortoiseplink") ||
 					!strcasecmp(base, "tortoiseplink.exe");
@@ -825,7 +816,7 @@ struct child_process *git_connect(int fd[2], const char *url,
 					!strcasecmp(base, "plink") ||
 					!strcasecmp(base, "plink.exe");
 
-				free(ssh_argv0);
+				free(ssh_dup);
 			}
 
 			argv_array_push(&conn->args, ssh);

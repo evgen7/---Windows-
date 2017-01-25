@@ -1009,8 +1009,16 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
+	if (!strcmp(var, "core.hidedotfiles")) {
+		if (value && !strcasecmp(value, "dotgitonly"))
+			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
+		else
+			hide_dotfiles = git_config_bool(var, value);
+		return 0;
+	}
+
 	/* Add other config variables here and to Documentation/config.txt. */
-	return platform_core_config(var, value);
+	return 0;
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1306,16 +1314,9 @@ static int do_git_config_sequence(config_fn_t fn, void *data)
 	char *repo_config = have_git_dir() ? git_pathdup("config") : NULL;
 
 	current_parsing_scope = CONFIG_SCOPE_SYSTEM;
-	if (git_config_system()) {
-		if (git_program_data_config() &&
-		    !access_or_die(git_program_data_config(), R_OK, 0))
-			ret += git_config_from_file(fn,
-						    git_program_data_config(),
-						    data);
-		if (!access_or_die(git_etc_gitconfig(), R_OK, 0))
-			ret += git_config_from_file(fn, git_etc_gitconfig(),
-						    data);
-	}
+	if (git_config_system() && !access_or_die(git_etc_gitconfig(), R_OK, 0))
+		ret += git_config_from_file(fn, git_etc_gitconfig(),
+					    data);
 
 	current_parsing_scope = CONFIG_SCOPE_GLOBAL;
 	if (xdg_config && !access_or_die(xdg_config, R_OK, ACCESS_EACCES_OK))
@@ -1706,19 +1707,6 @@ int git_config_get_pathname(const char *key, const char **dest)
 	return ret;
 }
 
-int git_config_get_expiry(const char *key, const char **output)
-{
-	int ret = git_config_get_string_const(key, output);
-	if (ret)
-		return ret;
-	if (strcmp(*output, "now")) {
-		unsigned long now = approxidate("now");
-		if (approxidate(*output) >= now)
-			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
-	}
-	return ret;
-}
-
 int git_config_get_untracked_cache(void)
 {
 	int val = -1;
@@ -1735,34 +1723,9 @@ int git_config_get_untracked_cache(void)
 		if (!strcasecmp(v, "keep"))
 			return -1;
 
-		error(_("unknown core.untrackedCache value '%s'; "
-			"using 'keep' default value"), v);
+		error("unknown core.untrackedCache value '%s'; "
+		      "using 'keep' default value", v);
 		return -1;
-	}
-
-	return -1; /* default value */
-}
-
-int git_config_get_split_index(void)
-{
-	int val;
-
-	if (!git_config_get_maybe_bool("core.splitindex", &val))
-		return val;
-
-	return -1; /* default value */
-}
-
-int git_config_get_max_percent_split_change(void)
-{
-	int val = -1;
-
-	if (!git_config_get_int("splitindex.maxpercentchange", &val)) {
-		if (0 <= val && val <= 100)
-			return val;
-
-		return error(_("splitIndex.maxPercentChange value '%d' "
-			       "should be between 0 and 100"), val);
 	}
 
 	return -1; /* default value */
@@ -2108,20 +2071,6 @@ int git_config_key_is_valid(const char *key)
 	return !git_config_parse_key_1(key, NULL, NULL, 1);
 }
 
-static int lock_config_file(const char *config_filename,
-		struct lock_file **result)
-{
-	int fd;
-
-	*result = xcalloc(1, sizeof(struct lock_file));
-	fd = hold_lock_file_for_update(*result, config_filename, 0);
-	if (fd < 0)
-		error("could not lock config file %s: %s", config_filename,
-				strerror(errno));
-
-	return fd;
-}
-
 /*
  * If value==NULL, unset in (remove from) config,
  * if value_regex!=NULL, disregard key/value pairs where value does not match.
@@ -2173,7 +2122,8 @@ int git_config_set_multivar_in_file_gently(const char *config_filename,
 	 * The lock serves a purpose in addition to locking: the new
 	 * contents of .git/config will be written into it.
 	 */
-	fd = lock_config_file(config_filename, &lock);
+	lock = xcalloc(1, sizeof(struct lock_file));
+	fd = hold_lock_file_for_update(lock, config_filename, 0);
 	if (fd < 0) {
 		error_errno("could not lock config file %s", config_filename);
 		free(store.key);
@@ -2479,9 +2429,12 @@ int git_config_rename_section_in_file(const char *config_filename,
 	if (!config_filename)
 		config_filename = filename_buf = git_pathdup("config");
 
-	out_fd = lock_config_file(config_filename, &lock);
-	if (out_fd < 0)
+	lock = xcalloc(1, sizeof(struct lock_file));
+	out_fd = hold_lock_file_for_update(lock, config_filename, 0);
+	if (out_fd < 0) {
+		ret = error("could not lock config file %s", config_filename);
 		goto out;
+	}
 
 	if (!(config_file = fopen(config_filename, "rb"))) {
 		/* no config file means nothing to rename, no error */

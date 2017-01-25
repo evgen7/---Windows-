@@ -725,7 +725,7 @@ test_expect_success 'rename a remote' '
 	(
 		cd four &&
 		git remote rename origin upstream &&
-		test -z "$(git for-each-ref refs/remotes/origin)" &&
+		rmdir .git/refs/remotes/origin &&
 		test "$(git symbolic-ref refs/remotes/upstream/HEAD)" = "refs/remotes/upstream/master" &&
 		test "$(git rev-parse upstream/master)" = "$(git rev-parse master)" &&
 		test "$(git config remote.upstream.fetch)" = "+refs/heads/*:refs/remotes/upstream/*" &&
@@ -811,7 +811,6 @@ test_expect_success 'migrate a remote from named file in $GIT_DIR/branches' '
 	(
 		cd six &&
 		git remote rm origin &&
-		mkdir -p .git/branches &&
 		echo "$origin_url" >.git/branches/origin &&
 		git remote rename origin origin &&
 		test_path_is_missing .git/branches/origin &&
@@ -826,7 +825,6 @@ test_expect_success 'migrate a remote from named file in $GIT_DIR/branches (2)' 
 	(
 		cd seven &&
 		git remote rm origin &&
-		mkdir -p .git/branches &&
 		echo "quux#foom" > .git/branches/origin &&
 		git remote rename origin origin &&
 		test_path_is_missing .git/branches/origin &&
