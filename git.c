@@ -424,7 +424,6 @@ static struct cmd_struct commands[] = {
 	{ "diff-files", cmd_diff_files, RUN_SETUP | NEED_WORK_TREE },
 	{ "diff-index", cmd_diff_index, RUN_SETUP },
 	{ "diff-tree", cmd_diff_tree, RUN_SETUP },
-	{ "difftool", cmd_difftool, RUN_SETUP | NEED_WORK_TREE },
 	{ "fast-export", cmd_fast_export, RUN_SETUP },
 	{ "fetch", cmd_fetch, RUN_SETUP },
 	{ "fetch-pack", cmd_fetch_pack, RUN_SETUP },
@@ -435,7 +434,7 @@ static struct cmd_struct commands[] = {
 	{ "fsck-objects", cmd_fsck, RUN_SETUP },
 	{ "gc", cmd_gc, RUN_SETUP },
 	{ "get-tar-commit-id", cmd_get_tar_commit_id },
-	{ "grep", cmd_grep, RUN_SETUP_GENTLY | SUPPORT_SUPER_PREFIX },
+	{ "grep", cmd_grep, RUN_SETUP_GENTLY },
 	{ "hash-object", cmd_hash_object },
 	{ "help", cmd_help },
 	{ "index-pack", cmd_index_pack, RUN_SETUP_GENTLY },
@@ -472,7 +471,7 @@ static struct cmd_struct commands[] = {
 	{ "prune-packed", cmd_prune_packed, RUN_SETUP },
 	{ "pull", cmd_pull, RUN_SETUP | NEED_WORK_TREE },
 	{ "push", cmd_push, RUN_SETUP },
-	{ "read-tree", cmd_read_tree, RUN_SETUP | SUPPORT_SUPER_PREFIX},
+	{ "read-tree", cmd_read_tree, RUN_SETUP },
 	{ "receive-pack", cmd_receive_pack },
 	{ "reflog", cmd_reflog, RUN_SETUP },
 	{ "remote", cmd_remote, RUN_SETUP },
@@ -494,7 +493,7 @@ static struct cmd_struct commands[] = {
 	{ "stage", cmd_add, RUN_SETUP | NEED_WORK_TREE },
 	{ "status", cmd_status, RUN_SETUP | NEED_WORK_TREE },
 	{ "stripspace", cmd_stripspace },
-	{ "submodule--helper", cmd_submodule__helper, RUN_SETUP | SUPPORT_SUPER_PREFIX},
+	{ "submodule--helper", cmd_submodule__helper, RUN_SETUP },
 	{ "symbolic-ref", cmd_symbolic_ref, RUN_SETUP },
 	{ "tag", cmd_tag, RUN_SETUP },
 	{ "unpack-file", cmd_unpack_file, RUN_SETUP },
@@ -576,7 +575,8 @@ static void handle_builtin(int argc, const char **argv)
 
 static void execv_dashed_external(const char **argv)
 {
-	struct child_process cmd = CHILD_PROCESS_INIT;
+	struct strbuf cmd = STRBUF_INIT;
+	const char *tmp;
 	int status;
 
 	if (get_super_prefix())
@@ -586,25 +586,30 @@ static void execv_dashed_external(const char **argv)
 		use_pager = check_pager_config(argv[0]);
 	commit_pager_choice();
 
-	argv_array_pushf(&cmd.args, "git-%s", argv[0]);
-	argv_array_pushv(&cmd.args, argv + 1);
-	cmd.clean_on_exit = 1;
-	cmd.wait_after_clean = 1;
-	cmd.silent_exec_failure = 1;
-
-	trace_argv_printf(cmd.args.argv, "trace: exec:");
+	strbuf_addf(&cmd, "git-%s", argv[0]);
 
 	/*
-	 * If we fail because the command is not found, it is
-	 * OK to return. Otherwise, we just pass along the status code,
-	 * or our usual generic code if we were not even able to exec
-	 * the program.
+	 * argv[0] must be the git command, but the argv array
+	 * belongs to the caller, and may be reused in
+	 * subsequent loop iterations. Save argv[0] and
+	 * restore it on error.
 	 */
-	status = run_command(&cmd);
-	if (status >= 0)
+	tmp = argv[0];
+	argv[0] = cmd.buf;
+
+	trace_argv_printf(argv, "trace: exec:");
+
+	/*
+	 * if we fail because the command is not found, it is
+	 * OK to return. Otherwise, we just pass along the status code.
+	 */
+	status = run_command_v_opt(argv, RUN_SILENT_EXEC_FAILURE | RUN_CLEAN_ON_EXIT);
+	if (status >= 0 || errno != ENOENT)
 		exit(status);
-	else if (errno != ENOENT)
-		exit(128);
+
+	argv[0] = tmp;
+
+	strbuf_release(&cmd);
 }
 
 static int run_argv(int *argcp, const char ***argv)
@@ -623,32 +628,6 @@ static int run_argv(int *argcp, const char ***argv)
 		 */
 		if (!done_alias)
 			handle_builtin(*argcp, *argv);
-		else if (get_builtin(**argv)) {
-			struct argv_array args = ARGV_ARRAY_INIT;
-			int i;
-
-			argv_array_push(&args, "git");
-			for (i = 0; i < *argcp; i++)
-				argv_array_push(&args, (*argv)[i]);
-
-			if (get_super_prefix())
-				die("%s doesn't support --super-prefix", args.argv[0]);
-
-			if (use_pager == -1)
-				use_pager = check_pager_config(args.argv[0]);
-			commit_pager_choice();
-
-			trace_argv_printf(args.argv, "trace: exec:");
-
-			/*
-			 * if we fail because the command is not found, it is
-			 * OK to return. Otherwise, we just pass along the status code.
-			 */
-			i = run_command_v_opt(args.argv, RUN_SILENT_EXEC_FAILURE | RUN_CLEAN_ON_EXIT);
-			if (i >= 0 || errno != ENOENT)
-				exit(i);
-			die("could not execute builtin %s", args.argv[1]);
-		}
 
 		/* .. then try the external ones */
 		execv_dashed_external(*argv);

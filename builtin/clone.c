@@ -1076,9 +1076,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 			}
 
 		if (!is_local && !complete_refs_before_fetch)
-			if (transport_fetch_refs(transport, mapped_refs))
-				die(_("could not fetch refs from %s"),
-				    transport->url);
+			transport_fetch_refs(transport, mapped_refs);
 
 		remote_head = find_ref_by_name(refs, "HEAD");
 		remote_head_points_at =
