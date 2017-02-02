@@ -725,7 +725,7 @@ test_expect_success 'rename a remote' '
 	(
 		cd four &&
 		git remote rename origin upstream &&
-		rmdir .git/refs/remotes/origin &&
+		test -z "$(git for-each-ref refs/remotes/origin)" &&
 		test "$(git symbolic-ref refs/remotes/upstream/HEAD)" = "refs/remotes/upstream/master" &&
 		test "$(git rev-parse upstream/master)" = "$(git rev-parse master)" &&
 		test "$(git config remote.upstream.fetch)" = "+refs/heads/*:refs/remotes/upstream/*" &&
@@ -762,6 +762,13 @@ test_expect_success 'rename a remote with name prefix of other remote' '
 		git remote rename o upstream &&
 		test "$(git rev-parse origin/master)" = "$(git rev-parse master)"
 	)
+'
+
+test_expect_success 'rename succeeds with existing remote.<target>.prune' '
+	git clone one four.four &&
+	test_when_finished git config --global --unset remote.upstream.prune &&
+	git config --global remote.upstream.prune true &&
+	git -C four.four remote rename origin upstream
 '
 
 cat >remotes_origin <<EOF
