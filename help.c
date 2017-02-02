@@ -111,7 +111,7 @@ static int is_executable(const char *name)
 	 * has special-handling to detect scripts and launch them
 	 * through the indicated script interpreter. We test for the
 	 * file extension first because virus scanners may make
-	 * it quite expensive to open many files.
+	 * opening an executable for reading expensive.
 	 */
 	if (ends_with(name, ".exe"))
 		return S_IXUSR;
