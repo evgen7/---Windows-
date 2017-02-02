@@ -11,9 +11,6 @@ typedef _sigset_t sigset_t;
 #undef _POSIX_THREAD_SAFE_FUNCTIONS
 #endif
 
-extern int mingw_core_config(const char *var, const char *value);
-#define platform_core_config mingw_core_config
-
 /*
  * things that are not available in header files
  */
