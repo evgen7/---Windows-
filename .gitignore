@@ -76,6 +76,7 @@
 /git-init-db
 /git-interpret-trailers
 /git-instaweb
+/git-legacy-difftool
 /git-log
 /git-ls-files
 /git-ls-remote
@@ -118,7 +119,6 @@
 /git-rebase--merge
 /git-receive-pack
 /git-reflog
-/git-relink
 /git-remote
 /git-remote-http
 /git-remote-https
