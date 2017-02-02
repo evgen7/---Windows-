@@ -28,8 +28,7 @@ static int abbrev = -1; /* unspecified */
 static int max_candidates = 10;
 static struct hashmap names;
 static int have_util;
-static struct string_list patterns = STRING_LIST_INIT_NODUP;
-static struct string_list exclude_patterns = STRING_LIST_INIT_NODUP;
+static const char *pattern;
 static int always;
 static const char *dirty;
 
@@ -130,40 +129,9 @@ static int get_name(const char *path, const struct object_id *oid, int flag, voi
 	if (!all && !is_tag)
 		return 0;
 
-	/*
-	 * If we're given exclude patterns, first exclude any tag which match
-	 * any of the exclude pattern.
-	 */
-	if (exclude_patterns.nr) {
-		struct string_list_item *item;
-
-		if (!is_tag)
-			return 0;
-
-		for_each_string_list_item(item, &exclude_patterns) {
-			if (!wildmatch(item->string, path + 10, 0, NULL))
-				return 0;
-		}
-	}
-
-	/*
-	 * If we're given patterns, accept only tags which match at least one
-	 * pattern.
-	 */
-	if (patterns.nr) {
-		struct string_list_item *item;
-
-		if (!is_tag)
-			return 0;
-
-		for_each_string_list_item(item, &patterns) {
-			if (!wildmatch(item->string, path + 10, 0, NULL))
-				break;
-
-			/* If we get here, no pattern matched. */
-			return 0;
-		}
-	}
+	/* Accept only tags that match the pattern, if given */
+	if (pattern && (!is_tag || wildmatch(pattern, path + 10, 0, NULL)))
+		return 0;
 
 	/* Is it annotated? */
 	if (!peel_ref(path, peeled.hash)) {
@@ -436,10 +404,8 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			    N_("only output exact matches"), 0),
 		OPT_INTEGER(0, "candidates", &max_candidates,
 			    N_("consider <n> most recent tags (default: 10)")),
-		OPT_STRING_LIST(0, "match", &patterns, N_("pattern"),
+		OPT_STRING(0, "match",       &pattern, N_("pattern"),
 			   N_("only consider tags matching <pattern>")),
-		OPT_STRING_LIST(0, "exclude", &exclude_patterns, N_("pattern"),
-			   N_("do not consider tags matching <pattern>")),
 		OPT_BOOL(0, "always",        &always,
 			N_("show abbreviated commit object as fallback")),
 		{OPTION_STRING, 0, "dirty",  &dirty, N_("mark"),
@@ -464,7 +430,6 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 		die(_("--long is incompatible with --abbrev=0"));
 
 	if (contains) {
-		struct string_list_item *item;
 		struct argv_array args;
 
 		argv_array_init(&args);
@@ -475,10 +440,8 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			argv_array_push(&args, "--always");
 		if (!all) {
 			argv_array_push(&args, "--tags");
-			for_each_string_list_item(item, &patterns)
-				argv_array_pushf(&args, "--refs=refs/tags/%s", item->string);
-			for_each_string_list_item(item, &exclude_patterns)
-				argv_array_pushf(&args, "--exclude=refs/tags/%s", item->string);
+			if (pattern)
+				argv_array_pushf(&args, "--refs=refs/tags/%s", pattern);
 		}
 		if (argc)
 			argv_array_pushv(&args, argv);

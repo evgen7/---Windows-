@@ -147,7 +147,9 @@ int cmd_diff_tree(int argc, const char **argv, const char *prefix)
 		tree1 = opt->pending.objects[0].item;
 		tree2 = opt->pending.objects[1].item;
 		if (tree2->flags & UNINTERESTING) {
-			SWAP(tree2, tree1);
+			struct object *tmp = tree2;
+			tree2 = tree1;
+			tree1 = tmp;
 		}
 		diff_tree_sha1(tree1->oid.hash,
 			       tree2->oid.hash,

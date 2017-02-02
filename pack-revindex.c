@@ -59,6 +59,7 @@ static void sort_revindex(struct revindex_entry *entries, unsigned n, off_t max)
 	 * be a no-op, as everybody lands in the same zero-th bucket.
 	 */
 	for (bits = 0; max >> bits; bits += DIGIT_SIZE) {
+		struct revindex_entry *swap;
 		unsigned i;
 
 		memset(pos, 0, BUCKETS * sizeof(*pos));
@@ -96,7 +97,9 @@ static void sort_revindex(struct revindex_entry *entries, unsigned n, off_t max)
 		 * Now "to" contains the most sorted list, so we swap "from" and
 		 * "to" for the next iteration.
 		 */
-		SWAP(from, to);
+		swap = from;
+		from = to;
+		to = swap;
 	}
 
 	/*

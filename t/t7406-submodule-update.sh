@@ -441,16 +441,6 @@ test_expect_success 'submodule update - command in .git/config catches failure -
 	test_i18ncmp actual expect
 '
 
-test_expect_success 'submodule update - command run for initial population of submodule' '
-	cat <<-\ EOF >expect
-	Execution of '\''false $submodulesha1'\'' failed in submodule path '\''submodule'\''
-	EOF &&
-	rm -rf super/submodule &&
-	test_must_fail git -C super submodule update >../actual &&
-	test_cmp expect actual &&
-	git -C super submodule update --checkout
-'
-
 cat << EOF >expect
 Execution of 'false $submodulesha1' failed in submodule path '../super/submodule'
 Failed to recurse into submodule path '../super'
@@ -503,7 +493,6 @@ test_expect_success 'submodule init picks up merge' '
 '
 
 test_expect_success 'submodule update --merge  - ignores --merge  for new submodules' '
-	test_config -C super submodule.submodule.update checkout &&
 	(cd super &&
 	 rm -rf submodule &&
 	 git submodule update submodule &&
@@ -516,7 +505,6 @@ test_expect_success 'submodule update --merge  - ignores --merge  for new submod
 '
 
 test_expect_success 'submodule update --rebase - ignores --rebase for new submodules' '
-	test_config -C super submodule.submodule.update checkout &&
 	(cd super &&
 	 rm -rf submodule &&
 	 git submodule update submodule &&

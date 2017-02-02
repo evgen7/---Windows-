@@ -331,10 +331,6 @@ core.trustctime::
 	crawlers and some backup systems).
 	See linkgit:git-update-index[1]. True by default.
 
-core.splitIndex::
-	If true, the split-index feature of the index will be used.
-	See linkgit:git-update-index[1]. False by default.
-
 core.untrackedCache::
 	Determines what to do about the untracked cache feature of the
 	index. It will be kept, if this variable is unset or set to
@@ -521,12 +517,10 @@ core.logAllRefUpdates::
 	"`$GIT_DIR/logs/<ref>`", by appending the new and old
 	SHA-1, the date/time and the reason of the update, but
 	only when the file exists.  If this configuration
-	variable is set to `true`, missing "`$GIT_DIR/logs/<ref>`"
+	variable is set to true, missing "`$GIT_DIR/logs/<ref>`"
 	file is automatically created for branch heads (i.e. under
-	`refs/heads/`), remote refs (i.e. under `refs/remotes/`),
-	note refs (i.e. under `refs/notes/`), and the symbolic ref `HEAD`.
-	If it is set to `always`, then a missing reflog is automatically
-	created for any ref under `refs/`.
+	refs/heads/), remote refs (i.e. under refs/remotes/),
+	note refs (i.e. under refs/notes/), and the symbolic ref HEAD.
 +
 This information can be used to determine what commit
 was the tip of a branch "2 days ago".
@@ -1920,10 +1914,7 @@ http.<url>.*::
   must match exactly between the config key and the URL.
 
 . Host/domain name (e.g., `example.com` in `https://example.com/`).
-  This field must match between the config key and the URL. It is
-  possible to specify a `*` as part of the host name to match all subdomains
-  at this level. `https://*.example.com/` for example would match
-  `https://foo.example.com/`, but not `https://foo.bar.example.com/`.
+  This field must match exactly between the config key and the URL.
 
 . Port number (e.g., `8080` in `http://example.com:8080/`).
   This field must match exactly between the config key and the URL.
@@ -1957,17 +1948,6 @@ equivalent URLs that are simply spelled differently will match properly.
 Environment variable settings always override any matches.  The URLs that are
 matched against are those given directly to Git commands.  This means any URLs
 visited as a result of a redirection do not participate in matching.
-
-ssh.variant::
-	Depending on the value of the environment variables `GIT_SSH` or
-	`GIT_SSH_COMMAND`, or the config setting `core.sshCommand`, Git
-	auto-detects whether to adjust its command-line parameters for use
-	with plink or tortoiseplink, as opposed to the default (OpenSSH).
-+
-The config variable `ssh.variant` can be set to override this auto-detection;
-valid values are `ssh`, `plink`, `putty` or `tortoiseplink`. Any other value
-will be treated as normal ssh. This setting can be overridden via the
-environment variable `GIT_SSH_VARIANT`.
 
 i18n.commitEncoding::
 	Character encoding the commit messages are stored in; Git itself
@@ -2055,10 +2035,6 @@ log.follow::
 	a single <path> is given.  This has the same limitations as `--follow`,
 	i.e. it cannot be used to follow multiple files and does not work well
 	on non-linear history.
-
-log.graphColors::
-	A list of colors, separated by commas, that can be used to draw
-	history lines in `git log --graph`.
 
 log.showRoot::
 	If true, the initial commit will be shown as a big creation event.
@@ -2841,30 +2817,6 @@ sendemail.signedoffcc (deprecated)::
 showbranch.default::
 	The default set of branches for linkgit:git-show-branch[1].
 	See linkgit:git-show-branch[1].
-
-splitIndex.maxPercentChange::
-	When the split index feature is used, this specifies the
-	percent of entries the split index can contain compared to the
-	whole number of entries in both the split index and the shared
-	index before a new shared index is written.
-	The value should be between 0 and 100. If the value is 0 then
-	a new shared index is always written, if it is 100 a new
-	shared index is never written.
-	By default the value is 20, so a new shared index is written
-	if the number of entries in the split index would be greater
-	than 20 percent of the total number of entries.
-	See linkgit:git-update-index[1].
-
-splitIndex.sharedIndexExpire::
-	When the split index feature is used, shared index files with
-	a mtime older than this time will be removed when a new shared
-	index file is created. The value "now" expires all entries
-	immediately, and "never" suppresses expiration altogether.
-	The default value is "one.week.ago".
-	Note that each time a split index based on a shared index file
-	is either created or read from, the mtime of the shared index
-	file is updated to the current time.
-	See linkgit:git-update-index[1].
 
 status.relativePaths::
 	By default, linkgit:git-status[1] shows paths relative to the

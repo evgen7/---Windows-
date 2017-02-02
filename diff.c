@@ -3015,7 +3015,7 @@ static struct diff_tempfile *prepare_temp_file(const char *name,
 			if (!one->oid_valid)
 				sha1_to_hex_r(temp->hex, null_sha1);
 			else
-				oid_to_hex_r(temp->hex, &one->oid);
+				sha1_to_hex_r(temp->hex, one->oid.hash);
 			/* Even though we may sometimes borrow the
 			 * contents from the work tree, we always want
 			 * one->mode.  mode is trustworthy even when
@@ -5117,10 +5117,14 @@ void diff_change(struct diff_options *options,
 		return;
 
 	if (DIFF_OPT_TST(options, REVERSE_DIFF)) {
-		SWAP(old_mode, new_mode);
-		SWAP(old_sha1, new_sha1);
-		SWAP(old_sha1_valid, new_sha1_valid);
-		SWAP(old_dirty_submodule, new_dirty_submodule);
+		unsigned tmp;
+		const unsigned char *tmp_c;
+		tmp = old_mode; old_mode = new_mode; new_mode = tmp;
+		tmp_c = old_sha1; old_sha1 = new_sha1; new_sha1 = tmp_c;
+		tmp = old_sha1_valid; old_sha1_valid = new_sha1_valid;
+			new_sha1_valid = tmp;
+		tmp = old_dirty_submodule; old_dirty_submodule = new_dirty_submodule;
+			new_dirty_submodule = tmp;
 	}
 
 	if (options->prefix &&

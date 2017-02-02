@@ -298,7 +298,7 @@ void create_branch(const char *name, const char *start_name,
 			 start_name);
 
 	if (reflog)
-		log_all_ref_updates = LOG_REFS_NORMAL;
+		log_all_ref_updates = 1;
 
 	if (!dont_change_ref) {
 		struct ref_transaction *transaction;

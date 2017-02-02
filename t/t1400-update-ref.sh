@@ -8,32 +8,22 @@ test_description='Test git update-ref and basic ref logging'
 
 Z=$_z40
 
-m=refs/heads/master
-n_dir=refs/heads/gu
-n=$n_dir/fixes
-outside=refs/foo
-bare=bare-repo
+test_expect_success setup '
 
-create_test_commits ()
-{
-	prfx="$1"
 	for name in A B C D E F
 	do
 		test_tick &&
 		T=$(git write-tree) &&
 		sha1=$(echo $name | git commit-tree $T) &&
-		eval $prfx$name=$sha1
+		eval $name=$sha1
 	done
-}
 
-test_expect_success setup '
-	create_test_commits "" &&
-	mkdir $bare &&
-	cd $bare &&
-	git init --bare &&
-	create_test_commits "bare" &&
-	cd -
 '
+
+m=refs/heads/master
+n_dir=refs/heads/gu
+n=$n_dir/fixes
+outside=refs/foo
 
 test_expect_success \
 	"create $m" \
@@ -101,61 +91,6 @@ test_expect_success 'update-ref creates reflogs with --create-reflog' '
 	git rev-parse $outside >actual &&
 	test_cmp expect actual &&
 	git reflog exists $outside
-'
-
-test_expect_success 'creates no reflog in bare repository' '
-	git -C $bare update-ref $m $bareA &&
-	git -C $bare rev-parse $bareA >expect &&
-	git -C $bare rev-parse $m >actual &&
-	test_cmp expect actual &&
-	test_must_fail git -C $bare reflog exists $m
-'
-
-test_expect_success 'core.logAllRefUpdates=true creates reflog in bare repository' '
-	test_when_finished "git -C $bare config --unset core.logAllRefUpdates && \
-		rm $bare/logs/$m" &&
-	git -C $bare config core.logAllRefUpdates true &&
-	git -C $bare update-ref $m $bareB &&
-	git -C $bare rev-parse $bareB >expect &&
-	git -C $bare rev-parse $m >actual &&
-	test_cmp expect actual &&
-	git -C $bare reflog exists $m
-'
-
-test_expect_success 'core.logAllRefUpdates=true does not create reflog by default' '
-	test_config core.logAllRefUpdates true &&
-	test_when_finished "git update-ref -d $outside" &&
-	git update-ref $outside $A &&
-	git rev-parse $A >expect &&
-	git rev-parse $outside >actual &&
-	test_cmp expect actual &&
-	test_must_fail git reflog exists $outside
-'
-
-test_expect_success 'core.logAllRefUpdates=always creates reflog by default' '
-	test_config core.logAllRefUpdates always &&
-	test_when_finished "git update-ref -d $outside" &&
-	git update-ref $outside $A &&
-	git rev-parse $A >expect &&
-	git rev-parse $outside >actual &&
-	test_cmp expect actual &&
-	git reflog exists $outside
-'
-
-test_expect_success 'core.logAllRefUpdates=always creates no reflog for ORIG_HEAD' '
-	test_config core.logAllRefUpdates always &&
-	git update-ref ORIG_HEAD $A &&
-	test_must_fail git reflog exists ORIG_HEAD
-'
-
-test_expect_success '--no-create-reflog overrides core.logAllRefUpdates=always' '
-	test_config core.logAllRefUpdates true &&
-	test_when_finished "git update-ref -d $outside" &&
-	git update-ref --no-create-reflog $outside $A &&
-	git rev-parse $A >expect &&
-	git rev-parse $outside >actual &&
-	test_cmp expect actual &&
-	test_must_fail git reflog exists $outside
 '
 
 test_expect_success \
@@ -255,33 +190,6 @@ test_expect_success \
 	'GIT_COMMITTER_DATE="2005-05-26 23:41" \
 	 git update-ref HEAD'" $A &&
 	 test $A"' = $(cat .git/'"$m"')'
-
-test_expect_success "empty directory removal" '
-	git branch d1/d2/r1 HEAD &&
-	git branch d1/r2 HEAD &&
-	test -f .git/refs/heads/d1/d2/r1 &&
-	test -f .git/logs/refs/heads/d1/d2/r1 &&
-	git branch -d d1/d2/r1 &&
-	! test -e .git/refs/heads/d1/d2 &&
-	! test -e .git/logs/refs/heads/d1/d2 &&
-	test -f .git/refs/heads/d1/r2 &&
-	test -f .git/logs/refs/heads/d1/r2
-'
-
-test_expect_success "symref empty directory removal" '
-	git branch e1/e2/r1 HEAD &&
-	git branch e1/r2 HEAD &&
-	git checkout e1/e2/r1 &&
-	test_when_finished "git checkout master" &&
-	test -f .git/refs/heads/e1/e2/r1 &&
-	test -f .git/logs/refs/heads/e1/e2/r1 &&
-	git update-ref -d HEAD &&
-	! test -e .git/refs/heads/e1/e2 &&
-	! test -e .git/logs/refs/heads/e1/e2 &&
-	test -f .git/refs/heads/e1/r2 &&
-	test -f .git/logs/refs/heads/e1/r2 &&
-	test -f .git/logs/HEAD
-'
 
 cat >expect <<EOF
 $Z $A $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> 1117150200 +0000	Initial Creation
@@ -593,7 +501,6 @@ test_expect_success 'stdin does not create reflogs by default' '
 '
 
 test_expect_success 'stdin creates reflogs with --create-reflog' '
-	test_when_finished "git update-ref -d $outside" &&
 	echo "create $outside $m" >stdin &&
 	git update-ref --create-reflog --stdin <stdin &&
 	git rev-parse $m >expect &&
