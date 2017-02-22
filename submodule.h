@@ -41,13 +41,7 @@ extern int submodule_config(const char *var, const char *value, void *cb);
 extern void gitmodules_config(void);
 extern void gitmodules_config_sha1(const unsigned char *commit_sha1);
 extern int is_submodule_initialized(const char *path);
-/*
- * Determine if a submodule has been populated at a given 'path' by checking if
- * the <path>/.git resolves to a valid git repository.
- * If return_error_code is NULL, die on error.
- * Otherwise the return error code is the same as of resolve_gitdir_gently.
- */
-extern int is_submodule_populated_gently(const char *path, int *return_error_code);
+extern int is_submodule_populated(const char *path);
 extern int parse_submodule_update_strategy(const char *value,
 		struct submodule_update_strategy *dst);
 extern const char *submodule_strategy_to_string(const struct submodule_update_strategy *s);
@@ -64,20 +58,6 @@ extern void show_submodule_inline_diff(FILE *f, const char *path,
 		const char *del, const char *add, const char *reset,
 		const struct diff_options *opt);
 extern void set_config_fetch_recurse_submodules(int value);
-extern void set_config_update_recurse_submodules(int value);
-
-/*
- * Traditionally Git ignored changes made for submodules.
- * This function checks if we are interested in the given submodule
- * for any kind of operation.
- */
-extern int touch_submodules_in_worktree(void);
-/*
- * Check if the given ce entry is a submodule with the given update
- * strategy configured.
- */
-extern int is_active_submodule_with_strategy(const struct cache_entry *ce,
-					     enum submodule_update_type strategy);
 extern void check_for_new_submodule_commits(unsigned char new_sha1[20]);
 extern int fetch_populated_submodules(const struct argv_array *options,
 			       const char *prefix, int command_line_option,
@@ -101,12 +81,6 @@ extern int push_unpushed_submodules(struct sha1_array *commits,
 				    int dry_run);
 extern void connect_work_tree_and_git_dir(const char *work_tree, const char *git_dir);
 extern int parallel_submodules(void);
-int submodule_to_gitdir(struct strbuf *buf, const char *submodule);
-
-extern int submodule_go_from_to(const char *path,
-				const char *old,
-				const char *new,
-				int dry_run, int force);
 
 /*
  * Prepare the "env_array" parameter of a "struct child_process" for executing

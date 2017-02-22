@@ -198,8 +198,7 @@ path. (see linkgit:git-read-tree[1] for more information on state)
 
 When `-z` option is not used, TAB, LF, and backslash characters
 in pathnames are represented as `\t`, `\n`, and `\\`,
-respectively. The path is also quoted according to the
-configuration variable `core.quotePath` (see linkgit:git-config[1]).
+respectively.
 
 
 Exclude Patterns

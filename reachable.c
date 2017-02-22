@@ -58,7 +58,7 @@ struct recent_data {
 	unsigned long timestamp;
 };
 
-static void add_recent_object(const struct object_id *oid,
+static void add_recent_object(const unsigned char *sha1,
 			      unsigned long mtime,
 			      struct recent_data *data)
 {
@@ -75,37 +75,37 @@ static void add_recent_object(const struct object_id *oid,
 	 * later processing, and the revision machinery expects
 	 * commits and tags to have been parsed.
 	 */
-	type = sha1_object_info(oid->hash, NULL);
+	type = sha1_object_info(sha1, NULL);
 	if (type < 0)
-		die("unable to get object info for %s", oid_to_hex(oid));
+		die("unable to get object info for %s", sha1_to_hex(sha1));
 
 	switch (type) {
 	case OBJ_TAG:
 	case OBJ_COMMIT:
-		obj = parse_object_or_die(oid->hash, NULL);
+		obj = parse_object_or_die(sha1, NULL);
 		break;
 	case OBJ_TREE:
-		obj = (struct object *)lookup_tree(oid->hash);
+		obj = (struct object *)lookup_tree(sha1);
 		break;
 	case OBJ_BLOB:
-		obj = (struct object *)lookup_blob(oid->hash);
+		obj = (struct object *)lookup_blob(sha1);
 		break;
 	default:
 		die("unknown object type for %s: %s",
-		    oid_to_hex(oid), typename(type));
+		    sha1_to_hex(sha1), typename(type));
 	}
 
 	if (!obj)
-		die("unable to lookup %s", oid_to_hex(oid));
+		die("unable to lookup %s", sha1_to_hex(sha1));
 
 	add_pending_object(data->revs, obj, "");
 }
 
-static int add_recent_loose(const struct object_id *oid,
+static int add_recent_loose(const unsigned char *sha1,
 			    const char *path, void *data)
 {
 	struct stat st;
-	struct object *obj = lookup_object(oid->hash);
+	struct object *obj = lookup_object(sha1);
 
 	if (obj && obj->flags & SEEN)
 		return 0;
@@ -119,22 +119,22 @@ static int add_recent_loose(const struct object_id *oid,
 		 */
 		if (errno == ENOENT)
 			return 0;
-		return error_errno("unable to stat %s", oid_to_hex(oid));
+		return error_errno("unable to stat %s", sha1_to_hex(sha1));
 	}
 
-	add_recent_object(oid, st.st_mtime, data);
+	add_recent_object(sha1, st.st_mtime, data);
 	return 0;
 }
 
-static int add_recent_packed(const struct object_id *oid,
+static int add_recent_packed(const unsigned char *sha1,
 			     struct packed_git *p, uint32_t pos,
 			     void *data)
 {
-	struct object *obj = lookup_object(oid->hash);
+	struct object *obj = lookup_object(sha1);
 
 	if (obj && obj->flags & SEEN)
 		return 0;
-	add_recent_object(oid, p->mtime, data);
+	add_recent_object(sha1, p->mtime, data);
 	return 0;
 }
 
@@ -177,7 +177,6 @@ void mark_reachable_objects(struct rev_info *revs, int mark_reflog,
 
 	/* detached HEAD is not included in the list above */
 	head_ref(add_one_ref, revs);
-	other_head_refs(add_one_ref, revs);
 
 	/* Add all reflog info */
 	if (mark_reflog)

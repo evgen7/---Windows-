@@ -89,13 +89,8 @@ struct ref {
 		force:1,
 		forced_update:1,
 		expect_old_sha1:1,
-		deletion:1;
-
-	enum {
-		REF_NOT_MATCHED = 0, /* initial value */
-		REF_MATCHED,
-		REF_UNADVERTISED_NOT_ALLOWED
-	} match_status;
+		deletion:1,
+		matched:1;
 
 	/*
 	 * Order is important here, as we write to FETCH_HEAD

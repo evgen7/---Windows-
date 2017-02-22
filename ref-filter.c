@@ -1297,9 +1297,9 @@ static void populate_value(struct ref_array_item *ref)
 	ref->value = xcalloc(used_atom_cnt, sizeof(struct atom_value));
 
 	if (need_symref && (ref->flag & REF_ISSYMREF) && !ref->symref) {
-		struct object_id unused1;
+		unsigned char unused1[20];
 		ref->symref = resolve_refdup(ref->refname, RESOLVE_REF_READING,
-					     unused1.hash, NULL);
+					     unused1, NULL);
 		if (!ref->symref)
 			ref->symref = "";
 	}

@@ -228,6 +228,10 @@ struct ref_transaction {
 	enum ref_transaction_state state;
 };
 
+int files_log_ref_write(const char *refname, const unsigned char *old_sha1,
+			const unsigned char *new_sha1, const char *msg,
+			int flags, struct strbuf *err);
+
 /*
  * Check for entries in extras that are within the specified
  * directory, where dirname is a reference directory name including
@@ -482,12 +486,12 @@ struct ref_store;
 /* refs backends */
 
 /*
- * Initialize the ref_store for the specified gitdir, or for the
- * current repository if gitdir == NULL. These functions should call
+ * Initialize the ref_store for the specified submodule, or for the
+ * main repository if submodule == NULL. These functions should call
  * base_ref_store_init() to initialize the shared part of the
  * ref_store and to record the ref_store for later lookup.
  */
-typedef struct ref_store *ref_store_init_fn(const char *gitdir);
+typedef struct ref_store *ref_store_init_fn(const char *submodule);
 
 typedef int ref_init_db_fn(struct ref_store *refs, struct strbuf *err);
 
@@ -640,10 +644,21 @@ struct ref_store {
 void base_ref_store_init(struct ref_store *refs,
 			 const struct ref_storage_be *be);
 
-static inline int is_per_worktree_ref(const char *refname)
-{
-	return !strcmp(refname, "HEAD") ||
-		starts_with(refname, "refs/bisect/");
-}
+/*
+ * Return the ref_store instance for the specified submodule. For the
+ * main repository, use submodule==NULL; such a call cannot fail. For
+ * a submodule, the submodule must exist and be a nonbare repository,
+ * otherwise return NULL. If the requested reference store has not yet
+ * been initialized, initialize it first.
+ *
+ * For backwards compatibility, submodule=="" is treated the same as
+ * submodule==NULL.
+ */
+struct ref_store *get_ref_store(const char *submodule);
+
+const char *resolve_ref_recursively(struct ref_store *refs,
+				    const char *refname,
+				    int resolve_flags,
+				    unsigned char *sha1, int *flags);
 
 #endif /* REFS_REFS_INTERNAL_H */

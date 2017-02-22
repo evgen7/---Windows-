@@ -81,8 +81,7 @@ static struct ref *get_refs_from_bundle(struct transport *transport, int for_pus
 
 	if (data->fd > 0)
 		close(data->fd);
-	init_bundle_header(&data->header, transport->url);
-	data->fd = read_bundle_header(&data->header);
+	data->fd = read_bundle_header(transport->url, &data->header);
 	if (data->fd < 0)
 		die ("Could not read bundle '%s'.", transport->url);
 	for (i = 0; i < data->header.references.nr; i++) {
@@ -108,7 +107,6 @@ static int close_bundle(struct transport *transport)
 	struct bundle_transport_data *data = transport->data;
 	if (data->fd > 0)
 		close(data->fd);
-	release_bundle_header(&data->header);
 	free(data);
 	return 0;
 }
@@ -206,7 +204,6 @@ static struct ref *get_refs_via_connect(struct transport *transport, int for_pus
 static int fetch_refs_via_pack(struct transport *transport,
 			       int nr_heads, struct ref **to_fetch)
 {
-	int ret = 0;
 	struct git_transport_data *data = transport->data;
 	struct ref *refs;
 	char *dest = xstrdup(transport->url);
@@ -244,22 +241,19 @@ static int fetch_refs_via_pack(struct transport *transport,
 			  &transport->pack_lockfile);
 	close(data->fd[0]);
 	close(data->fd[1]);
-	if (finish_connect(data->conn))
-		ret = -1;
+	if (finish_connect(data->conn)) {
+		free_refs(refs);
+		refs = NULL;
+	}
 	data->conn = NULL;
 	data->got_remote_heads = 0;
 	data->options.self_contained_and_connected =
 		args.self_contained_and_connected;
 
-	if (refs == NULL)
-		ret = -1;
-	if (report_unmatched_refs(to_fetch, nr_heads))
-		ret = -1;
-
 	free_refs(refs_tmp);
 	free_refs(refs);
 	free(dest);
-	return ret;
+	return (refs ? 0 : -1);
 }
 
 static int push_had_errors(struct ref *ref)
@@ -473,11 +467,11 @@ void transport_print_push_status(const char *dest, struct ref *refs,
 {
 	struct ref *ref;
 	int n = 0;
-	struct object_id head_oid;
+	unsigned char head_sha1[20];
 	char *head;
 	int summary_width = transport_summary_width(refs);
 
-	head = resolve_refdup("HEAD", RESOLVE_REF_READING, head_oid.hash, NULL);
+	head = resolve_refdup("HEAD", RESOLVE_REF_READING, head_sha1, NULL);
 
 	if (verbose) {
 		for (ref = refs; ref; ref = ref->next)

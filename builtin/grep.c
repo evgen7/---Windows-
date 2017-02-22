@@ -294,17 +294,17 @@ static int grep_cmd_config(const char *var, const char *value, void *cb)
 	return st;
 }
 
-static void *lock_and_read_oid_file(const struct object_id *oid, enum object_type *type, unsigned long *size)
+static void *lock_and_read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size)
 {
 	void *data;
 
 	grep_read_lock();
-	data = read_sha1_file(oid->hash, type, size);
+	data = read_sha1_file(sha1, type, size);
 	grep_read_unlock();
 	return data;
 }
 
-static int grep_oid(struct grep_opt *opt, const struct object_id *oid,
+static int grep_sha1(struct grep_opt *opt, const unsigned char *sha1,
 		     const char *filename, int tree_name_len,
 		     const char *path)
 {
@@ -323,7 +323,7 @@ static int grep_oid(struct grep_opt *opt, const struct object_id *oid,
 
 #ifndef NO_PTHREADS
 	if (num_threads) {
-		add_work(opt, GREP_SOURCE_SHA1, pathbuf.buf, path, oid);
+		add_work(opt, GREP_SOURCE_SHA1, pathbuf.buf, path, sha1);
 		strbuf_release(&pathbuf);
 		return 0;
 	} else
@@ -332,7 +332,7 @@ static int grep_oid(struct grep_opt *opt, const struct object_id *oid,
 		struct grep_source gs;
 		int hit;
 
-		grep_source_init(&gs, GREP_SOURCE_SHA1, pathbuf.buf, path, oid);
+		grep_source_init(&gs, GREP_SOURCE_SHA1, pathbuf.buf, path, sha1);
 		strbuf_release(&pathbuf);
 		hit = grep_source(opt, &gs);
 
@@ -616,7 +616,7 @@ static int grep_submodule(struct grep_opt *opt, const unsigned char *sha1,
 {
 	if (!is_submodule_initialized(path))
 		return 0;
-	if (!is_submodule_populated_gently(path, NULL)) {
+	if (!is_submodule_populated(path)) {
 		/*
 		 * If searching history, check for the presense of the
 		 * submodule's gitdir before skipping the submodule.
@@ -690,7 +690,7 @@ static int grep_cache(struct grep_opt *opt, const struct pathspec *pathspec,
 			    ce_skip_worktree(ce)) {
 				if (ce_stage(ce) || ce_intent_to_add(ce))
 					continue;
-				hit |= grep_oid(opt, &ce->oid, ce->name,
+				hit |= grep_sha1(opt, ce->oid.hash, ce->name,
 						 0, ce->name);
 			} else {
 				hit |= grep_file(opt, ce->name);
@@ -750,7 +750,7 @@ static int grep_tree(struct grep_opt *opt, const struct pathspec *pathspec,
 		strbuf_add(base, entry.path, te_len);
 
 		if (S_ISREG(entry.mode)) {
-			hit |= grep_oid(opt, entry.oid, base->buf, tn_len,
+			hit |= grep_sha1(opt, entry.oid->hash, base->buf, tn_len,
 					 check_attr ? base->buf + tn_len : NULL);
 		} else if (S_ISDIR(entry.mode)) {
 			enum object_type type;
@@ -758,7 +758,7 @@ static int grep_tree(struct grep_opt *opt, const struct pathspec *pathspec,
 			void *data;
 			unsigned long size;
 
-			data = lock_and_read_oid_file(entry.oid, &type, &size);
+			data = lock_and_read_sha1_file(entry.oid->hash, &type, &size);
 			if (!data)
 				die(_("unable to read tree (%s)"),
 				    oid_to_hex(entry.oid));
@@ -787,7 +787,7 @@ static int grep_object(struct grep_opt *opt, const struct pathspec *pathspec,
 		       struct object *obj, const char *name, const char *path)
 {
 	if (obj->type == OBJ_BLOB)
-		return grep_oid(opt, &obj->oid, name, 0, path);
+		return grep_sha1(opt, obj->oid.hash, name, 0, path);
 	if (obj->type == OBJ_COMMIT || obj->type == OBJ_TREE) {
 		struct tree_desc tree;
 		void *data;
@@ -811,13 +811,7 @@ static int grep_object(struct grep_opt *opt, const struct pathspec *pathspec,
 		strbuf_init(&base, PATH_MAX + len + 1);
 		if (len) {
 			strbuf_add(&base, name, len);
-
-			/* Add a delimiter if there isn't one already */
-			if (name[len - 1] != '/' && name[len - 1] != ':') {
-				/* rev: or rev:path/ */
-				char delim = obj->type == OBJ_COMMIT ? ':' : '/';
-				strbuf_addch(&base, delim);
-			}
+			strbuf_addch(&base, ':');
 		}
 		init_tree_desc(&tree, data, size);
 		hit = grep_tree(opt, pathspec, &tree, &base, base.len,
@@ -1175,7 +1169,7 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	allow_revs = use_index && !untracked;
 	for (i = 0; i < argc; i++) {
 		const char *arg = argv[i];
-		struct object_id oid;
+		unsigned char sha1[20];
 		struct object_context oc;
 		struct object *object;
 
@@ -1190,13 +1184,13 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 			break;
 		}
 
-		if (get_sha1_with_context(arg, 0, oid.hash, &oc)) {
+		if (get_sha1_with_context(arg, 0, sha1, &oc)) {
 			if (seen_dashdash)
 				die(_("unable to resolve revision: %s"), arg);
 			break;
 		}
 
-		object = parse_object_or_die(oid.hash, arg);
+		object = parse_object_or_die(sha1, arg);
 		if (!seen_dashdash)
 			verify_non_filename(prefix, arg);
 		add_object_array_with_path(object, arg, &list, oc.mode, oc.path);

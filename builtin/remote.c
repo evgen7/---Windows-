@@ -769,9 +769,7 @@ static int rm(int argc, const char **argv)
 				strbuf_reset(&buf);
 				strbuf_addf(&buf, "branch.%s.%s",
 						item->string, *k);
-				result = git_config_set_gently(buf.buf, NULL);
-				if (result && result != CONFIG_NOTHING_SET)
-					die(_("could not unset '%s'"), buf.buf);
+				git_config_set(buf.buf, NULL);
 			}
 		}
 	}

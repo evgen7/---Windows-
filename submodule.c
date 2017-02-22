@@ -17,7 +17,6 @@
 #include "worktree.h"
 
 static int config_fetch_recurse_submodules = RECURSE_SUBMODULES_ON_DEMAND;
-static int config_update_recurse_submodules = RECURSE_SUBMODULES_DEFAULT;
 static int parallel_jobs = 1;
 static struct string_list changed_submodule_paths = STRING_LIST_INIT_NODUP;
 static int initialized_fetch_ref_tips;
@@ -235,12 +234,15 @@ int is_submodule_initialized(const char *path)
 	return ret;
 }
 
-int is_submodule_populated_gently(const char *path, int *return_error_code)
+/*
+ * Determine if a submodule has been populated at a given 'path'
+ */
+int is_submodule_populated(const char *path)
 {
 	int ret = 0;
 	char *gitdir = xstrfmt("%s/.git", path);
 
-	if (resolve_gitdir_gently(gitdir, return_error_code))
+	if (resolve_gitdir(gitdir))
 		ret = 1;
 
 	free(gitdir);
@@ -354,23 +356,6 @@ static void print_submodule_summary(struct rev_info *rev, FILE *f,
 		fprintf(f, "%s", sb.buf);
 	}
 	strbuf_release(&sb);
-}
-
-static void prepare_submodule_repo_env_no_git_dir(struct argv_array *out)
-{
-	const char * const *var;
-
-	for (var = local_repo_env; *var; var++) {
-		if (strcmp(*var, CONFIG_DATA_ENVIRONMENT))
-			argv_array_push(out, *var);
-	}
-}
-
-void prepare_submodule_repo_env(struct argv_array *out)
-{
-	prepare_submodule_repo_env_no_git_dir(out);
-	argv_array_pushf(out, "%s=%s", GIT_DIR_ENVIRONMENT,
-			 DEFAULT_GIT_DIR_ENVIRONMENT);
 }
 
 /* Helper function to display the submodule header line prior to the full
@@ -558,38 +543,6 @@ done:
 void set_config_fetch_recurse_submodules(int value)
 {
 	config_fetch_recurse_submodules = value;
-}
-
-void set_config_update_recurse_submodules(int value)
-{
-	config_update_recurse_submodules = value;
-}
-
-int touch_submodules_in_worktree(void)
-{
-	/*
-	 * Update can't be "none", "merge" or "rebase",
-	 * treat any value as OFF, except an explicit ON.
-	 */
-	return config_update_recurse_submodules == RECURSE_SUBMODULES_ON;
-}
-
-int is_active_submodule_with_strategy(const struct cache_entry *ce,
-				      enum submodule_update_type strategy)
-{
-	const struct submodule *sub;
-
-	if (!S_ISGITLINK(ce->ce_mode))
-		return 0;
-
-	if (!touch_submodules_in_worktree())
-		return 0;
-
-	sub = submodule_from_path(null_sha1, ce->name);
-	if (!sub)
-		return 0;
-
-	return sub->update_strategy.type == strategy;
 }
 
 static int has_remote(const char *refname, const struct object_id *oid,
@@ -1250,157 +1203,6 @@ out:
 	return ret;
 }
 
-static int submodule_has_dirty_index(const struct submodule *sub)
-{
-	ssize_t len;
-	struct child_process cp = CHILD_PROCESS_INIT;
-	struct strbuf buf = STRBUF_INIT;
-	int ret = 0;
-
-	prepare_submodule_repo_env_no_git_dir(&cp.env_array);
-
-	cp.git_cmd = 1;
-	argv_array_pushl(&cp.args, "diff-index", "--cached", "HEAD", NULL);
-	cp.no_stdin = 1;
-	cp.out = -1;
-	cp.dir = sub->path;
-	if (start_command(&cp))
-		die("could not recurse into submodule %s", sub->path);
-
-	len = strbuf_read(&buf, cp.out, 1024);
-	if (len > 2)
-		ret = 1;
-
-	close(cp.out);
-	if (finish_command(&cp))
-		die("could not recurse into submodule %s", sub->path);
-
-	strbuf_release(&buf);
-	return ret;
-}
-
-void submodule_clean_index(const char *path)
-{
-	struct child_process cp = CHILD_PROCESS_INIT;
-	prepare_submodule_repo_env_no_git_dir(&cp.env_array);
-
-	cp.git_cmd = 1;
-	cp.no_stdin = 1;
-	cp.dir = path;
-
-	argv_array_pushf(&cp.args, "--super-prefix=%s/", path);
-	argv_array_pushl(&cp.args, "read-tree", "-u", "--reset", NULL);
-
-	argv_array_push(&cp.args, EMPTY_TREE_SHA1_HEX);
-
-	if (run_command(&cp))
-		die("could not clean submodule index");
-}
-
-/**
- * Moves a submodule at a given path from a given head to another new head.
- * For edge cases (a submodule coming into existence or removing a submodule)
- * pass NULL for old or new respectively.
- *
- * TODO: move dryrun and forced to flags.
- */
-int submodule_go_from_to(const char *path,
-			 const char *old,
-			 const char *new,
-			 int dry_run,
-			 int force)
-{
-	int ret = 0;
-	struct child_process cp = CHILD_PROCESS_INIT;
-	const struct submodule *sub;
-
-	sub = submodule_from_path(null_sha1, path);
-
-	if (!sub)
-		die("BUG: could not get submodule information for '%s'", path);
-
-	if (!dry_run) {
-		if (old) {
-			if (!submodule_uses_gitfile(path))
-				absorb_git_dir_into_superproject("", path,
-					ABSORB_GITDIR_RECURSE_SUBMODULES);
-		} else {
-			struct strbuf sb = STRBUF_INIT;
-			strbuf_addf(&sb, "%s/modules/%s",
-				    get_git_common_dir(), sub->name);
-			connect_work_tree_and_git_dir(path, sb.buf);
-			strbuf_release(&sb);
-
-			/* make sure the index is clean as well */
-			submodule_clean_index(path);
-		}
-	}
-
-	if (old && !force) {
-		/* Check if the submodule has a dirty index. */
-		if (submodule_has_dirty_index(sub)) {
-			/* print a thing here? */
-			return -1;
-		}
-	}
-
-	prepare_submodule_repo_env_no_git_dir(&cp.env_array);
-
-	cp.git_cmd = 1;
-	cp.no_stdin = 1;
-	cp.dir = path;
-
-	argv_array_pushf(&cp.args, "--super-prefix=%s/", path);
-	argv_array_pushl(&cp.args, "read-tree", NULL);
-
-	if (dry_run)
-		argv_array_push(&cp.args, "-n");
-	else
-		argv_array_push(&cp.args, "-u");
-
-	if (force)
-		argv_array_push(&cp.args, "--reset");
-	else
-		argv_array_push(&cp.args, "-m");
-
-	argv_array_push(&cp.args, old ? old : EMPTY_TREE_SHA1_HEX);
-	argv_array_push(&cp.args, new ? new : EMPTY_TREE_SHA1_HEX);
-
-	if (run_command(&cp)) {
-		ret = -1;
-		goto out;
-	}
-
-	if (!dry_run) {
-		if (new) {
-			struct child_process cp1 = CHILD_PROCESS_INIT;
-			/* also set the HEAD accordingly */
-			cp1.git_cmd = 1;
-			cp1.no_stdin = 1;
-			cp1.dir = path;
-
-			argv_array_pushl(&cp1.args, "update-ref", "HEAD",
-					 new ? new : EMPTY_TREE_SHA1_HEX, NULL);
-
-			if (run_command(&cp1)) {
-				ret = -1;
-				goto out;
-			}
-		} else {
-			struct strbuf sb = STRBUF_INIT;
-
-			strbuf_addf(&sb, "%s/.git", path);
-			unlink_or_warn(sb.buf);
-			strbuf_release(&sb);
-
-			if (is_empty_dir(path))
-				rmdir_or_warn(path);
-		}
-	}
-out:
-	return ret;
-}
-
 static int find_first_merges(struct object_array *result, const char *path,
 		struct commit *a, struct commit *b)
 {
@@ -1423,8 +1225,6 @@ static int find_first_merges(struct object_array *result, const char *path,
 			oid_to_hex(&a->object.oid));
 	init_revisions(&revs, NULL);
 	rev_opts.submodule = path;
-	/* FIXME: can't handle linked worktrees in submodules yet */
-	revs.single_worktree = path != NULL;
 	setup_revisions(ARRAY_SIZE(rev_args)-1, rev_args, &revs, &rev_opts);
 
 	/* save all revisions from the above list that contain b */
@@ -1571,6 +1371,18 @@ int parallel_submodules(void)
 	return parallel_jobs;
 }
 
+void prepare_submodule_repo_env(struct argv_array *out)
+{
+	const char * const *var;
+
+	for (var = local_repo_env; *var; var++) {
+		if (strcmp(*var, CONFIG_DATA_ENVIRONMENT))
+			argv_array_push(out, *var);
+	}
+	argv_array_pushf(out, "%s=%s", GIT_DIR_ENVIRONMENT,
+			 DEFAULT_GIT_DIR_ENVIRONMENT);
+}
+
 /*
  * Embeds a single submodules git directory into the superprojects git dir,
  * non recursively.
@@ -1633,6 +1445,8 @@ void absorb_git_dir_into_superproject(const char *prefix,
 
 	/* Not populated? */
 	if (!sub_git_dir) {
+		char *real_new_git_dir;
+		const char *new_git_dir;
 		const struct submodule *sub;
 
 		if (err_code == READ_GITFILE_ERR_STAT_FAILED) {
@@ -1655,8 +1469,13 @@ void absorb_git_dir_into_superproject(const char *prefix,
 		sub = submodule_from_path(null_sha1, path);
 		if (!sub)
 			die(_("could not lookup name for submodule '%s'"), path);
-		connect_work_tree_and_git_dir(path,
-			git_path("modules/%s", sub->name));
+		new_git_dir = git_path("modules/%s", sub->name);
+		if (safe_create_leading_directories_const(new_git_dir) < 0)
+			die(_("could not create directory '%s'"), new_git_dir);
+		real_new_git_dir = real_pathdup(new_git_dir);
+		connect_work_tree_and_git_dir(path, real_new_git_dir);
+
+		free(real_new_git_dir);
 	} else {
 		/* Is it already absorbed into the superprojects git dir? */
 		char *real_sub_git_dir = real_pathdup(sub_git_dir);
@@ -1694,35 +1513,4 @@ void absorb_git_dir_into_superproject(const char *prefix,
 
 		strbuf_release(&sb);
 	}
-}
-
-int submodule_to_gitdir(struct strbuf *buf, const char *submodule)
-{
-	const struct submodule *sub;
-	const char *git_dir;
-	int ret = 0;
-
-	strbuf_reset(buf);
-	strbuf_addstr(buf, submodule);
-	strbuf_complete(buf, '/');
-	strbuf_addstr(buf, ".git");
-
-	git_dir = read_gitfile(buf->buf);
-	if (git_dir) {
-		strbuf_reset(buf);
-		strbuf_addstr(buf, git_dir);
-	}
-	if (!is_git_directory(buf->buf)) {
-		gitmodules_config();
-		sub = submodule_from_path(null_sha1, submodule);
-		if (!sub) {
-			ret = -1;
-			goto cleanup;
-		}
-		strbuf_reset(buf);
-		strbuf_git_path(buf, "%s/%s", "modules", sub->name);
-	}
-
-cleanup:
-	return ret;
 }

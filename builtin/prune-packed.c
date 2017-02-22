@@ -19,12 +19,12 @@ static int prune_subdir(int nr, const char *path, void *data)
 	return 0;
 }
 
-static int prune_object(const struct object_id *oid, const char *path,
+static int prune_object(const unsigned char *sha1, const char *path,
 			 void *data)
 {
 	int *opts = data;
 
-	if (!has_sha1_pack(oid->hash))
+	if (!has_sha1_pack(sha1))
 		return 0;
 
 	if (*opts & PRUNE_PACKED_DRY_RUN)
