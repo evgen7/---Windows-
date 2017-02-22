@@ -201,6 +201,64 @@ void git_config_push_parameter(const char *text)
 	strbuf_release(&env);
 }
 
+static inline int iskeychar(int c)
+{
+	return isalnum(c) || c == '-';
+}
+
+/*
+ * downcase the <section> and <variable> in <section>.<variable> or
+ * <section>.<subsection>.<variable> and do so in place.  <subsection>
+ * is left intact.
+ *
+ * The configuration variable names that come from files are validated
+ * in git_config_parse_source(), which uses get_base_var() that grabs
+ * the <section> (and subsection) while making sure that <section>
+ * consists of iskeychar() letters, the function itself that makes
+ * sure that the first letter in <variable> is isalpha(), and
+ * get_value() that grabs the remainder of the <variable> name while
+ * making sure that it consists of iskeychar() letters.  Perform a
+ * matching validation for configuration variables that come from
+ * the command line.
+ */
+static int canonicalize_config_variable_name(char *varname)
+{
+	char *cp, *first_dot, *last_dot;
+
+	/* downcase the first segment */
+	for (cp = varname; *cp; cp++) {
+		if (*cp == '.')
+			break;
+		if (!iskeychar(*cp))
+			return -1;
+		*cp = tolower(*cp);
+	}
+	if (!*cp)
+		return -1; /* no dot anywhere? */
+
+	first_dot = cp;
+	if (first_dot == varname)
+		return -1; /* no section? */
+
+	/* find the last dot (we start from the first dot we just found) */
+	for (last_dot = cp; *cp; cp++)
+		if (*cp == '.')
+			last_dot = cp;
+
+	if (!last_dot[1])
+		return -1; /* no variable? */
+
+	/* downcase the last segment */
+	for (cp = last_dot + 1; *cp; cp++) {
+		if (cp == last_dot + 1 && !isalpha(*cp))
+			return -1;
+		else if (!iskeychar(*cp))
+			return -1;
+		*cp = tolower(*cp);
+	}
+	return 0;
+}
+
 int git_config_parse_parameter(const char *text,
 			       config_fn_t fn, void *data)
 {
@@ -223,7 +281,8 @@ int git_config_parse_parameter(const char *text,
 		strbuf_list_free(pair);
 		return error("bogus config parameter: %s", text);
 	}
-	strbuf_tolower(pair[0]);
+	if (canonicalize_config_variable_name(pair[0]->buf))
+		return error("bogus config parameter: %s", text);
 	if (fn(pair[0]->buf, value, data) < 0) {
 		strbuf_list_free(pair);
 		return -1;
@@ -354,11 +413,6 @@ static char *parse_value(void)
 		}
 		strbuf_addch(&cf->value, c);
 	}
-}
-
-static inline int iskeychar(int c)
-{
-	return isalnum(c) || c == '-';
 }
 
 static int get_value(config_fn_t fn, void *data, struct strbuf *name)
@@ -1712,6 +1766,19 @@ int git_config_get_pathname(const char *key, const char **dest)
 	return ret;
 }
 
+int git_config_get_expiry(const char *key, const char **output)
+{
+	int ret = git_config_get_string_const(key, output);
+	if (ret)
+		return ret;
+	if (strcmp(*output, "now")) {
+		unsigned long now = approxidate("now");
+		if (approxidate(*output) >= now)
+			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
+	}
+	return ret;
+}
+
 int git_config_get_untracked_cache(void)
 {
 	int val = -1;
@@ -1728,9 +1795,34 @@ int git_config_get_untracked_cache(void)
 		if (!strcasecmp(v, "keep"))
 			return -1;
 
-		error("unknown core.untrackedCache value '%s'; "
-		      "using 'keep' default value", v);
+		error(_("unknown core.untrackedCache value '%s'; "
+			"using 'keep' default value"), v);
 		return -1;
+	}
+
+	return -1; /* default value */
+}
+
+int git_config_get_split_index(void)
+{
+	int val;
+
+	if (!git_config_get_maybe_bool("core.splitindex", &val))
+		return val;
+
+	return -1; /* default value */
+}
+
+int git_config_get_max_percent_split_change(void)
+{
+	int val = -1;
+
+	if (!git_config_get_int("splitindex.maxpercentchange", &val)) {
+		if (0 <= val && val <= 100)
+			return val;
+
+		return error(_("splitIndex.maxPercentChange value '%d' "
+			       "should be between 0 and 100"), val);
 	}
 
 	return -1; /* default value */

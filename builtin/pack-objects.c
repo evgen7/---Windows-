@@ -894,24 +894,15 @@ static void write_pack_file(void)
 			written, nr_result);
 }
 
-static void setup_delta_attr_check(struct git_attr_check *check)
-{
-	static struct git_attr *attr_delta;
-
-	if (!attr_delta)
-		attr_delta = git_attr("delta");
-
-	check[0].attr = attr_delta;
-}
-
 static int no_try_delta(const char *path)
 {
-	struct git_attr_check check[1];
+	static struct attr_check *check;
 
-	setup_delta_attr_check(check);
-	if (git_check_attr(path, ARRAY_SIZE(check), check))
+	if (!check)
+		check = attr_check_initl("delta", NULL);
+	if (git_check_attr(path, check))
 		return 0;
-	if (ATTR_FALSE(check->value))
+	if (ATTR_FALSE(check->items[0].value))
 		return 1;
 	return 0;
 }
@@ -1539,6 +1530,8 @@ static int pack_offset_sort(const void *_a, const void *_b)
  *   2. Updating our size/type to the non-delta representation. These were
  *      either not recorded initially (size) or overwritten with the delta type
  *      (type) when check_object() decided to reuse the delta.
+ *
+ *   3. Resetting our delta depth, as we are now a base object.
  */
 static void drop_reused_delta(struct object_entry *entry)
 {
@@ -1552,6 +1545,7 @@ static void drop_reused_delta(struct object_entry *entry)
 			p = &(*p)->delta_sibling;
 	}
 	entry->delta = NULL;
+	entry->depth = 0;
 
 	oi.sizep = &entry->size;
 	oi.typep = &entry->type;
@@ -1570,39 +1564,123 @@ static void drop_reused_delta(struct object_entry *entry)
  * Follow the chain of deltas from this entry onward, throwing away any links
  * that cause us to hit a cycle (as determined by the DFS state flags in
  * the entries).
+ *
+ * We also detect too-long reused chains that would violate our --depth
+ * limit.
  */
 static void break_delta_chains(struct object_entry *entry)
 {
-	/* If it's not a delta, it can't be part of a cycle. */
-	if (!entry->delta) {
-		entry->dfs_state = DFS_DONE;
-		return;
+	/*
+	 * The actual depth of each object we will write is stored as an int,
+	 * as it cannot exceed our int "depth" limit. But before we break
+	 * changes based no that limit, we may potentially go as deep as the
+	 * number of objects, which is elsewhere bounded to a uint32_t.
+	 */
+	uint32_t total_depth;
+	struct object_entry *cur, *next;
+
+	for (cur = entry, total_depth = 0;
+	     cur;
+	     cur = cur->delta, total_depth++) {
+		if (cur->dfs_state == DFS_DONE) {
+			/*
+			 * We've already seen this object and know it isn't
+			 * part of a cycle. We do need to append its depth
+			 * to our count.
+			 */
+			total_depth += cur->depth;
+			break;
+		}
+
+		/*
+		 * We break cycles before looping, so an ACTIVE state (or any
+		 * other cruft which made its way into the state variable)
+		 * is a bug.
+		 */
+		if (cur->dfs_state != DFS_NONE)
+			die("BUG: confusing delta dfs state in first pass: %d",
+			    cur->dfs_state);
+
+		/*
+		 * Now we know this is the first time we've seen the object. If
+		 * it's not a delta, we're done traversing, but we'll mark it
+		 * done to save time on future traversals.
+		 */
+		if (!cur->delta) {
+			cur->dfs_state = DFS_DONE;
+			break;
+		}
+
+		/*
+		 * Mark ourselves as active and see if the next step causes
+		 * us to cycle to another active object. It's important to do
+		 * this _before_ we loop, because it impacts where we make the
+		 * cut, and thus how our total_depth counter works.
+		 * E.g., We may see a partial loop like:
+		 *
+		 *   A -> B -> C -> D -> B
+		 *
+		 * Cutting B->C breaks the cycle. But now the depth of A is
+		 * only 1, and our total_depth counter is at 3. The size of the
+		 * error is always one less than the size of the cycle we
+		 * broke. Commits C and D were "lost" from A's chain.
+		 *
+		 * If we instead cut D->B, then the depth of A is correct at 3.
+		 * We keep all commits in the chain that we examined.
+		 */
+		cur->dfs_state = DFS_ACTIVE;
+		if (cur->delta->dfs_state == DFS_ACTIVE) {
+			drop_reused_delta(cur);
+			cur->dfs_state = DFS_DONE;
+			break;
+		}
 	}
 
-	switch (entry->dfs_state) {
-	case DFS_NONE:
-		/*
-		 * This is the first time we've seen the object. We mark it as
-		 * part of the active potential cycle and recurse.
-		 */
-		entry->dfs_state = DFS_ACTIVE;
-		break_delta_chains(entry->delta);
-		entry->dfs_state = DFS_DONE;
-		break;
+	/*
+	 * And now that we've gone all the way to the bottom of the chain, we
+	 * need to clear the active flags and set the depth fields as
+	 * appropriate. Unlike the loop above, which can quit when it drops a
+	 * delta, we need to keep going to look for more depth cuts. So we need
+	 * an extra "next" pointer to keep going after we reset cur->delta.
+	 */
+	for (cur = entry; cur; cur = next) {
+		next = cur->delta;
 
-	case DFS_DONE:
-		/* object already examined, and not part of a cycle */
-		break;
-
-	case DFS_ACTIVE:
 		/*
-		 * We found a cycle that needs broken. It would be correct to
-		 * break any link in the chain, but it's convenient to
-		 * break this one.
+		 * We should have a chain of zero or more ACTIVE states down to
+		 * a final DONE. We can quit after the DONE, because either it
+		 * has no bases, or we've already handled them in a previous
+		 * call.
 		 */
-		drop_reused_delta(entry);
-		entry->dfs_state = DFS_DONE;
-		break;
+		if (cur->dfs_state == DFS_DONE)
+			break;
+		else if (cur->dfs_state != DFS_ACTIVE)
+			die("BUG: confusing delta dfs state in second pass: %d",
+			    cur->dfs_state);
+
+		/*
+		 * If the total_depth is more than depth, then we need to snip
+		 * the chain into two or more smaller chains that don't exceed
+		 * the maximum depth. Most of the resulting chains will contain
+		 * (depth + 1) entries (i.e., depth deltas plus one base), and
+		 * the last chain (i.e., the one containing entry) will contain
+		 * whatever entries are left over, namely
+		 * (total_depth % (depth + 1)) of them.
+		 *
+		 * Since we are iterating towards decreasing depth, we need to
+		 * decrement total_depth as we go, and we need to write to the
+		 * entry what its final depth will be after all of the
+		 * snipping. Since we're snipping into chains of length (depth
+		 * + 1) entries, the final depth of an entry will be its
+		 * original depth modulo (depth + 1). Any time we encounter an
+		 * entry whose final depth is supposed to be zero, we snip it
+		 * from its delta base, thereby making it so.
+		 */
+		cur->depth = (total_depth--) % (depth + 1);
+		if (!cur->depth)
+			drop_reused_delta(cur);
+
+		cur->dfs_state = DFS_DONE;
 	}
 }
 
@@ -2534,17 +2612,17 @@ static void add_objects_in_unpacked_packs(struct rev_info *revs)
 	free(in_pack.array);
 }
 
-static int add_loose_object(const unsigned char *sha1, const char *path,
+static int add_loose_object(const struct object_id *oid, const char *path,
 			    void *data)
 {
-	enum object_type type = sha1_object_info(sha1, NULL);
+	enum object_type type = sha1_object_info(oid->hash, NULL);
 
 	if (type < 0) {
 		warning("loose object at %s could not be examined", path);
 		return 0;
 	}
 
-	add_object_entry(sha1, type, "", 0);
+	add_object_entry(oid->hash, type, "", 0);
 	return 0;
 }
 

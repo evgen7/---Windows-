@@ -2,6 +2,7 @@
 #include "blob.h"
 #include "dir.h"
 #include "streaming.h"
+#include "submodule.h"
 
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
@@ -203,6 +204,13 @@ static int write_entry(struct cache_entry *ce,
 			return error("cannot create temporary submodule %s", path);
 		if (mkdir(path, 0777) < 0)
 			return error("cannot create submodule directory %s", path);
+		if (is_active_submodule_with_strategy(ce, SM_UPDATE_UNSPECIFIED))
+				/*
+				 * force=1 is ok for any case as we did a dry
+				 * run before with appropriate force setting
+				 */
+				return submodule_go_from_to(ce->name,
+					NULL, oid_to_hex(&ce->oid), 0, 1);
 		break;
 	default:
 		return error("unknown file mode for %s in index", path);
@@ -260,6 +268,26 @@ int checkout_entry(struct cache_entry *ce,
 
 	if (!check_path(path.buf, path.len, &st, state->base_dir_len)) {
 		unsigned changed = ce_match_stat(ce, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE);
+		/*
+		 * Needs to be checked before !changed returns early,
+		 * as the possibly empty directory was not changed
+		 */
+		if (is_active_submodule_with_strategy(ce, SM_UPDATE_UNSPECIFIED)) {
+			int err;
+			if (!is_submodule_populated_gently(ce->name, &err)) {
+				struct stat sb;
+				if (lstat(ce->name, &sb))
+					die(_("could not stat file '%s'"), ce->name);
+				if (!(st.st_mode & S_IFDIR))
+					unlink_or_warn(ce->name);
+
+				return submodule_go_from_to(ce->name,
+					NULL, oid_to_hex(&ce->oid), 0, 1);
+			} else
+				return submodule_go_from_to(ce->name,
+					"HEAD", oid_to_hex(&ce->oid), 0, 1);
+		}
+
 		if (!changed)
 			return 0;
 		if (!state->force) {

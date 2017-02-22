@@ -45,4 +45,13 @@ struct ref *fetch_pack(struct fetch_pack_args *args,
 		       struct sha1_array *shallow,
 		       char **pack_lockfile);
 
+/*
+ * Print an appropriate error message for each sought ref that wasn't
+ * matched.  Return 0 if all sought refs were matched, otherwise 1.
+ *
+ * The type of "sought" should be "const struct ref *const *" but for
+ * http://stackoverflow.com/questions/5055655/double-pointer-const-correctness-warnings-in-c .
+ */
+int report_unmatched_refs(struct ref **sought, int nr_sought);
+
 #endif

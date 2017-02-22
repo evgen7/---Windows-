@@ -192,6 +192,7 @@ typedef int each_ref_fn(const char *refname,
  * stop the iteration.
  */
 int head_ref(each_ref_fn fn, void *cb_data);
+int other_head_refs(each_ref_fn fn, void *cb_data);
 int for_each_ref(each_ref_fn fn, void *cb_data);
 int for_each_ref_in(const char *prefix, each_ref_fn fn, void *cb_data);
 int for_each_fullref_in(const char *prefix, each_ref_fn fn, void *cb_data,
@@ -204,15 +205,6 @@ int for_each_glob_ref(each_ref_fn fn, const char *pattern, void *cb_data);
 int for_each_glob_ref_in(each_ref_fn fn, const char *pattern,
 			 const char *prefix, void *cb_data);
 
-int head_ref_submodule(const char *submodule, each_ref_fn fn, void *cb_data);
-int for_each_ref_submodule(const char *submodule,
-			   each_ref_fn fn, void *cb_data);
-int for_each_ref_in_submodule(const char *submodule, const char *prefix,
-		each_ref_fn fn, void *cb_data);
-int for_each_tag_ref_submodule(const char *submodule,
-			       each_ref_fn fn, void *cb_data);
-int for_each_branch_ref_submodule(const char *submodule,
-				  each_ref_fn fn, void *cb_data);
 int for_each_remote_ref_submodule(const char *submodule,
 				  each_ref_fn fn, void *cb_data);
 
@@ -276,8 +268,8 @@ int reflog_exists(const char *refname);
  * exists, regardless of its old value. It is an error for old_sha1 to
  * be NULL_SHA1. flags is passed through to ref_transaction_delete().
  */
-int delete_ref(const char *refname, const unsigned char *old_sha1,
-	       unsigned int flags);
+int delete_ref(const char *msg, const char *refname,
+	       const unsigned char *old_sha1, unsigned int flags);
 
 /*
  * Delete the specified references. If there are any problems, emit
@@ -292,7 +284,7 @@ int delete_reflog(const char *refname);
 
 /* iterate over reflog entries */
 typedef int each_reflog_ent_fn(
-		unsigned char *old_sha1, unsigned char *new_sha1,
+		struct object_id *old_oid, struct object_id *new_oid,
 		const char *committer, unsigned long timestamp,
 		int tz, const char *msg, void *cb_data);
 
@@ -326,15 +318,6 @@ char *shorten_unambiguous_ref(const char *refname, int strict);
 int rename_ref(const char *oldref, const char *newref, const char *logmsg);
 
 int create_symref(const char *refname, const char *target, const char *logmsg);
-
-/*
- * Update HEAD of the specified gitdir.
- * Similar to create_symref("relative-git-dir/HEAD", target, NULL), but
- * this can update the main working tree's HEAD regardless of where
- * $GIT_DIR points to.
- * Return 0 if successful, non-zero otherwise.
- * */
-int set_worktree_head_symref(const char *gitdir, const char *target);
 
 enum action_on_err {
 	UPDATE_REFS_MSG_ON_ERR,
@@ -554,5 +537,45 @@ int reflog_expire(const char *refname, const unsigned char *sha1,
 		  void *policy_cb_data);
 
 int ref_storage_backend_exists(const char *name);
+
+struct ref_store *get_main_ref_store(void);
+/*
+ * Return the ref_store instance for the specified submodule. For the
+ * main repository, use submodule==NULL; such a call cannot fail. For
+ * a submodule, the submodule must exist and be a nonbare repository,
+ * otherwise return NULL. If the requested reference store has not yet
+ * been initialized, initialize it first.
+ *
+ * For backwards compatibility, submodule=="" is treated the same as
+ * submodule==NULL.
+ */
+struct ref_store *get_submodule_ref_store(const char *submodule);
+struct worktree;
+struct ref_store *get_worktree_ref_store(const struct worktree *wt);
+
+const char *refs_resolve_ref_unsafe(struct ref_store *refs,
+				    const char *refname,
+				    int resolve_flags,
+				    unsigned char *sha1,
+				    int *flags);
+int refs_create_symref(struct ref_store *refs,
+		       const char *refname,
+		       const char *target,
+		       const char *logmsg);
+int refs_read_ref_full(struct ref_store *refs,
+		       const char *refname, int resolve_flags,
+		       unsigned char *sha1, int *flags);
+int refs_read_ref(struct ref_store *refs,
+		  const char *refname, unsigned char *sha1);
+int refs_head_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_ref_in(struct ref_store *refs, const char *prefix,
+			 each_ref_fn fn, void *cb_data);
+int refs_for_each_tag_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_branch_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_remote_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_reflog(struct ref_store *refs, each_ref_fn fn, void *cb_data);
+int refs_for_each_reflog_ent(struct ref_store *refs, const char *refname,
+			     each_reflog_ent_fn fn, void *cb_data);
 
 #endif /* REFS_H */
