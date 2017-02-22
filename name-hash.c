@@ -23,7 +23,7 @@ static int dir_entry_cmp(const struct dir_entry *e1,
 			name ? name : e2->name, e1->namelen);
 }
 
-static struct dir_entry *find_dir_entry_1(struct index_state *istate,
+static struct dir_entry *find_dir_entry__hash(struct index_state *istate,
 		const char *name, unsigned int namelen, unsigned int hash)
 {
 	struct dir_entry key;
@@ -35,12 +35,11 @@ static struct dir_entry *find_dir_entry_1(struct index_state *istate,
 static struct dir_entry *find_dir_entry(struct index_state *istate,
 		const char *name, unsigned int namelen)
 {
-	return find_dir_entry_1(istate, name, namelen, memihash(name, namelen));
+	return find_dir_entry__hash(istate, name, namelen, memihash(name,namelen));
 }
 
 static struct dir_entry *hash_dir_entry(struct index_state *istate,
-		struct cache_entry *ce, int namelen,
-		struct dir_entry **previous_dir)
+		struct cache_entry *ce, int namelen)
 {
 	/*
 	 * Throw each directory component in the hash for quick lookup
@@ -51,10 +50,6 @@ static struct dir_entry *hash_dir_entry(struct index_state *istate,
 	 */
 	struct dir_entry *dir;
 	unsigned int hash;
-	int orig_namelen = namelen;
-
-	if (ce->precomputed_hash.initialized && ce->precomputed_hash.root_entry)
-		return NULL; /* item does not have a parent directory */
 
 	/* get length of parent directory */
 	while (namelen > 0 && !is_dir_sep(ce->name[namelen - 1]))
@@ -64,24 +59,8 @@ static struct dir_entry *hash_dir_entry(struct index_state *istate,
 	namelen--;
 
 	/* lookup existing entry for that directory */
-	if (previous_dir && *previous_dir
-	    && namelen == (*previous_dir)->namelen
-	    && memcmp(ce->name, (*previous_dir)->name, namelen) == 0) {
-		/*
-		 * When our caller is sequentially iterating through the index,
-		 * items in the same directory will be sequential, and therefore
-		 * refer to the same dir_entry.
-		 */
-		dir = *previous_dir;
-	} else {
-		if (ce->precomputed_hash.initialized &&
-		    orig_namelen == ce_namelen(ce))
-			hash = ce->precomputed_hash.dir;
-		else
-			hash = memihash(ce->name, namelen);
-		dir = find_dir_entry_1(istate, ce->name, namelen, hash);
-	}
-
+	hash = memihash(ce->name, namelen);
+	dir = find_dir_entry__hash(istate, ce->name, namelen, hash);
 	if (!dir) {
 		/* not found, create it and add to hash table */
 		FLEX_ALLOC_MEM(dir, name, ce->name, namelen);
@@ -90,21 +69,15 @@ static struct dir_entry *hash_dir_entry(struct index_state *istate,
 		hashmap_add(&istate->dir_hash, dir);
 
 		/* recursively add missing parent directories */
-		dir->parent = hash_dir_entry(istate, ce, namelen, NULL);
+		dir->parent = hash_dir_entry(istate, ce, namelen);
 	}
-
-	if (previous_dir)
-		*previous_dir = dir;
-
 	return dir;
 }
 
-static void add_dir_entry(struct index_state *istate, struct cache_entry *ce,
-			  struct dir_entry **previous_dir)
+static void add_dir_entry(struct index_state *istate, struct cache_entry *ce)
 {
 	/* Add reference to the directory entry (and parents if 0). */
-	struct dir_entry *dir = hash_dir_entry(istate, ce, ce_namelen(ce),
-					       previous_dir);
+	struct dir_entry *dir = hash_dir_entry(istate, ce, ce_namelen(ce));
 	while (dir && !(dir->nr++))
 		dir = dir->parent;
 }
@@ -115,7 +88,7 @@ static void remove_dir_entry(struct index_state *istate, struct cache_entry *ce)
 	 * Release reference to the directory entry. If 0, remove and continue
 	 * with parent directory.
 	 */
-	struct dir_entry *dir = hash_dir_entry(istate, ce, ce_namelen(ce), NULL);
+	struct dir_entry *dir = hash_dir_entry(istate, ce, ce_namelen(ce));
 	while (dir && !(--dir->nr)) {
 		struct dir_entry *parent = dir->parent;
 		hashmap_remove(&istate->dir_hash, dir, NULL);
@@ -124,25 +97,16 @@ static void remove_dir_entry(struct index_state *istate, struct cache_entry *ce)
 	}
 }
 
-static void hash_index_entry(struct index_state *istate, struct cache_entry *ce,
-			     struct dir_entry **previous_dir)
+static void hash_index_entry(struct index_state *istate, struct cache_entry *ce)
 {
-	unsigned int h;
-
 	if (ce->ce_flags & CE_HASHED)
 		return;
 	ce->ce_flags |= CE_HASHED;
-
-	if (ce->precomputed_hash.initialized)
-		h = ce->precomputed_hash.name;
-	else
-		h = memihash(ce->name, ce_namelen(ce));
-
-	hashmap_entry_init(ce, h);
+	hashmap_entry_init(ce, memihash(ce->name, ce_namelen(ce)));
 	hashmap_add(&istate->name_hash, ce);
 
 	if (ignore_case)
-		add_dir_entry(istate, ce, previous_dir);
+		add_dir_entry(istate, ce);
 }
 
 static int cache_entry_cmp(const struct cache_entry *ce1,
@@ -158,24 +122,22 @@ static int cache_entry_cmp(const struct cache_entry *ce1,
 
 static void lazy_init_name_hash(struct index_state *istate)
 {
-	struct dir_entry *previous_dir = NULL;
 	int nr;
 
 	if (istate->name_hash_initialized)
 		return;
 	hashmap_init(&istate->name_hash, (hashmap_cmp_fn) cache_entry_cmp,
 			istate->cache_nr);
-	hashmap_init(&istate->dir_hash, (hashmap_cmp_fn) dir_entry_cmp,
-			istate->cache_nr);
+	hashmap_init(&istate->dir_hash, (hashmap_cmp_fn) dir_entry_cmp, 0);
 	for (nr = 0; nr < istate->cache_nr; nr++)
-		hash_index_entry(istate, istate->cache[nr], &previous_dir);
+		hash_index_entry(istate, istate->cache[nr]);
 	istate->name_hash_initialized = 1;
 }
 
 void add_name_hash(struct index_state *istate, struct cache_entry *ce)
 {
 	if (istate->name_hash_initialized)
-		hash_index_entry(istate, ce, NULL);
+		hash_index_entry(istate, ce);
 }
 
 void remove_name_hash(struct index_state *istate, struct cache_entry *ce)
@@ -281,42 +243,4 @@ void free_name_hash(struct index_state *istate)
 
 	hashmap_free(&istate->name_hash, 0);
 	hashmap_free(&istate->dir_hash, 1);
-}
-
-/*
- * Precompute the hash values for this cache_entry
- * for use in the istate.name_hash and istate.dir_hash.
- *
- * If the item is in the root directory, just compute the hash value (for
- * istate.name_hash) on the full path.
- *
- * If the item is in a subdirectory, first compute the hash value for the
- * immediate parent directory (for istate.dir_hash) and then the hash value for
- * the full path by continuing the computation.
- *
- * Note that these hashes will be used by wt_status_collect_untracked() as it
- * scans the worktree and maps observed paths back to the index (optionally
- * ignoring case). Technically, we only *NEED* to precompute this for
- * non-skip-worktree items (since status should not observe skipped items), but
- * because lazy_init_name_hash() hashes everything, we force it here.
- */
-void precompute_istate_hashes(struct cache_entry *ce)
-{
-	int namelen = ce_namelen(ce);
-
-	while (namelen > 0 && !is_dir_sep(ce->name[namelen - 1]))
-		namelen--;
-
-	if (namelen <= 0) {
-		ce->precomputed_hash.name = memihash(ce->name, ce_namelen(ce));
-		ce->precomputed_hash.root_entry = 1;
-	} else {
-		namelen--;
-		ce->precomputed_hash.dir = memihash(ce->name, namelen);
-		ce->precomputed_hash.name = memihash_continue(
-			ce->precomputed_hash.dir, ce->name + namelen,
-			ce_namelen(ce) - namelen);
-		ce->precomputed_hash.root_entry = 0;
-	}
-	ce->precomputed_hash.initialized = 1;
 }
