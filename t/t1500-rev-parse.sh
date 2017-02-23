@@ -3,7 +3,7 @@
 test_description='test git rev-parse'
 . ./test-lib.sh
 
-# usage: [options] label is-bare is-inside-git is-inside-work prefix git-dir absolute-git-dir
+# usage: [options] label is-bare is-inside-git is-inside-work prefix git-dir
 test_rev_parse () {
 	d=
 	bare=
@@ -29,8 +29,7 @@ test_rev_parse () {
 		 --is-inside-git-dir \
 		 --is-inside-work-tree \
 		 --show-prefix \
-		 --git-dir \
-		 --absolute-git-dir
+		 --git-dir
 	do
 		test $# -eq 0 && break
 		expect="$1"
@@ -63,57 +62,29 @@ test_expect_success 'setup' '
 	cp -R .git repo.git
 '
 
-test_rev_parse toplevel false false true '' .git "$ROOT/.git"
+test_rev_parse toplevel false false true '' .git
 
-test_rev_parse -C .git .git/ false true false '' . "$ROOT/.git"
-test_rev_parse -C .git/objects .git/objects/ false true false '' "$ROOT/.git" "$ROOT/.git"
+test_rev_parse -C .git .git/ false true false '' .
+test_rev_parse -C .git/objects .git/objects/ false true false '' "$ROOT/.git"
 
-test_rev_parse -C sub/dir subdirectory false false true sub/dir/ "$ROOT/.git" "$ROOT/.git"
+test_rev_parse -C sub/dir subdirectory false false true sub/dir/ "$ROOT/.git"
 
 test_rev_parse -b t 'core.bare = true' true false false
 
 test_rev_parse -b u 'core.bare undefined' false false true
 
 
-test_rev_parse -C work -g ../.git -b f 'GIT_DIR=../.git, core.bare = false' false false true '' "../.git" "$ROOT/.git"
+test_rev_parse -C work -g ../.git -b f 'GIT_DIR=../.git, core.bare = false' false false true ''
 
 test_rev_parse -C work -g ../.git -b t 'GIT_DIR=../.git, core.bare = true' true false false ''
 
 test_rev_parse -C work -g ../.git -b u 'GIT_DIR=../.git, core.bare undefined' false false true ''
 
 
-test_rev_parse -C work -g ../repo.git -b f 'GIT_DIR=../repo.git, core.bare = false' false false true '' "../repo.git" "$ROOT/repo.git"
+test_rev_parse -C work -g ../repo.git -b f 'GIT_DIR=../repo.git, core.bare = false' false false true ''
 
 test_rev_parse -C work -g ../repo.git -b t 'GIT_DIR=../repo.git, core.bare = true' true false false ''
 
 test_rev_parse -C work -g ../repo.git -b u 'GIT_DIR=../repo.git, core.bare undefined' false false true ''
-
-test_expect_success 'git-common-dir from worktree root' '
-	echo .git >expect &&
-	git rev-parse --git-common-dir >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success 'git-common-dir inside sub-dir' '
-	mkdir -p path/to/child &&
-	test_when_finished "rm -rf path" &&
-	echo "$(git -C path/to/child rev-parse --show-cdup).git" >expect &&
-	git -C path/to/child rev-parse --git-common-dir >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success 'git-path from worktree root' '
-	echo .git/objects >expect &&
-	git rev-parse --git-path objects >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success 'git-path inside sub-dir' '
-	mkdir -p path/to/child &&
-	test_when_finished "rm -rf path" &&
-	echo "$(git -C path/to/child rev-parse --show-cdup).git/objects" >expect &&
-	git -C path/to/child rev-parse --git-path objects >actual &&
-	test_cmp expect actual
-'
 
 test_done

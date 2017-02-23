@@ -1,6 +1,5 @@
 #include "cache.h"
 #include "exec_cmd.h"
-#include "attr.h"
 
 /*
  * Many parts of Git have subprograms communicate via pipe, expect the
@@ -33,8 +32,6 @@ int main(int argc, const char **argv)
 	sanitize_stdfds();
 
 	git_setup_gettext();
-
-	attr_start();
 
 	git_extract_argv0_path(argv[0]);
 

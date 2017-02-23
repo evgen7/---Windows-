@@ -33,8 +33,6 @@ static int aggressive_window = 250;
 static int gc_auto_threshold = 6700;
 static int gc_auto_pack_limit = 50;
 static int detach_auto = 1;
-static unsigned long gc_log_expire_time;
-static const char *gc_log_expire = "1.day.ago";
 static const char *prune_expire = "2.weeks.ago";
 static const char *prune_worktrees_expire = "3.months.ago";
 
@@ -78,28 +76,10 @@ static void git_config_date_string(const char *key, const char **output)
 static void process_log_file(void)
 {
 	struct stat st;
-	if (fstat(get_lock_file_fd(&log_lock), &st)) {
-		/*
-		 * Perhaps there was an i/o error or another
-		 * unlikely situation.  Try to make a note of
-		 * this in gc.log along with any existing
-		 * messages.
-		 */
-		int saved_errno = errno;
-		fprintf(stderr, _("Failed to fstat %s: %s"),
-			get_tempfile_path(&log_lock.tempfile),
-			strerror(saved_errno));
-		fflush(stderr);
+	if (!fstat(get_lock_file_fd(&log_lock), &st) && st.st_size)
 		commit_lock_file(&log_lock);
-		errno = saved_errno;
-	} else if (st.st_size) {
-		/* There was some error recorded in the lock file */
-		commit_lock_file(&log_lock);
-	} else {
-		/* No error, clean up any old gc.log */
-		unlink(git_path("gc.log"));
+	else
 		rollback_lock_file(&log_lock);
-	}
 }
 
 static void process_log_file_at_exit(void)
@@ -133,8 +113,6 @@ static void gc_config(void)
 	git_config_get_bool("gc.autodetach", &detach_auto);
 	git_config_date_string("gc.pruneexpire", &prune_expire);
 	git_config_date_string("gc.worktreepruneexpire", &prune_worktrees_expire);
-	git_config_date_string("gc.logexpiry", &gc_log_expire);
-
 	git_config(git_default_config, NULL);
 }
 
@@ -312,34 +290,19 @@ static const char *lock_repo_for_gc(int force, pid_t* ret_pid)
 static int report_last_gc_error(void)
 {
 	struct strbuf sb = STRBUF_INIT;
-	int ret = 0;
-	struct stat st;
-	char *gc_log_path = git_pathdup("gc.log");
+	int ret;
 
-	if (stat(gc_log_path, &st)) {
-		if (errno == ENOENT)
-			goto done;
-
-		ret = error_errno(_("Can't stat %s"), gc_log_path);
-		goto done;
-	}
-
-	if (st.st_mtime < gc_log_expire_time)
-		goto done;
-
-	ret = strbuf_read_file(&sb, gc_log_path, 0);
+	ret = strbuf_read_file(&sb, git_path("gc.log"), 0);
 	if (ret > 0)
-		ret = error(_("The last gc run reported the following. "
+		return error(_("The last gc run reported the following. "
 			       "Please correct the root cause\n"
 			       "and remove %s.\n"
 			       "Automatic cleanup will not be performed "
 			       "until the file is removed.\n\n"
 			       "%s"),
-			    gc_log_path, sb.buf);
+			     git_path("gc.log"), sb.buf);
 	strbuf_release(&sb);
-done:
-	free(gc_log_path);
-	return ret;
+	return 0;
 }
 
 static int gc_before_repack(void)
@@ -386,10 +349,7 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	argv_array_pushl(&prune_worktrees, "worktree", "prune", "--expire", NULL);
 	argv_array_pushl(&rerere, "rerere", "gc", NULL);
 
-	/* default expiry time, overwritten in gc_config */
 	gc_config();
-	if (parse_expiry_date(gc_log_expire, &gc_log_expire_time))
-		die(_("Failed to parse gc.logexpiry value %s"), gc_log_expire);
 
 	if (pack_refs < 0)
 		pack_refs = !is_bare_repository();
@@ -487,9 +447,6 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 	if (auto_gc && too_many_loose_objects())
 		warning(_("There are too many unreachable loose objects; "
 			"run 'git prune' to remove them."));
-
-	if (!daemonized)
-		unlink(git_path("gc.log"));
 
 	return 0;
 }

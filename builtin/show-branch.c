@@ -275,7 +275,8 @@ static void show_one_commit(struct commit *commit, int no_name)
 		pp_commit_easy(CMIT_FMT_ONELINE, commit, &pretty);
 		pretty_str = pretty.buf;
 	}
-	skip_prefix(pretty_str, "[PATCH] ", &pretty_str);
+	if (starts_with(pretty_str, "[PATCH] "))
+		pretty_str += 8;
 
 	if (!no_name) {
 		if (name && name->head_name) {
@@ -469,14 +470,18 @@ static void snarf_refs(int head, int remotes)
 	}
 }
 
-static int rev_is_head(const char *head, const char *name,
+static int rev_is_head(char *head, int headlen, char *name,
 		       unsigned char *head_sha1, unsigned char *sha1)
 {
-	if (!head || (head_sha1 && sha1 && hashcmp(head_sha1, sha1)))
+	if ((!head[0]) ||
+	    (head_sha1 && sha1 && hashcmp(head_sha1, sha1)))
 		return 0;
-	skip_prefix(head, "refs/heads/", &head);
-	if (!skip_prefix(name, "refs/heads/", &name))
-		skip_prefix(name, "heads/", &name);
+	if (starts_with(head, "refs/heads/"))
+		head += 11;
+	if (starts_with(name, "refs/heads/"))
+		name += 11;
+	else if (starts_with(name, "heads/"))
+		name += 6;
 	return !strcmp(head, name);
 }
 
@@ -615,7 +620,9 @@ int cmd_show_branch(int ac, const char **av, const char *prefix)
 	int all_heads = 0, all_remotes = 0;
 	int all_mask, all_revs;
 	enum rev_sort_order sort_order = REV_SORT_IN_GRAPH_ORDER;
-	char *head;
+	char head[128];
+	const char *head_p;
+	int head_len;
 	struct object_id head_oid;
 	int merge_base = 0;
 	int independent = 0;
@@ -780,24 +787,32 @@ int cmd_show_branch(int ac, const char **av, const char *prefix)
 			snarf_refs(all_heads, all_remotes);
 	}
 
-	head = resolve_refdup("HEAD", RESOLVE_REF_READING,
-			      head_oid.hash, NULL);
+	head_p = resolve_ref_unsafe("HEAD", RESOLVE_REF_READING,
+				    head_oid.hash, NULL);
+	if (head_p) {
+		head_len = strlen(head_p);
+		memcpy(head, head_p, head_len + 1);
+	}
+	else {
+		head_len = 0;
+		head[0] = 0;
+	}
 
-	if (with_current_branch && head) {
+	if (with_current_branch && head_p) {
 		int has_head = 0;
 		for (i = 0; !has_head && i < ref_name_cnt; i++) {
 			/* We are only interested in adding the branch
 			 * HEAD points at.
 			 */
 			if (rev_is_head(head,
+					head_len,
 					ref_name[i],
 					head_oid.hash, NULL))
 				has_head++;
 		}
 		if (!has_head) {
-			const char *name = head;
-			skip_prefix(name, "refs/heads/", &name);
-			append_one_rev(name);
+			int offset = starts_with(head, "refs/heads/") ? 11 : 0;
+			append_one_rev(head + offset);
 		}
 	}
 
@@ -851,6 +866,7 @@ int cmd_show_branch(int ac, const char **av, const char *prefix)
 		for (i = 0; i < num_rev; i++) {
 			int j;
 			int is_head = rev_is_head(head,
+						  head_len,
 						  ref_name[i],
 						  head_oid.hash,
 						  rev[i]->object.oid.hash);

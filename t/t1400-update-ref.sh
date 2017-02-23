@@ -85,24 +85,6 @@ test_expect_success "delete $m (by HEAD)" '
 '
 rm -f .git/$m
 
-test_expect_success "deleting current branch adds message to HEAD's log" '
-	git update-ref $m $A &&
-	git symbolic-ref HEAD $m &&
-	git update-ref -m delete-$m -d $m &&
-	! test -f .git/$m &&
-	grep "delete-$m$" .git/logs/HEAD
-'
-rm -f .git/$m
-
-test_expect_success "deleting by HEAD adds message to HEAD's log" '
-	git update-ref $m $A &&
-	git symbolic-ref HEAD $m &&
-	git update-ref -m delete-by-head -d HEAD &&
-	! test -f .git/$m &&
-	grep "delete-by-head$" .git/logs/HEAD
-'
-rm -f .git/$m
-
 test_expect_success 'update-ref does not create reflogs by default' '
 	test_when_finished "git update-ref -d $outside" &&
 	git update-ref $outside $A &&
@@ -273,33 +255,6 @@ test_expect_success \
 	'GIT_COMMITTER_DATE="2005-05-26 23:41" \
 	 git update-ref HEAD'" $A &&
 	 test $A"' = $(cat .git/'"$m"')'
-
-test_expect_success "empty directory removal" '
-	git branch d1/d2/r1 HEAD &&
-	git branch d1/r2 HEAD &&
-	test -f .git/refs/heads/d1/d2/r1 &&
-	test -f .git/logs/refs/heads/d1/d2/r1 &&
-	git branch -d d1/d2/r1 &&
-	! test -e .git/refs/heads/d1/d2 &&
-	! test -e .git/logs/refs/heads/d1/d2 &&
-	test -f .git/refs/heads/d1/r2 &&
-	test -f .git/logs/refs/heads/d1/r2
-'
-
-test_expect_success "symref empty directory removal" '
-	git branch e1/e2/r1 HEAD &&
-	git branch e1/r2 HEAD &&
-	git checkout e1/e2/r1 &&
-	test_when_finished "git checkout master" &&
-	test -f .git/refs/heads/e1/e2/r1 &&
-	test -f .git/logs/refs/heads/e1/e2/r1 &&
-	git update-ref -d HEAD &&
-	! test -e .git/refs/heads/e1/e2 &&
-	! test -e .git/logs/refs/heads/e1/e2 &&
-	test -f .git/refs/heads/e1/r2 &&
-	test -f .git/logs/refs/heads/e1/r2 &&
-	test -f .git/logs/HEAD
-'
 
 cat >expect <<EOF
 $Z $A $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL> 1117150200 +0000	Initial Creation

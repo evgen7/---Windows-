@@ -71,7 +71,6 @@ extern void die_if_checked_out(const char *branch, int ignore_current_worktree);
  * This will be used when renaming a branch. Returns 0 if successful, non-zero
  * otherwise.
  */
-extern int replace_each_worktree_head_symref(const char *oldref, const char *newref,
-					     const char *logmsg);
+extern int replace_each_worktree_head_symref(const char *oldref, const char *newref);
 
 #endif

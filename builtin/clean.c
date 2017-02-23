@@ -174,10 +174,8 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		/* an empty dir could be removed even if it is unreadble */
 		res = dry_run ? 0 : rmdir(path->buf);
 		if (res) {
-			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			errno = saved_errno;
-			warning_errno(_(msg_warn_remove_failed), quoted.buf);
+			warning(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 		}
 		return res;
@@ -210,10 +208,8 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 				quote_path_relative(path->buf, prefix, &quoted);
 				string_list_append(&dels, quoted.buf);
 			} else {
-				int saved_errno = errno;
 				quote_path_relative(path->buf, prefix, &quoted);
-				errno = saved_errno;
-				warning_errno(_(msg_warn_remove_failed), quoted.buf);
+				warning(_(msg_warn_remove_failed), quoted.buf);
 				*dir_gone = 0;
 				ret = 1;
 			}
@@ -234,10 +230,8 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		if (!res)
 			*dir_gone = 1;
 		else {
-			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			errno = saved_errno;
-			warning_errno(_(msg_warn_remove_failed), quoted.buf);
+			warning(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 			ret = 1;
 		}
@@ -987,10 +981,8 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		} else {
 			res = dry_run ? 0 : unlink(abs_path.buf);
 			if (res) {
-				int saved_errno = errno;
 				qname = quote_path_relative(item->string, NULL, &buf);
-				errno = saved_errno;
-				warning_errno(_(msg_warn_remove_failed), qname);
+				warning(_(msg_warn_remove_failed), qname);
 				errors++;
 			} else if (!quiet) {
 				qname = quote_path_relative(item->string, NULL, &buf);

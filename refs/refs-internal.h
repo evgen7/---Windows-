@@ -56,24 +56,17 @@
 #define REF_UPDATE_VIA_HEAD 0x100
 
 /*
- * Used as a flag in ref_update::flags when the loose reference has
- * been deleted.
- */
-#define REF_DELETED_LOOSE 0x200
-
-/*
  * Return true iff refname is minimally safe. "Safe" here means that
  * deleting a loose reference by this name will not do any damage, for
  * example by causing a file that is not a reference to be deleted.
  * This function does not check that the reference name is legal; for
  * that, use check_refname_format().
  *
- * A refname that starts with "refs/" is considered safe iff it
- * doesn't contain any "." or ".." components or consecutive '/'
- * characters, end with '/', or (on Windows) contain any '\'
- * characters. Names that do not start with "refs/" are considered
- * safe iff they consist entirely of upper case characters and '_'
- * (like "HEAD" and "MERGE_HEAD" but not "config" or "FOO/BAR").
+ * We consider a refname that starts with "refs/" to be safe as long
+ * as any ".." components that it might contain do not escape "refs/".
+ * Names that do not start with "refs/" are considered safe iff they
+ * consist entirely of upper case characters and '_' (like "HEAD" and
+ * "MERGE_HEAD" but not "config" or "FOO/BAR").
  */
 int refname_is_safe(const char *refname);
 
@@ -162,9 +155,8 @@ struct ref_update {
 
 	/*
 	 * One or more of REF_HAVE_NEW, REF_HAVE_OLD, REF_NODEREF,
-	 * REF_DELETING, REF_ISPRUNING, REF_LOG_ONLY,
-	 * REF_UPDATE_VIA_HEAD, REF_NEEDS_COMMIT, and
-	 * REF_DELETED_LOOSE:
+	 * REF_DELETING, REF_ISPRUNING, REF_LOG_ONLY, and
+	 * REF_UPDATE_VIA_HEAD:
 	 */
 	unsigned int flags;
 
@@ -635,14 +627,47 @@ extern struct ref_storage_be refs_be_files;
 struct ref_store {
 	/* The backend describing this ref_store's storage scheme: */
 	const struct ref_storage_be *be;
+
+	/*
+	 * The name of the submodule represented by this object, or
+	 * the empty string if it represents the main repository's
+	 * reference store:
+	 */
+	const char *submodule;
+
+	/*
+	 * Submodule reference store instances are stored in a linked
+	 * list using this pointer.
+	 */
+	struct ref_store *next;
 };
 
 /*
- * Fill in the generic part of refs and add it to our collection of
- * reference stores.
+ * Fill in the generic part of refs for the specified submodule and
+ * add it to our collection of reference stores.
  */
 void base_ref_store_init(struct ref_store *refs,
-			 const struct ref_storage_be *be);
+			 const struct ref_storage_be *be,
+			 const char *submodule);
+
+/*
+ * Create, record, and return a ref_store instance for the specified
+ * submodule (or the main repository if submodule is NULL).
+ *
+ * For backwards compatibility, submodule=="" is treated the same as
+ * submodule==NULL.
+ */
+struct ref_store *ref_store_init(const char *submodule);
+
+/*
+ * Return the ref_store instance for the specified submodule (or the
+ * main repository if submodule is NULL). If that ref_store hasn't
+ * been initialized yet, return NULL.
+ *
+ * For backwards compatibility, submodule=="" is treated the same as
+ * submodule==NULL.
+ */
+struct ref_store *lookup_ref_store(const char *submodule);
 
 /*
  * Return the ref_store instance for the specified submodule. For the
@@ -656,9 +681,10 @@ void base_ref_store_init(struct ref_store *refs,
  */
 struct ref_store *get_ref_store(const char *submodule);
 
-const char *resolve_ref_recursively(struct ref_store *refs,
-				    const char *refname,
-				    int resolve_flags,
-				    unsigned char *sha1, int *flags);
+/*
+ * Die if refs is for a submodule (i.e., not for the main repository).
+ * caller is used in any necessary error messages.
+ */
+void assert_main_repository(struct ref_store *refs, const char *caller);
 
 #endif /* REFS_REFS_INTERNAL_H */
