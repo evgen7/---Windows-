@@ -174,8 +174,10 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		/* an empty dir could be removed even if it is unreadble */
 		res = dry_run ? 0 : rmdir(path->buf);
 		if (res) {
+			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			warning(_(msg_warn_remove_failed), quoted.buf);
+			errno = saved_errno;
+			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 		}
 		return res;
@@ -208,8 +210,10 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 				quote_path_relative(path->buf, prefix, &quoted);
 				string_list_append(&dels, quoted.buf);
 			} else {
+				int saved_errno = errno;
 				quote_path_relative(path->buf, prefix, &quoted);
-				warning(_(msg_warn_remove_failed), quoted.buf);
+				errno = saved_errno;
+				warning_errno(_(msg_warn_remove_failed), quoted.buf);
 				*dir_gone = 0;
 				ret = 1;
 			}
@@ -230,8 +234,10 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		if (!res)
 			*dir_gone = 1;
 		else {
+			int saved_errno = errno;
 			quote_path_relative(path->buf, prefix, &quoted);
-			warning(_(msg_warn_remove_failed), quoted.buf);
+			errno = saved_errno;
+			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
 			ret = 1;
 		}
@@ -570,6 +576,7 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 			       clean_get_color(CLEAN_COLOR_RESET));
 		}
 
+		fflush(stdout);
 		if (strbuf_getline_lf(&choice, stdin) != EOF) {
 			strbuf_trim(&choice);
 		} else {
@@ -652,6 +659,7 @@ static int filter_by_patterns_cmd(void)
 		clean_print_color(CLEAN_COLOR_PROMPT);
 		printf(_("Input ignore patterns>> "));
 		clean_print_color(CLEAN_COLOR_RESET);
+		fflush(stdout);
 		if (strbuf_getline_lf(&confirm, stdin) != EOF)
 			strbuf_trim(&confirm);
 		else
@@ -750,6 +758,7 @@ static int ask_each_cmd(void)
 			qname = quote_path_relative(item->string, NULL, &buf);
 			/* TRANSLATORS: Make sure to keep [y/N] as is */
 			printf(_("Remove %s [y/N]? "), qname);
+			fflush(stdout);
 			if (strbuf_getline_lf(&confirm, stdin) != EOF) {
 				strbuf_trim(&confirm);
 			} else {
@@ -981,8 +990,10 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		} else {
 			res = dry_run ? 0 : unlink(abs_path.buf);
 			if (res) {
+				int saved_errno = errno;
 				qname = quote_path_relative(item->string, NULL, &buf);
-				warning(_(msg_warn_remove_failed), qname);
+				errno = saved_errno;
+				warning_errno(_(msg_warn_remove_failed), qname);
 				errors++;
 			} else if (!quiet) {
 				qname = quote_path_relative(item->string, NULL, &buf);

@@ -334,6 +334,10 @@ core.trustctime::
 	crawlers and some backup systems).
 	See linkgit:git-update-index[1]. True by default.
 
+core.splitIndex::
+	If true, the split-index feature of the index will be used.
+	See linkgit:git-update-index[1]. False by default.
+
 core.untrackedCache::
 	Determines what to do about the untracked cache feature of the
 	index. It will be kept, if this variable is unset or set to
@@ -350,16 +354,18 @@ core.checkStat::
 	all fields, including the sub-second part of mtime and ctime.
 
 core.quotePath::
-	The commands that output paths (e.g. 'ls-files',
-	'diff'), when not given the `-z` option, will quote
-	"unusual" characters in the pathname by enclosing the
-	pathname in a double-quote pair and with backslashes the
-	same way strings in C source code are quoted.  If this
-	variable is set to false, the bytes higher than 0x80 are
-	not quoted but output as verbatim.  Note that double
-	quote, backslash and control characters are always
-	quoted without `-z` regardless of the setting of this
-	variable.
+	Commands that output paths (e.g. 'ls-files', 'diff'), will
+	quote "unusual" characters in the pathname by enclosing the
+	pathname in double-quotes and escaping those characters with
+	backslashes in the same way C escapes control characters (e.g.
+	`\t` for TAB, `\n` for LF, `\\` for backslash) or bytes with
+	values larger than 0x80 (e.g. octal `\265` for "micro").  If
+	this variable is set to false, bytes higher than 0x80 are not
+	considered "unusual" any more.  Double-quotes, backslash and
+	control characters are always escaped regardless of the
+	setting of this variable.  Many commands can output pathnames
+	completely verbatim using the `-z` option. The default value is
+	true.
 
 core.eol::
 	Sets the line ending type to use in the working directory for
@@ -764,6 +770,25 @@ on filesystems like NFS that have weak caching semantics and thus
 relatively high IO latencies.  When enabled, Git will do the
 index comparison to the filesystem data in parallel, allowing
 overlapping IO's.  Defaults to true.
+
+core.fscache::
+	Enable additional caching of file system data for some operations.
++
+Git for Windows uses this to bulk-read and cache lstat data of entire
+directories (instead of doing lstat file by file).
+
+core.longpaths::
+	Enable long path (> 260) support for builtin commands in Git for
+	Windows. This is disabled by default, as long paths are not supported
+	by Windows Explorer, cmd.exe and the Git for Windows tool chain
+	(msys, bash, tcl, perl...). Only enable this if you know what you're
+	doing and are prepared to live with a few quirks.
+
+core.unsetenvvars::
+	EXPERIMENTAL, Windows-only: comma-separated list of environment
+	variables' names that need to be unset before spawning any other
+	process. Defaults to `PERL5LIB` to account for the fact that Git
+	for Windows insists on using its own Perl interpreter.
 
 core.createObject::
 	You can set this to 'link', in which case a hardlink followed by
@@ -1402,6 +1427,12 @@ gc.autoDetach::
 	Make `git gc --auto` return immediately and run in background
 	if the system supports it. Default is true.
 
+gc.logExpiry::
+	If the file gc.log exists, then `git gc --auto` won't run
+	unless that file is more than 'gc.logExpiry' old.  Default is
+	"1.day".  See `gc.pruneExpire` for more ways to specify its
+	value.
+
 gc.packRefs::
 	Running `git pack-refs` in a repository renders it
 	unclonable by Git versions prior to 1.5.1.2 over dumb
@@ -1919,7 +1950,10 @@ http.<url>.*::
   must match exactly between the config key and the URL.
 
 . Host/domain name (e.g., `example.com` in `https://example.com/`).
-  This field must match exactly between the config key and the URL.
+  This field must match between the config key and the URL. It is
+  possible to specify a `*` as part of the host name to match all subdomains
+  at this level. `https://*.example.com/` for example would match
+  `https://foo.example.com/`, but not `https://foo.bar.example.com/`.
 
 . Port number (e.g., `8080` in `http://example.com:8080/`).
   This field must match exactly between the config key and the URL.
@@ -1953,6 +1987,17 @@ equivalent URLs that are simply spelled differently will match properly.
 Environment variable settings always override any matches.  The URLs that are
 matched against are those given directly to Git commands.  This means any URLs
 visited as a result of a redirection do not participate in matching.
+
+ssh.variant::
+	Depending on the value of the environment variables `GIT_SSH` or
+	`GIT_SSH_COMMAND`, or the config setting `core.sshCommand`, Git
+	auto-detects whether to adjust its command-line parameters for use
+	with plink or tortoiseplink, as opposed to the default (OpenSSH).
++
+The config variable `ssh.variant` can be set to override this auto-detection;
+valid values are `ssh`, `plink`, `putty` or `tortoiseplink`. Any other value
+will be treated as normal ssh. This setting can be overridden via the
+environment variable `GIT_SSH_VARIANT`.
 
 i18n.commitEncoding::
 	Character encoding the commit messages are stored in; Git itself
@@ -2826,6 +2871,30 @@ sendemail.signedoffcc (deprecated)::
 showbranch.default::
 	The default set of branches for linkgit:git-show-branch[1].
 	See linkgit:git-show-branch[1].
+
+splitIndex.maxPercentChange::
+	When the split index feature is used, this specifies the
+	percent of entries the split index can contain compared to the
+	whole number of entries in both the split index and the shared
+	index before a new shared index is written.
+	The value should be between 0 and 100. If the value is 0 then
+	a new shared index is always written, if it is 100 a new
+	shared index is never written.
+	By default the value is 20, so a new shared index is written
+	if the number of entries in the split index would be greater
+	than 20 percent of the total number of entries.
+	See linkgit:git-update-index[1].
+
+splitIndex.sharedIndexExpire::
+	When the split index feature is used, shared index files with
+	a mtime older than this time will be removed when a new shared
+	index file is created. The value "now" expires all entries
+	immediately, and "never" suppresses expiration altogether.
+	The default value is "one.week.ago".
+	Note that each time a split index based on a shared index file
+	is either created or read from, the mtime of the shared index
+	file is updated to the current time.
+	See linkgit:git-update-index[1].
 
 status.relativePaths::
 	By default, linkgit:git-status[1] shows paths relative to the

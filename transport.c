@@ -81,7 +81,8 @@ static struct ref *get_refs_from_bundle(struct transport *transport, int for_pus
 
 	if (data->fd > 0)
 		close(data->fd);
-	data->fd = read_bundle_header(transport->url, &data->header);
+	init_bundle_header(&data->header, transport->url);
+	data->fd = read_bundle_header(&data->header);
 	if (data->fd < 0)
 		die ("Could not read bundle '%s'.", transport->url);
 	for (i = 0; i < data->header.references.nr; i++) {
@@ -107,6 +108,7 @@ static int close_bundle(struct transport *transport)
 	struct bundle_transport_data *data = transport->data;
 	if (data->fd > 0)
 		close(data->fd);
+	release_bundle_header(&data->header);
 	free(data);
 	return 0;
 }
@@ -204,6 +206,7 @@ static struct ref *get_refs_via_connect(struct transport *transport, int for_pus
 static int fetch_refs_via_pack(struct transport *transport,
 			       int nr_heads, struct ref **to_fetch)
 {
+	int ret = 0;
 	struct git_transport_data *data = transport->data;
 	struct ref *refs;
 	char *dest = xstrdup(transport->url);
@@ -241,19 +244,22 @@ static int fetch_refs_via_pack(struct transport *transport,
 			  &transport->pack_lockfile);
 	close(data->fd[0]);
 	close(data->fd[1]);
-	if (finish_connect(data->conn)) {
-		free_refs(refs);
-		refs = NULL;
-	}
+	if (finish_connect(data->conn))
+		ret = -1;
 	data->conn = NULL;
 	data->got_remote_heads = 0;
 	data->options.self_contained_and_connected =
 		args.self_contained_and_connected;
 
+	if (refs == NULL)
+		ret = -1;
+	if (report_unmatched_refs(to_fetch, nr_heads))
+		ret = -1;
+
 	free_refs(refs_tmp);
 	free_refs(refs);
 	free(dest);
-	return (refs ? 0 : -1);
+	return ret;
 }
 
 static int push_had_errors(struct ref *ref)
@@ -299,7 +305,7 @@ void transport_update_tracking_ref(struct remote *remote, struct ref *ref, int v
 		if (verbose)
 			fprintf(stderr, "updating local tracking ref '%s'\n", rs.dst);
 		if (ref->deletion) {
-			delete_ref(rs.dst, NULL, 0);
+			delete_ref(NULL, rs.dst, NULL, 0);
 		} else
 			update_ref("update by push", rs.dst,
 					ref->new_oid.hash, NULL, 0, 0);
@@ -467,11 +473,11 @@ void transport_print_push_status(const char *dest, struct ref *refs,
 {
 	struct ref *ref;
 	int n = 0;
-	unsigned char head_sha1[20];
+	struct object_id head_oid;
 	char *head;
 	int summary_width = transport_summary_width(refs);
 
-	head = resolve_refdup("HEAD", RESOLVE_REF_READING, head_sha1, NULL);
+	head = resolve_refdup("HEAD", RESOLVE_REF_READING, head_oid.hash, NULL);
 
 	if (verbose) {
 		for (ref = refs; ref; ref = ref->next)
@@ -1206,6 +1212,42 @@ literal_copy:
 	return xstrdup(url);
 }
 
+static void read_alternate_refs(const char *path,
+				alternate_ref_fn *cb,
+				void *data)
+{
+	struct child_process cmd = CHILD_PROCESS_INIT;
+	struct strbuf line = STRBUF_INIT;
+	FILE *fh;
+
+	cmd.git_cmd = 1;
+	argv_array_pushf(&cmd.args, "--git-dir=%s", path);
+	argv_array_push(&cmd.args, "for-each-ref");
+	argv_array_push(&cmd.args, "--format=%(objectname) %(refname)");
+	cmd.env = local_repo_env;
+	cmd.out = -1;
+
+	if (start_command(&cmd))
+		return;
+
+	fh = xfdopen(cmd.out, "r");
+	while (strbuf_getline_lf(&line, fh) != EOF) {
+		struct object_id oid;
+
+		if (get_oid_hex(line.buf, &oid) ||
+		    line.buf[GIT_SHA1_HEXSZ] != ' ') {
+			warning("invalid line while parsing alternate refs: %s",
+				line.buf);
+			break;
+		}
+
+		cb(line.buf + GIT_SHA1_HEXSZ + 1, &oid, data);
+	}
+
+	fclose(fh);
+	finish_command(&cmd);
+}
+
 struct alternate_refs_data {
 	alternate_ref_fn *fn;
 	void *data;
@@ -1214,34 +1256,26 @@ struct alternate_refs_data {
 static int refs_from_alternate_cb(struct alternate_object_database *e,
 				  void *data)
 {
-	char *other;
-	size_t len;
-	struct remote *remote;
-	struct transport *transport;
-	const struct ref *extra;
+	struct strbuf path = STRBUF_INIT;
+	size_t base_len;
 	struct alternate_refs_data *cb = data;
 
-	other = real_pathdup(e->path);
-	len = strlen(other);
+	if (!strbuf_realpath(&path, e->path, 0))
+		goto out;
+	if (!strbuf_strip_suffix(&path, "/objects"))
+		goto out;
+	base_len = path.len;
 
-	while (other[len-1] == '/')
-		other[--len] = '\0';
-	if (len < 8 || memcmp(other + len - 8, "/objects", 8))
-		goto out;
 	/* Is this a git repository with refs? */
-	memcpy(other + len - 8, "/refs", 6);
-	if (!is_directory(other))
+	strbuf_addstr(&path, "/refs");
+	if (!is_directory(path.buf))
 		goto out;
-	other[len - 8] = '\0';
-	remote = remote_get(other);
-	transport = transport_get(remote, other);
-	for (extra = transport_get_remote_refs(transport);
-	     extra;
-	     extra = extra->next)
-		cb->fn(extra, cb->data);
-	transport_disconnect(transport);
+	strbuf_setlen(&path, base_len);
+
+	read_alternate_refs(path.buf, cb->fn, cb->data);
+
 out:
-	free(other);
+	strbuf_release(&path);
 	return 0;
 }
 

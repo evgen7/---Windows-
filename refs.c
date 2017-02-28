@@ -3,6 +3,7 @@
  */
 
 #include "cache.h"
+#include "hashmap.h"
 #include "lockfile.h"
 #include "refs.h"
 #include "refs/refs-internal.h"
@@ -591,8 +592,8 @@ static int delete_pseudoref(const char *pseudoref, const unsigned char *old_sha1
 	return 0;
 }
 
-int delete_ref(const char *refname, const unsigned char *old_sha1,
-	       unsigned int flags)
+int delete_ref(const char *msg, const char *refname,
+	       const unsigned char *old_sha1, unsigned int flags)
 {
 	struct ref_transaction *transaction;
 	struct strbuf err = STRBUF_INIT;
@@ -603,7 +604,7 @@ int delete_ref(const char *refname, const unsigned char *old_sha1,
 	transaction = ref_transaction_begin(&err);
 	if (!transaction ||
 	    ref_transaction_delete(transaction, refname, old_sha1,
-				   flags, NULL, &err) ||
+				   flags, msg, &err) ||
 	    ref_transaction_commit(transaction, &err)) {
 		error("%s", err.buf);
 		ref_transaction_free(transaction);
@@ -674,7 +675,7 @@ struct read_ref_at_cb {
 	int *cutoff_cnt;
 };
 
-static int read_ref_at_ent(unsigned char *osha1, unsigned char *nsha1,
+static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
 		const char *email, unsigned long timestamp, int tz,
 		const char *message, void *cb_data)
 {
@@ -698,30 +699,30 @@ static int read_ref_at_ent(unsigned char *osha1, unsigned char *nsha1,
 		 * hold the values for the previous record.
 		 */
 		if (!is_null_sha1(cb->osha1)) {
-			hashcpy(cb->sha1, nsha1);
-			if (hashcmp(cb->osha1, nsha1))
+			hashcpy(cb->sha1, noid->hash);
+			if (hashcmp(cb->osha1, noid->hash))
 				warning("Log for ref %s has gap after %s.",
 					cb->refname, show_date(cb->date, cb->tz, DATE_MODE(RFC2822)));
 		}
 		else if (cb->date == cb->at_time)
-			hashcpy(cb->sha1, nsha1);
-		else if (hashcmp(nsha1, cb->sha1))
+			hashcpy(cb->sha1, noid->hash);
+		else if (hashcmp(noid->hash, cb->sha1))
 			warning("Log for ref %s unexpectedly ended on %s.",
 				cb->refname, show_date(cb->date, cb->tz,
 						       DATE_MODE(RFC2822)));
-		hashcpy(cb->osha1, osha1);
-		hashcpy(cb->nsha1, nsha1);
+		hashcpy(cb->osha1, ooid->hash);
+		hashcpy(cb->nsha1, noid->hash);
 		cb->found_it = 1;
 		return 1;
 	}
-	hashcpy(cb->osha1, osha1);
-	hashcpy(cb->nsha1, nsha1);
+	hashcpy(cb->osha1, ooid->hash);
+	hashcpy(cb->nsha1, noid->hash);
 	if (cb->cnt > 0)
 		cb->cnt--;
 	return 0;
 }
 
-static int read_ref_at_ent_oldest(unsigned char *osha1, unsigned char *nsha1,
+static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid,
 				  const char *email, unsigned long timestamp,
 				  int tz, const char *message, void *cb_data)
 {
@@ -735,9 +736,9 @@ static int read_ref_at_ent_oldest(unsigned char *osha1, unsigned char *nsha1,
 		*cb->cutoff_tz = tz;
 	if (cb->cutoff_cnt)
 		*cb->cutoff_cnt = cb->reccnt;
-	hashcpy(cb->sha1, osha1);
+	hashcpy(cb->sha1, ooid->hash);
 	if (is_null_sha1(cb->sha1))
-		hashcpy(cb->sha1, nsha1);
+		hashcpy(cb->sha1, noid->hash);
 	/* We just want the first entry */
 	return 1;
 }
@@ -1034,10 +1035,10 @@ static struct string_list *hide_refs;
 
 int parse_hide_refs_config(const char *var, const char *value, const char *section)
 {
+	const char *key;
 	if (!strcmp("transfer.hiderefs", var) ||
-	    /* NEEDSWORK: use parse_config_key() once both are merged */
-	    (starts_with(var, section) && var[strlen(section)] == '.' &&
-	     !strcmp(var + strlen(section), ".hiderefs"))) {
+	    (!parse_config_key(var, section, NULL, NULL, &key) &&
+	     !strcmp(key, "hiderefs"))) {
 		char *ref;
 		int len;
 
@@ -1234,10 +1235,10 @@ int for_each_rawref(each_ref_fn fn, void *cb_data)
 }
 
 /* This function needs to return a meaningful errno on failure */
-static const char *resolve_ref_recursively(struct ref_store *refs,
-					   const char *refname,
-					   int resolve_flags,
-					   unsigned char *sha1, int *flags)
+const char *resolve_ref_recursively(struct ref_store *refs,
+				    const char *refname,
+				    int resolve_flags,
+				    unsigned char *sha1, int *flags)
 {
 	static struct strbuf sb_refname = STRBUF_INIT;
 	int unused_flags;
@@ -1357,62 +1358,102 @@ int resolve_gitlink_ref(const char *submodule, const char *refname,
 	return 0;
 }
 
+struct submodule_hash_entry
+{
+	struct hashmap_entry ent; /* must be the first member! */
+
+	struct ref_store *refs;
+
+	/* NUL-terminated name of submodule: */
+	char submodule[FLEX_ARRAY];
+};
+
+static int submodule_hash_cmp(const void *entry, const void *entry_or_key,
+			      const void *keydata)
+{
+	const struct submodule_hash_entry *e1 = entry, *e2 = entry_or_key;
+	const char *submodule = keydata ? keydata : e2->submodule;
+
+	return strcmp(e1->submodule, submodule);
+}
+
+static struct submodule_hash_entry *alloc_submodule_hash_entry(
+		const char *submodule, struct ref_store *refs)
+{
+	struct submodule_hash_entry *entry;
+
+	FLEX_ALLOC_STR(entry, submodule, submodule);
+	hashmap_entry_init(entry, strhash(submodule));
+	entry->refs = refs;
+	return entry;
+}
+
 /* A pointer to the ref_store for the main repository: */
 static struct ref_store *main_ref_store;
 
-/* A linked list of ref_stores for submodules: */
-static struct ref_store *submodule_ref_stores;
+/* A hashmap of ref_stores, stored by submodule name: */
+static struct hashmap submodule_ref_stores;
 
-void base_ref_store_init(struct ref_store *refs,
-			 const struct ref_storage_be *be,
-			 const char *submodule)
+/*
+ * Return the ref_store instance for the specified submodule (or the
+ * main repository if submodule is NULL). If that ref_store hasn't
+ * been initialized yet, return NULL.
+ */
+static struct ref_store *lookup_ref_store(const char *submodule)
 {
-	refs->be = be;
+	struct submodule_hash_entry *entry;
+
+	if (!submodule)
+		return main_ref_store;
+
+	if (!submodule_ref_stores.tablesize)
+		/* It's initialized on demand in register_ref_store(). */
+		return NULL;
+
+	entry = hashmap_get_from_hash(&submodule_ref_stores,
+				      strhash(submodule), submodule);
+	return entry ? entry->refs : NULL;
+}
+
+/*
+ * Register the specified ref_store to be the one that should be used
+ * for submodule (or the main repository if submodule is NULL). It is
+ * a fatal error to call this function twice for the same submodule.
+ */
+static void register_ref_store(struct ref_store *refs, const char *submodule)
+{
 	if (!submodule) {
 		if (main_ref_store)
 			die("BUG: main_ref_store initialized twice");
 
-		refs->submodule = "";
-		refs->next = NULL;
 		main_ref_store = refs;
 	} else {
-		if (lookup_ref_store(submodule))
+		if (!submodule_ref_stores.tablesize)
+			hashmap_init(&submodule_ref_stores, submodule_hash_cmp, 0);
+
+		if (hashmap_put(&submodule_ref_stores,
+				alloc_submodule_hash_entry(submodule, refs)))
 			die("BUG: ref_store for submodule '%s' initialized twice",
 			    submodule);
-
-		refs->submodule = xstrdup(submodule);
-		refs->next = submodule_ref_stores;
-		submodule_ref_stores = refs;
 	}
 }
 
-struct ref_store *ref_store_init(const char *submodule)
+/*
+ * Create, record, and return a ref_store instance for the specified
+ * submodule (or the main repository if submodule is NULL).
+ */
+static struct ref_store *ref_store_init(const char *submodule)
 {
 	const char *be_name = "files";
 	struct ref_storage_be *be = find_ref_storage_backend(be_name);
+	struct ref_store *refs;
 
 	if (!be)
 		die("BUG: reference backend %s is unknown", be_name);
 
-	if (!submodule || !*submodule)
-		return be->init(NULL);
-	else
-		return be->init(submodule);
-}
-
-struct ref_store *lookup_ref_store(const char *submodule)
-{
-	struct ref_store *refs;
-
-	if (!submodule || !*submodule)
-		return main_ref_store;
-
-	for (refs = submodule_ref_stores; refs; refs = refs->next) {
-		if (!strcmp(submodule, refs->submodule))
-			return refs;
-	}
-
-	return NULL;
+	refs = be->init(submodule);
+	register_ref_store(refs, submodule);
+	return refs;
 }
 
 struct ref_store *get_ref_store(const char *submodule)
@@ -1440,10 +1481,10 @@ struct ref_store *get_ref_store(const char *submodule)
 	return refs;
 }
 
-void assert_main_repository(struct ref_store *refs, const char *caller)
+void base_ref_store_init(struct ref_store *refs,
+			 const struct ref_storage_be *be)
 {
-	if (*refs->submodule)
-		die("BUG: %s called for a submodule", caller);
+	refs->be = be;
 }
 
 /* backend functions */
