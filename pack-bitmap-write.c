@@ -258,8 +258,7 @@ void bitmap_writer_build(struct packing_data *to_pack)
 
 	init_revisions(&revs, NULL);
 	revs.tag_objects = 1;
-	revs.tree_objects = 1;
-	revs.blob_objects = 1;
+	revs.tree_and_blob_objects = 1;
 	revs.no_walk = 0;
 
 	revs.include_check = should_include;

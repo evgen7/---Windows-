@@ -147,7 +147,7 @@ static void add_pending_object_with_path(struct rev_info *revs,
 		revs->no_walk = 0;
 	if (revs->reflog_info && obj->type == OBJ_COMMIT) {
 		struct strbuf buf = STRBUF_INIT;
-		int len = interpret_branch_name(name, 0, &buf);
+		int len = interpret_branch_name(name, 0, &buf, 0);
 		int st;
 
 		if (0 < len && name[len] && buf.len)
@@ -254,6 +254,8 @@ static struct commit *handle_commit(struct rev_info *revs,
 			die("unable to parse commit %s", name);
 		if (flags & UNINTERESTING) {
 			mark_parents_uninteresting(commit);
+			if (revs->tree_and_blob_objects)
+				mark_tree_uninteresting(commit->tree);
 			revs->limited = 1;
 		}
 		if (revs->show_source && !commit->util)
@@ -267,7 +269,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 	 */
 	if (object->type == OBJ_TREE) {
 		struct tree *tree = (struct tree *)object;
-		if (!revs->tree_objects)
+		if (!revs->tree_and_blob_objects)
 			return NULL;
 		if (flags & UNINTERESTING) {
 			mark_tree_contents_uninteresting(tree);
@@ -281,7 +283,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 	 * Blob object? You know the drill by now..
 	 */
 	if (object->type == OBJ_BLOB) {
-		if (!revs->blob_objects)
+		if (!revs->tree_and_blob_objects)
 			return NULL;
 		if (flags & UNINTERESTING)
 			return NULL;
@@ -1817,23 +1819,19 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->limited = 1;
 	} else if (!strcmp(arg, "--objects")) {
 		revs->tag_objects = 1;
-		revs->tree_objects = 1;
-		revs->blob_objects = 1;
+		revs->tree_and_blob_objects = 1;
 	} else if (!strcmp(arg, "--objects-edge")) {
 		revs->tag_objects = 1;
-		revs->tree_objects = 1;
-		revs->blob_objects = 1;
+		revs->tree_and_blob_objects = 1;
 		revs->edge_hint = 1;
 	} else if (!strcmp(arg, "--objects-edge-aggressive")) {
 		revs->tag_objects = 1;
-		revs->tree_objects = 1;
-		revs->blob_objects = 1;
+		revs->tree_and_blob_objects = 1;
 		revs->edge_hint = 1;
 		revs->edge_hint_aggressive = 1;
 	} else if (!strcmp(arg, "--verify-objects")) {
 		revs->tag_objects = 1;
-		revs->tree_objects = 1;
-		revs->blob_objects = 1;
+		revs->tree_and_blob_objects = 1;
 		revs->verify_objects = 1;
 	} else if (!strcmp(arg, "--unpacked")) {
 		revs->unpacked = 1;

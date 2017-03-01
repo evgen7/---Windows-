@@ -651,7 +651,7 @@ static void bisect_common(struct rev_info *revs)
 	 */
 	if (prepare_revision_walk(revs))
 		die("revision walk setup failed");
-	if (revs->tree_objects)
+	if (revs->tree_and_blob_objects)
 		mark_edges_uninteresting(revs, NULL);
 }
 

@@ -547,6 +547,36 @@ test_expect_success 'fetch-pack can fetch a raw sha1' '
 	git fetch-pack hidden $(git -C hidden rev-parse refs/hidden/one)
 '
 
+test_expect_success 'setup for tests that fetch blobs by hash' '
+	git init blobserver &&
+	test_commit -C blobserver 1 &&
+	test_commit -C blobserver 2 &&
+	test_commit -C blobserver 3 &&
+	blob1=$(echo 1 | git hash-object --stdin) &&
+	blob2=$(echo 2 | git hash-object --stdin) &&
+	blob3=$(echo 3 | git hash-object --stdin) &&
+
+	unreachable=$(echo 4 | git -C blobserver hash-object -w --stdin) &&
+	git -C blobserver cat-file -e "$unreachable"
+'
+
+test_expect_success 'fetch-pack can fetch reachable blobs by hash' '
+	test_config -C blobserver uploadpack.allowreachablesha1inwant 1 &&
+
+	git init reachabletest &&
+	git -C reachabletest fetch-pack ../blobserver "$blob1" "$blob2" &&
+	git -C reachabletest cat-file -e "$blob1" &&
+	git -C reachabletest cat-file -e "$blob2" &&
+	test_must_fail git -C reachabletest cat-file -e "$blob3"
+'
+
+test_expect_success 'fetch-pack cannot fetch unreachable blobs' '
+	test_config -C blobserver uploadpack.allowreachablesha1inwant 1 &&
+
+	git init unreachabletest &&
+	test_must_fail git -C unreachabletest fetch-pack ../blobserver "$blob1" "$unreachable"
+'
+
 check_prot_path () {
 	cat >expected <<-EOF &&
 	Diag: url=$1

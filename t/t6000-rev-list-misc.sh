@@ -114,4 +114,92 @@ test_expect_success '--header shows a NUL after each commit' '
 	test_cmp expect actual
 '
 
+test_expect_success 'setup tree-granularity and blob-granularity tests' '
+	echo 0 >file &&
+
+	mkdir subdir &&
+	echo 1 >subdir/file &&
+	git add file subdir/file &&
+	git commit -m one &&
+
+	echo 2 >subdir/file &&
+	git add subdir/file &&
+	git commit -m two &&
+
+	commit1=$(git rev-parse HEAD^1) &&
+	commit2=$(git rev-parse HEAD) &&
+	tree1=$(git rev-parse $commit1^{tree}) &&
+	tree2=$(git rev-parse $commit2^{tree}) &&
+	subtree1=$(git cat-file -p $tree1 | grep "subdir" | cut -c13-52) &&
+	subtree2=$(git cat-file -p $tree2 | grep "subdir" | cut -c13-52) &&
+	blob0=$(echo 0 | git hash-object --stdin) &&
+	blob1=$(echo 1 | git hash-object --stdin) &&
+	blob2=$(echo 2 | git hash-object --stdin)
+'
+
+test_expect_success 'include commit, exclude blob' '
+	git rev-list --objects $commit2 >out &&
+	grep "$blob1" out &&
+	grep "$blob2" out &&
+
+	git rev-list --objects $commit2 "^$blob2" >out &&
+	grep "$blob1" out &&
+	! grep "$blob2" out
+'
+
+test_expect_success 'include commit, exclude tree (also excludes nested trees/blobs)' '
+	git rev-list --objects $commit2 "^$tree2" >out &&
+	grep "$tree1" out &&
+	grep "$subtree1" out &&
+	grep "$blob1" out &&
+	! grep "$tree2" out &&
+	! grep "$subtree2" out &&
+	! grep "$blob2" out &&
+
+	git rev-list --objects $commit2 "^$subtree2" >out &&
+	grep "$tree1" out &&
+	grep "$subtree1" out &&
+	grep "$blob1" out &&
+	grep "$tree2" out &&
+	! grep "$subtree2" out &&
+	! grep "$blob2" out
+'
+
+test_expect_success 'include tree, exclude commit' '
+	git rev-list --objects "$tree1" "^$commit2" >out &&
+	! grep "$blob0" out &&  # common to both
+	grep "$blob1" out &&    # only in tree
+	! grep "$blob2" out     # only in commit
+'
+
+test_expect_success 'include tree, exclude tree' '
+	git rev-list --objects "$tree1" "^$tree2" >out &&
+	! grep "$blob0" out &&  # common to both
+	grep "$blob1" out &&    # only in tree1
+	! grep "$blob2" out     # only in tree2
+'
+
+test_expect_success 'include tree, exclude blob' '
+	git rev-list --objects "$tree1" "^$blob2" >out &&
+	grep "$blob0" out &&
+	grep "$blob1" out &&
+	! grep "$blob2" out
+'
+
+test_expect_success 'include blob, exclude commit' '
+	git rev-list --objects "$blob2" "^$commit1" >out &&
+	grep "$blob2" out &&
+
+	git rev-list --objects "$blob2" "^$commit2" >out &&
+	! grep "$blob2" out
+'
+
+test_expect_success 'include blob, exclude tree' '
+	git rev-list --objects "$blob2" "^$tree1" >out &&
+	grep "$blob2" out &&
+
+	git rev-list --objects "$blob2" "^$tree2" >out &&
+	! grep "$blob2" out
+'
+
 test_done

@@ -18,7 +18,7 @@ static void process_blob(struct rev_info *revs,
 	struct object *obj = &blob->object;
 	size_t pathlen;
 
-	if (!revs->blob_objects)
+	if (!revs->tree_and_blob_objects)
 		return;
 	if (!obj)
 		die("bad blob object");
@@ -78,7 +78,7 @@ static void process_tree(struct rev_info *revs,
 		all_entries_interesting: entry_not_interesting;
 	int baselen = base->len;
 
-	if (!revs->tree_objects)
+	if (!revs->tree_and_blob_objects)
 		return;
 	if (!obj)
 		die("bad tree object");

@@ -951,8 +951,7 @@ void test_bitmap_walk(struct rev_info *revs)
 		die("Commit %s doesn't have an indexed bitmap", oid_to_hex(&root->oid));
 
 	revs->tag_objects = 1;
-	revs->tree_objects = 1;
-	revs->blob_objects = 1;
+	revs->tree_and_blob_objects = 1;
 
 	result_popcnt = bitmap_popcount(result);
 

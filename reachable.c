@@ -166,8 +166,7 @@ void mark_reachable_objects(struct rev_info *revs, int mark_reflog,
 	 * in all object types, not just commits.
 	 */
 	revs->tag_objects = 1;
-	revs->blob_objects = 1;
-	revs->tree_objects = 1;
+	revs->tree_and_blob_objects = 1;
 
 	/* Add all refs from the index file */
 	add_index_objects_to_pending(revs, 0);
