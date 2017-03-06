@@ -393,8 +393,8 @@ precedence over assume-unchanged bit when both are set.
 Split index
 -----------
 
-This mode is designed for very large indexes that take a significant
-amount of time to read or write.
+This mode is designed for repositories with very large indexes, and
+aims at reducing the time it takes to repeatedly write these indexes.
 
 In this mode, the index is split into two files, $GIT_DIR/index and
 $GIT_DIR/sharedindex.<SHA-1>. Changes are accumulated in
@@ -407,13 +407,13 @@ specified by the splitIndex.maxPercentChange config variable (see
 linkgit:git-config[1]).
 
 Each time a new shared index file is created, the old shared index
-files are deleted if their mtime is older than what is specified by
-the splitIndex.sharedIndexExpire config variable (see
+files are deleted if their modification time is older than what is
+specified by the splitIndex.sharedIndexExpire config variable (see
 linkgit:git-config[1]).
 
-To avoid deleting a shared index file that is still used, its mtime is
-updated to the current time everytime a new split index based on the
-shared index file is either created or read from.
+To avoid deleting a shared index file that is still used, its
+modification time is updated to the current time everytime a new split
+index based on the shared index file is either created or read from.
 
 Untracked cache
 ---------------

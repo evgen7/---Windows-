@@ -94,6 +94,17 @@ test_expect_success 'delete @{upstream} expansion matches -r option' '
 	expect_branch refs/heads/remotes/origin/remote-del two
 '
 
+test_expect_success 'disallow deleting remote branch via @{-1}' '
+	git update-ref refs/remotes/origin/previous one &&
+
+	git checkout -b origin/previous two &&
+	git checkout master &&
+
+	test_must_fail git branch -r -D @{-1} &&
+	expect_branch refs/remotes/origin/previous one &&
+	expect_branch refs/heads/origin/previous two
+'
+
 # The thing we are testing here is that "@" is the real branch refs/heads/@,
 # and not refs/heads/HEAD. These tests should not imply that refs/heads/@ is a
 # sane thing, but it _is_ technically allowed for now. If we disallow it, these

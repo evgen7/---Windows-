@@ -1704,13 +1704,13 @@ unmap:
  * Signal that the shared index is used by updating its mtime.
  *
  * This way, shared index can be removed if they have not been used
- * for some time. It's ok to fail to update the mtime if we are on a
- * read only file system.
+ * for some time.
  */
-void freshen_shared_index(char *base_sha1_hex)
+static void freshen_shared_index(char *base_sha1_hex, int warn)
 {
 	const char *shared_index = git_path("sharedindex.%s", base_sha1_hex);
-	check_and_freshen_file(shared_index, 1);
+	if (!check_and_freshen_file(shared_index, 1) && warn)
+		warning("could not freshen shared index '%s'", shared_index);
 }
 
 int read_index_from(struct index_state *istate, const char *path)
@@ -1745,7 +1745,7 @@ int read_index_from(struct index_state *istate, const char *path)
 		    base_sha1_hex, base_path,
 		    sha1_to_hex(split_index->base->sha1));
 
-	freshen_shared_index(base_sha1_hex);
+	freshen_shared_index(base_sha1_hex, 0);
 	merge_base_index(istate);
 	post_read_index_from(istate);
 	return ret;
@@ -2228,7 +2228,7 @@ static int write_split_index(struct index_state *istate,
 	return ret;
 }
 
-static const char *shared_index_expire = "1.week.ago";
+static const char *shared_index_expire = "2.weeks.ago";
 
 static unsigned long get_shared_index_expire_date(void)
 {
@@ -2333,7 +2333,7 @@ static int too_many_not_shared_entries(struct index_state *istate)
 	case 100:
 		return 0; /* 100% means never write a new shared index */
 	default:
-		; /* do nothing: just use the configured value */
+		break; /* just use the configured value */
 	}
 
 	/* Count not shared entries */
@@ -2343,12 +2343,13 @@ static int too_many_not_shared_entries(struct index_state *istate)
 			not_shared++;
 	}
 
-	return istate->cache_nr * max_split < not_shared * 100;
+	return (int64_t)istate->cache_nr * max_split < (int64_t)not_shared * 100;
 }
 
 int write_locked_index(struct index_state *istate, struct lock_file *lock,
 		       unsigned flags)
 {
+	int new_shared_index, ret;
 	struct split_index *si = istate->split_index;
 
 	if (!si || alternate_index_output ||
@@ -2365,15 +2366,22 @@ int write_locked_index(struct index_state *istate, struct lock_file *lock,
 	}
 	if (too_many_not_shared_entries(istate))
 		istate->cache_changed |= SPLIT_INDEX_ORDERED;
-	if (istate->cache_changed & SPLIT_INDEX_ORDERED) {
-		int ret = write_shared_index(istate, lock, flags);
+
+	new_shared_index = istate->cache_changed & SPLIT_INDEX_ORDERED;
+
+	if (new_shared_index) {
+		ret = write_shared_index(istate, lock, flags);
 		if (ret)
 			return ret;
-	} else {
-		freshen_shared_index(sha1_to_hex(si->base_sha1));
 	}
 
-	return write_split_index(istate, lock, flags);
+	ret = write_split_index(istate, lock, flags);
+
+	/* Freshen the shared index only if the split-index was written */
+	if (!ret && !new_shared_index)
+		freshen_shared_index(sha1_to_hex(si->base_sha1), 1);
+
+	return ret;
 }
 
 /*

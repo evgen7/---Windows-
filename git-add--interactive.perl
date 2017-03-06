@@ -92,7 +92,7 @@ sub colored {
 }
 
 # command line options
-my $cmd;
+my $patch_mode_only;
 my $patch_mode;
 my $patch_mode_revision;
 
@@ -161,6 +161,24 @@ sub run_cmd_pipe {
 		die "$^O does not support: @invalid\n" if @invalid;
 		my @args = map { m/ /o ? "\"$_\"": $_ } @_;
 		return qx{@args};
+	} elsif (($^O eq 'MSWin32' || $^O eq 'msys') && (scalar @_ > 200) &&
+			grep $_ eq '--', @_) {
+		use File::Temp qw(tempfile);
+		my ($fhargs, $filename) =
+			tempfile('git-args-XXXXXX', UNLINK => 1);
+
+		my $cmd = 'cat '.$filename.' | xargs -0 -s 20000 ';
+		while ($_[0] ne '--') {
+			$cmd = $cmd . shift(@_) . ' ';
+		}
+
+		shift(@_);
+		print $fhargs join("\0", @_);
+		close($fhargs);
+
+		my $fh = undef;
+		open($fh, '-|', $cmd) or die;
+		return <$fh>;
 	} else {
 		my $fh = undef;
 		open($fh, '-|', @_) or die;
@@ -1299,7 +1317,7 @@ sub patch_update_cmd {
 		}
 		return 0;
 	}
-	if ($patch_mode) {
+	if ($patch_mode_only) {
 		@them = @mods;
 	}
 	else {
@@ -1721,7 +1739,7 @@ sub process_args {
 		die sprintf(__("invalid argument %s, expecting --"),
 			       $arg) unless $arg eq "--";
 		%patch_mode_flavour = %{$patch_modes{$patch_mode}};
-		$cmd = 1;
+		$patch_mode_only = 1;
 	}
 	elsif ($arg ne "--") {
 		die sprintf(__("invalid argument %s, expecting --"), $arg);
@@ -1758,7 +1776,7 @@ sub main_loop {
 
 process_args();
 refresh();
-if ($cmd) {
+if ($patch_mode_only) {
 	patch_update_cmd();
 }
 else {

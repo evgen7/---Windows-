@@ -1273,14 +1273,16 @@ int interpret_branch_name(const char *name, int namelen, struct strbuf *buf,
 	if (!namelen)
 		namelen = strlen(name);
 
-	len = interpret_nth_prior_checkout(name, namelen, buf);
-	if (!len) {
-		return len; /* syntax Ok, not enough switches */
-	} else if (len > 0) {
-		if (len == namelen)
-			return len; /* consumed all */
-		else
-			return reinterpret(name, namelen, len, buf, allowed);
+	if (!allowed || (allowed & INTERPRET_BRANCH_LOCAL)) {
+		len = interpret_nth_prior_checkout(name, namelen, buf);
+		if (!len) {
+			return len; /* syntax Ok, not enough switches */
+		} else if (len > 0) {
+			if (len == namelen)
+				return len; /* consumed all */
+			else
+				return reinterpret(name, namelen, len, buf, allowed);
+		}
 	}
 
 	for (start = name;

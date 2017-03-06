@@ -5,29 +5,6 @@
 * https://opensource.org/licenses/MIT
 ***/
 
-// uses SHA-1 message expansion to expand the first 16 words of W[] to 80 words
-void sha1_message_expansion(uint32_t W[80]);
-
-// sha-1 compression function; first version takes a message block pre-parsed as 16 32-bit integers, second version takes an already expanded message)
-void sha1_compression(uint32_t ihv[5], const uint32_t m[16]);
-void sha1_compression_W(uint32_t ihv[5], const uint32_t W[80]);
-
-// same as sha1_compression_W, but additionally store intermediate states
-// only stores states ii (the state between step ii-1 and step ii) when DOSTORESTATEii is defined in ubc_check.h
-void sha1_compression_states(uint32_t ihv[5], const uint32_t W[80], uint32_t states[80][5]);
-
-// function type for sha1_recompression_step_T (uint32_t ihvin[5], uint32_t ihvout[5], const uint32_t me2[80], const uint32_t state[5])
-// where 0 <= T < 80
-//       me2 is an expanded message (the expansion of an original message block XOR'ed with a disturbance vector's message block difference)
-//       state is the internal state (a,b,c,d,e) before step T of the SHA-1 compression function while processing the original message block
-// the function will return:
-//       ihvin: the reconstructed input chaining value
-//       ihvout: the reconstructed output chaining value
-typedef void(*sha1_recompression_type)(uint32_t*, uint32_t*, const uint32_t*, const uint32_t*);
-
-// table of sha1_recompression_step_0, ... , sha1_recompression_step_79
-extern sha1_recompression_type sha1_recompression_step[80];
-
 // a callback function type that can be set to be called when a collision block has been found:
 // void collision_block_callback(uint64_t byteoffset, const uint32_t ihvin1[5], const uint32_t ihvin2[5], const uint32_t m1[80], const uint32_t m2[80])
 typedef void(*collision_block_callback)(uint64_t, const uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
@@ -39,7 +16,6 @@ typedef struct {
 	unsigned char buffer[64];
 	int bigendian;
 	int found_collision;
-	int safe_hash;
 	int detect_coll;
 	int ubc_check;
 	int reduced_round_coll;
