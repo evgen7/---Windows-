@@ -218,13 +218,41 @@ void gitmodules_config_sha1(const unsigned char *commit_sha1)
 int is_submodule_initialized(const char *path)
 {
 	int ret = 0;
-	const struct submodule *module = NULL;
+	char *key;
+	const struct string_list *sl;
+	const struct submodule *module = submodule_from_path(null_sha1, path);
 
-	module = submodule_from_path(null_sha1, path);
+	/* early return if there isn't a path->module mapping */
+	if (!module)
+		return 0;
 
-	if (module) {
-		char *key = xstrfmt("submodule.%s.url", module->name);
+	/* submodule.<name>.active is set */
+	key = xstrfmt("submodule.%s.active", module->name);
+	if (!git_config_get_bool(key, &ret)) {
+		free(key);
+		return ret;
+	}
+	free(key);
+
+	sl = git_config_get_value_multi("submodule.active");
+
+	if (sl) {
+		struct pathspec ps;
+		struct argv_array args = ARGV_ARRAY_INIT;
+		const struct string_list_item *item;
+
+		for_each_string_list_item(item, sl) {
+			argv_array_push(&args, item->string);
+		}
+
+		parse_pathspec(&ps, 0, 0, 0, args.argv);
+		ret = match_pathspec(&ps, path, strlen(path), 0, NULL, 1);
+
+		argv_array_clear(&args);
+		clear_pathspec(&ps);
+	} else {
 		char *value = NULL;
+		key = xstrfmt("submodule.%s.url", module->name);
 
 		ret = !git_config_get_string(key, &value);
 
@@ -1239,6 +1267,14 @@ out:
 	return ret;
 }
 
+static const char *get_super_prefix_or_empty(void)
+{
+	const char *s = get_super_prefix();
+	if (!s)
+		s = "";
+	return s;
+}
+
 static int submodule_has_dirty_index(const struct submodule *sub)
 {
 	struct child_process cp = CHILD_PROCESS_INIT;
@@ -1246,8 +1282,8 @@ static int submodule_has_dirty_index(const struct submodule *sub)
 	prepare_submodule_repo_env_no_git_dir(&cp.env_array);
 
 	cp.git_cmd = 1;
-	argv_array_pushl(&cp.args, "diff-index", "--quiet", \
-					"--cached", "HEAD", NULL);
+	argv_array_pushl(&cp.args, "diff-index", "--quiet",
+				   "--cached", "HEAD", NULL);
 	cp.no_stdin = 1;
 	cp.no_stdout = 1;
 	cp.dir = sub->path;
@@ -1257,7 +1293,7 @@ static int submodule_has_dirty_index(const struct submodule *sub)
 	return finish_command(&cp);
 }
 
-void submodule_reset_index(const char *path)
+static void submodule_reset_index(const char *path)
 {
 	struct child_process cp = CHILD_PROCESS_INIT;
 	prepare_submodule_repo_env_no_git_dir(&cp.env_array);
@@ -1266,7 +1302,8 @@ void submodule_reset_index(const char *path)
 	cp.no_stdin = 1;
 	cp.dir = path;
 
-	argv_array_pushf(&cp.args, "--super-prefix=%s/", path);
+	argv_array_pushf(&cp.args, "--super-prefix=%s%s/",
+				   get_super_prefix_or_empty(), path);
 	argv_array_pushl(&cp.args, "read-tree", "-u", "--reset", NULL);
 
 	argv_array_push(&cp.args, EMPTY_TREE_SHA1_HEX);
@@ -1323,7 +1360,8 @@ int submodule_move_head(const char *path,
 	cp.no_stdin = 1;
 	cp.dir = path;
 
-	argv_array_pushf(&cp.args, "--super-prefix=%s/", path);
+	argv_array_pushf(&cp.args, "--super-prefix=%s%s/",
+			get_super_prefix_or_empty(), path);
 	argv_array_pushl(&cp.args, "read-tree", NULL);
 
 	if (flags & SUBMODULE_MOVE_HEAD_DRY_RUN)
@@ -1562,7 +1600,7 @@ static void relocate_single_git_dir_into_superproject(const char *prefix,
 		/* If it is an actual gitfile, it doesn't need migration. */
 		return;
 
-	real_old_git_dir = real_pathdup(old_git_dir);
+	real_old_git_dir = real_pathdup(old_git_dir, 1);
 
 	sub = submodule_from_path(null_sha1, path);
 	if (!sub)
@@ -1571,13 +1609,10 @@ static void relocate_single_git_dir_into_superproject(const char *prefix,
 	new_git_dir = git_path("modules/%s", sub->name);
 	if (safe_create_leading_directories_const(new_git_dir) < 0)
 		die(_("could not create directory '%s'"), new_git_dir);
-	real_new_git_dir = real_pathdup(new_git_dir);
-
-	if (!prefix)
-		prefix = get_super_prefix();
+	real_new_git_dir = real_pathdup(new_git_dir, 1);
 
 	fprintf(stderr, _("Migrating git directory of '%s%s' from\n'%s' to\n'%s'\n"),
-		prefix ? prefix : "", path,
+		get_super_prefix_or_empty(), path,
 		real_old_git_dir, real_new_git_dir);
 
 	relocate_gitdir(path, real_old_git_dir, real_new_git_dir);
@@ -1630,8 +1665,8 @@ void absorb_git_dir_into_superproject(const char *prefix,
 			git_path("modules/%s", sub->name));
 	} else {
 		/* Is it already absorbed into the superprojects git dir? */
-		char *real_sub_git_dir = real_pathdup(sub_git_dir);
-		char *real_common_git_dir = real_pathdup(get_git_common_dir());
+		char *real_sub_git_dir = real_pathdup(sub_git_dir, 1);
+		char *real_common_git_dir = real_pathdup(get_git_common_dir(), 1);
 
 		if (!starts_with(real_sub_git_dir, real_common_git_dir))
 			relocate_single_git_dir_into_superproject(prefix, path);
@@ -1648,8 +1683,7 @@ void absorb_git_dir_into_superproject(const char *prefix,
 		if (flags & ~ABSORB_GITDIR_RECURSE_SUBMODULES)
 			die("BUG: we don't know how to pass the flags down?");
 
-		if (get_super_prefix())
-			strbuf_addstr(&sb, get_super_prefix());
+		strbuf_addstr(&sb, get_super_prefix_or_empty());
 		strbuf_addstr(&sb, path);
 		strbuf_addch(&sb, '/');
 
@@ -1665,4 +1699,86 @@ void absorb_git_dir_into_superproject(const char *prefix,
 
 		strbuf_release(&sb);
 	}
+}
+
+const char *get_superproject_working_tree(void)
+{
+	struct child_process cp = CHILD_PROCESS_INIT;
+	struct strbuf sb = STRBUF_INIT;
+	const char *one_up = real_path_if_valid("../");
+	const char *cwd = xgetcwd();
+	const char *ret = NULL;
+	const char *subpath;
+	int code;
+	ssize_t len;
+
+	if (!is_inside_work_tree())
+		/*
+		 * FIXME:
+		 * We might have a superproject, but it is harder
+		 * to determine.
+		 */
+		return NULL;
+
+	if (!one_up)
+		return NULL;
+
+	subpath = relative_path(cwd, one_up, &sb);
+
+	prepare_submodule_repo_env(&cp.env_array);
+	argv_array_pop(&cp.env_array);
+
+	argv_array_pushl(&cp.args, "--literal-pathspecs", "-C", "..",
+			"ls-files", "-z", "--stage", "--full-name", "--",
+			subpath, NULL);
+	strbuf_reset(&sb);
+
+	cp.no_stdin = 1;
+	cp.no_stderr = 1;
+	cp.out = -1;
+	cp.git_cmd = 1;
+
+	if (start_command(&cp))
+		die(_("could not start ls-files in .."));
+
+	len = strbuf_read(&sb, cp.out, PATH_MAX);
+	close(cp.out);
+
+	if (starts_with(sb.buf, "160000")) {
+		int super_sub_len;
+		int cwd_len = strlen(cwd);
+		char *super_sub, *super_wt;
+
+		/*
+		 * There is a superproject having this repo as a submodule.
+		 * The format is <mode> SP <hash> SP <stage> TAB <full name> \0,
+		 * We're only interested in the name after the tab.
+		 */
+		super_sub = strchr(sb.buf, '\t') + 1;
+		super_sub_len = sb.buf + sb.len - super_sub - 1;
+
+		if (super_sub_len > cwd_len ||
+		    strcmp(&cwd[cwd_len - super_sub_len], super_sub))
+			die (_("BUG: returned path string doesn't match cwd?"));
+
+		super_wt = xstrdup(cwd);
+		super_wt[cwd_len - super_sub_len] = '\0';
+
+		ret = real_path(super_wt);
+		free(super_wt);
+	}
+	strbuf_release(&sb);
+
+	code = finish_command(&cp);
+
+	if (code == 128)
+		/* '../' is not a git repository */
+		return NULL;
+	if (code == 0 && len == 0)
+		/* There is an unrelated git repository at '../' */
+		return NULL;
+	if (code)
+		die(_("ls-tree returned unexpected return code %d"), code);
+
+	return ret;
 }

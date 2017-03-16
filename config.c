@@ -1602,14 +1602,12 @@ void read_early_config(config_fn_t cb, void *data)
 	git_config_with_options(cb, data, NULL, 1);
 
 	/*
-	 * When we are not about to create a repository ourselves (init or
-	 * clone) and when no .git/ directory was set up yet (in which case
-	 * git_config_with_options() would already have picked up the
-	 * repository config), we ask discover_git_directory() to figure out
-	 * whether there is any repository config we should use (but unlike
+	 * When setup_git_directory() was not yet asked to discover the
+	 * GIT_DIR, we ask discover_git_directory() to figure out whether there
+	 * is any repository config we should use (but unlike
 	 * setup_git_directory_gently(), no global state is changed, most
-	 * notably, the current working directory is still the same after
-	 * the call).
+	 * notably, the current working directory is still the same after the
+	 * call).
 	 */
 	if (!have_git_dir() && discover_git_directory(&buf)) {
 		struct git_config_source repo_config;

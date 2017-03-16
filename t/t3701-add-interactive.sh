@@ -394,43 +394,4 @@ test_expect_success 'diffs can be colorized' '
 	grep "$(printf "\\033")" output
 '
 
-test_expect_success 'patch-mode via -i prompts for files' '
-	git reset --hard &&
-
-	echo one >file &&
-	echo two >test &&
-	git add -i <<-\EOF &&
-	patch
-	test
-
-	y
-	quit
-	EOF
-
-	echo test >expect &&
-	git diff --cached --name-only >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success EXPENSIVE 'add -i with a lot of files' '
-	git reset --hard &&
-	x160=0123456789012345678901234567890123456789 &&
-	x160=$x160$x160$x160$x160 &&
-	y= &&
-	i=0 &&
-	while test $i -le 200
-	do
-		name=$(printf "%s%03d" $x160 $i) &&
-		echo $name >$name &&
-		git add -N $name &&
-		y="${y}y$LF" &&
-		i=$(($i+1)) ||
-		break
-	done &&
-	echo "$y" | git add -p -- . &&
-	git diff --cached >staged &&
-	test_line_count = 1407 staged &&
-	git reset --hard
-'
-
 test_done

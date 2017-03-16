@@ -29,8 +29,8 @@ static const char * const checkout_usage[] = {
 	NULL,
 };
 
-int option_parse_recurse_submodules(const struct option *opt,
-				    const char *arg, int unset)
+static int option_parse_recurse_submodules(const struct option *opt,
+					   const char *arg, int unset)
 {
 	if (unset) {
 		recurse_submodules = RECURSE_SUBMODULES_OFF;
@@ -388,6 +388,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 			pos = skip_same_name(ce, pos) - 1;
 		}
 	}
+	errs |= checkout_delayed_entries(&state);
 
 	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));

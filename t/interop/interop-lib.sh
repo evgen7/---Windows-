@@ -5,7 +5,7 @@
 INTEROP_ROOT=$(pwd)
 BUILD_ROOT=$INTEROP_ROOT/build
 
-build_version() {
+build_version () {
 	if test -z "$1"
 	then
 		echo >&2 "error: test script did not set default versions"
@@ -53,7 +53,7 @@ build_version() {
 }
 
 # Old versions of git don't have bin-wrappers, so let's give a rough emulation.
-wrap_git() {
+wrap_git () {
 	write_script "$1" <<-EOF
 	GIT_EXEC_PATH="$2"
 	export GIT_EXEC_PATH
@@ -63,7 +63,7 @@ wrap_git() {
 	EOF
 }
 
-generate_wrappers() {
+generate_wrappers () {
 	mkdir -p .bin &&
 	wrap_git .bin/git.a "$DIR_A" &&
 	wrap_git .bin/git.b "$DIR_B" &&

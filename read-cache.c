@@ -18,8 +18,6 @@
 #include "varint.h"
 #include "split-index.h"
 #include "utf8.h"
-#include "submodule.h"
-#include "submodule-config.h"
 
 /* Mask for the name length in ce_flags in the on-disk index */
 
@@ -523,22 +521,6 @@ int remove_index_entry_at(struct index_state *istate, int pos)
 	return 1;
 }
 
-static void remove_submodule_according_to_strategy(const struct submodule *sub)
-{
-	switch (sub->update_strategy.type) {
-	case SM_UPDATE_UNSPECIFIED:
-	case SM_UPDATE_CHECKOUT:
-	case SM_UPDATE_REBASE:
-	case SM_UPDATE_MERGE:
-		submodule_move_head(sub->path, "HEAD", NULL, \
-				    SUBMODULE_MOVE_HEAD_FORCE);
-		break;
-	case SM_UPDATE_NONE:
-	case SM_UPDATE_COMMAND:
-		; /* Do not touch the submodule. */
-	}
-}
-
 /*
  * Remove all cache entries marked for removal, that is where
  * CE_REMOVE is set in ce_flags.  This is much more effective than
@@ -551,13 +533,8 @@ void remove_marked_cache_entries(struct index_state *istate)
 
 	for (i = j = 0; i < istate->cache_nr; i++) {
 		if (ce_array[i]->ce_flags & CE_REMOVE) {
-			const struct submodule *sub = submodule_from_ce(ce_array[i]);
-			if (sub) {
-				remove_submodule_according_to_strategy(sub);
-			} else {
-				remove_name_hash(istate, ce_array[i]);
-				save_or_free_index_entry(istate, ce_array[i]);
-			}
+			remove_name_hash(istate, ce_array[i]);
+			save_or_free_index_entry(istate, ce_array[i]);
 		}
 		else
 			ce_array[j++] = ce_array[i];
@@ -2245,7 +2222,7 @@ static unsigned long get_shared_index_expire_date(void)
 	return shared_index_expire_date;
 }
 
-static int can_delete_shared_index(const char *shared_index_path)
+static int should_delete_shared_index(const char *shared_index_path)
 {
 	struct stat st;
 	unsigned long expiration;
@@ -2278,9 +2255,9 @@ static int clean_shared_index_files(const char *current_hex)
 		if (!strcmp(sha1_hex, current_hex))
 			continue;
 		shared_index_path = git_path("%s", de->d_name);
-		if (can_delete_shared_index(shared_index_path) > 0 &&
+		if (should_delete_shared_index(shared_index_path) > 0 &&
 		    unlink(shared_index_path))
-			error_errno(_("unable to unlink: %s"), shared_index_path);
+			warning_errno(_("unable to unlink: %s"), shared_index_path);
 	}
 	closedir(dir);
 

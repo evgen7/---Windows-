@@ -531,6 +531,7 @@ const char *read_gitfile_gently(const char *path, int *return_error_code)
 	ssize_t len;
 
 	if (stat(path, &st)) {
+		/* NEEDSWORK: discern between ENOENT vs other errors */
 		error_code = READ_GITFILE_ERR_STAT_FAILED;
 		goto cleanup_return;
 	}
@@ -698,7 +699,7 @@ static const char *setup_discovered_git_dir(const char *gitdir,
 	/* --work-tree is set without --git-dir; use discovered one */
 	if (getenv(GIT_WORK_TREE_ENVIRONMENT) || git_work_tree_cfg) {
 		if (offset != cwd->len && !is_absolute_path(gitdir))
-			gitdir = real_pathdup(gitdir);
+			gitdir = real_pathdup(gitdir, 1);
 		if (chdir(cwd->buf))
 			die_errno("Could not come back to cwd");
 		return setup_explicit_git_dir(gitdir, cwd, nongit_ok);
@@ -808,7 +809,7 @@ static int canonicalize_ceiling_entry(struct string_list_item *item,
 		/* Keep entry but do not canonicalize it */
 		return 1;
 	} else {
-		char *real_path = real_pathdup(ceil);
+		char *real_path = real_pathdup(ceil, 0);
 		if (!real_path) {
 			return 0;
 		}
@@ -825,7 +826,8 @@ enum discovery_result {
 	GIT_DIR_BARE,
 	/* these are errors */
 	GIT_DIR_HIT_CEILING = -1,
-	GIT_DIR_HIT_MOUNT_POINT = -2
+	GIT_DIR_HIT_MOUNT_POINT = -2,
+	GIT_DIR_INVALID_GITFILE = -3
 };
 
 /*
@@ -838,11 +840,12 @@ enum discovery_result {
  * The directory where the search should start needs to be passed in via the
  * `dir` parameter; upon return, the `dir` buffer will contain the path of
  * the directory where the search ended, and `gitdir` will contain the path of
- * the discovered .git/ directory, if any. This path may be relative against
- * `dir` (i.e. *not* necessarily the cwd).
+ * the discovered .git/ directory, if any. If `gitdir` is not absolute, it
+ * is relative to `dir` (i.e. *not* necessarily the cwd).
  */
 static enum discovery_result setup_git_directory_gently_1(struct strbuf *dir,
-							  struct strbuf *gitdir)
+							  struct strbuf *gitdir,
+							  int die_on_error)
 {
 	const char *env_ceiling_dirs = getenv(CEILING_DIRECTORIES_ENVIRONMENT);
 	struct string_list ceiling_dirs = STRING_LIST_INIT_DUP;
@@ -890,14 +893,22 @@ static enum discovery_result setup_git_directory_gently_1(struct strbuf *dir,
 	if (one_filesystem)
 		current_device = get_device_or_die(dir->buf, NULL, 0);
 	for (;;) {
-		int offset = dir->len;
+		int offset = dir->len, error_code = 0;
 
 		if (offset > min_offset)
 			strbuf_addch(dir, '/');
 		strbuf_addstr(dir, DEFAULT_GIT_DIR_ENVIRONMENT);
-		gitdirenv = read_gitfile(dir->buf);
-		if (!gitdirenv && is_git_directory(dir->buf))
-			gitdirenv = DEFAULT_GIT_DIR_ENVIRONMENT;
+		gitdirenv = read_gitfile_gently(dir->buf, die_on_error ?
+						NULL : &error_code);
+		if (!gitdirenv) {
+			if (die_on_error ||
+			    error_code == READ_GITFILE_ERR_NOT_A_FILE) {
+				/* NEEDSWORK: fail if .git is not file nor dir */
+				if (is_git_directory(dir->buf))
+					gitdirenv = DEFAULT_GIT_DIR_ENVIRONMENT;
+			} else if (error_code != READ_GITFILE_ERR_STAT_FAILED)
+				return GIT_DIR_INVALID_GITFILE;
+		}
 		strbuf_setlen(dir, offset);
 		if (gitdirenv) {
 			strbuf_addstr(gitdir, gitdirenv);
@@ -913,7 +924,7 @@ static enum discovery_result setup_git_directory_gently_1(struct strbuf *dir,
 			return GIT_DIR_HIT_CEILING;
 
 		while (--offset > ceil_offset && !is_dir_sep(dir->buf[offset]))
-			; /* keep scanning backwards */
+			; /* continue */
 		if (offset <= ceil_offset)
 			return GIT_DIR_HIT_CEILING;
 
@@ -934,7 +945,7 @@ const char *discover_git_directory(struct strbuf *gitdir)
 		return NULL;
 
 	cwd_len = dir.len;
-	if (setup_git_directory_gently_1(&dir, gitdir) < 0) {
+	if (setup_git_directory_gently_1(&dir, gitdir, 0) <= 0) {
 		strbuf_release(&dir);
 		return NULL;
 	}
@@ -964,12 +975,13 @@ const char *discover_git_directory(struct strbuf *gitdir)
 		return NULL;
 	}
 
-	return gitdir->buf;
+	return gitdir->buf + gitdir_offset;
 }
 
 const char *setup_git_directory_gently(int *nongit_ok)
 {
-	struct strbuf cwd = STRBUF_INIT, dir = STRBUF_INIT, gitdir = STRBUF_INIT;
+	static struct strbuf cwd = STRBUF_INIT;
+	struct strbuf dir = STRBUF_INIT, gitdir = STRBUF_INIT;
 	const char *prefix;
 
 	/*
@@ -993,7 +1005,7 @@ const char *setup_git_directory_gently(int *nongit_ok)
 		die_errno(_("Unable to read current working directory"));
 	strbuf_addbuf(&dir, &cwd);
 
-	switch (setup_git_directory_gently_1(&dir, &gitdir)) {
+	switch (setup_git_directory_gently_1(&dir, &gitdir, 1)) {
 	case GIT_DIR_NONE:
 		prefix = NULL;
 		break;
@@ -1017,6 +1029,8 @@ const char *setup_git_directory_gently(int *nongit_ok)
 	case GIT_DIR_HIT_MOUNT_POINT:
 		if (nongit_ok) {
 			*nongit_ok = 1;
+			strbuf_release(&cwd);
+			strbuf_release(&dir);
 			return NULL;
 		}
 		die(_("Not a git repository (or any parent up to mount point %s)\n"
@@ -1033,6 +1047,9 @@ const char *setup_git_directory_gently(int *nongit_ok)
 
 	startup_info->have_repository = !nongit_ok || !*nongit_ok;
 	startup_info->prefix = prefix;
+
+	strbuf_release(&dir);
+	strbuf_release(&gitdir);
 
 	return prefix;
 }

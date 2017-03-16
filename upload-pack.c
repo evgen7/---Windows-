@@ -471,9 +471,6 @@ static int do_reachable_revlist(struct child_process *cmd,
 	static const char *argv[] = {
 		"rev-list", "--stdin", NULL,
 	};
-	static const char *argv_with_objects[] = {
-		"rev-list", "--objects", "--stdin", NULL,
-	};
 	struct object *o;
 	char namebuf[42]; /* ^ + SHA-1 + LF */
 	int i;
@@ -490,18 +487,6 @@ static int do_reachable_revlist(struct child_process *cmd,
 	 * below.
 	 */
 	sigchain_push(SIGPIPE, SIG_IGN);
-
-	/*
-	 * If we are testing reachability of a tree or blob, rev-list needs to
-	 * operate more granularly.
-	 */
-	for (i = 0; i < src->nr; i++) {
-		o = src->objects[i].item;
-		if (o->type == OBJ_TREE || o->type == OBJ_BLOB) {
-			cmd->argv = argv_with_objects;
-			break;
-		}
-	}
 
 	if (start_command(cmd))
 		goto error;

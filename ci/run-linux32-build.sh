@@ -1,31 +1,30 @@
 #!/bin/sh
 #
-# Build and test Git in a docker container running a 32-bit Ubuntu Linux
+# Build and test Git in a 32-bit environment
 #
 # Usage:
-#   run-linux32-build.sh [container-image]
+#   run-linux32-build.sh [host-user-id]
 #
 
-CONTAINER="${1:-daald/ubuntu32:xenial}"
-
-sudo docker run --interactive --volume "${PWD}:/usr/src/git" "$CONTAINER" \
-    /bin/bash -c 'linux32 --32bit i386 sh -c "
-    : update packages &&
+# Update packages to the latest available versions
+linux32 --32bit i386 sh -c '
     apt update >/dev/null &&
     apt install -y build-essential libcurl4-openssl-dev libssl-dev \
-	libexpat-dev gettext python >/dev/null &&
+	libexpat-dev gettext python >/dev/null
+' &&
 
-    : build and test &&
+# If this script runs inside a docker container, then all commands are
+# usually executed as root. Consequently, the host user might not be
+# able to access the test output files.
+# If a host user id is given, then create a user "ci" with the host user
+# id to make everything accessible to the host user.
+HOST_UID=$1 &&
+CI_USER=$USER &&
+test -z $HOST_UID || (CI_USER="ci" && useradd -u $HOST_UID $CI_USER) &&
+
+# Build and test
+linux32 --32bit i386 su -m -l $CI_USER -c '
     cd /usr/src/git &&
-    export DEFAULT_TEST_TARGET='$DEFAULT_TEST_TARGET' &&
-    export GIT_PROVE_OPTS=\"'"$GIT_PROVE_OPTS"'\" &&
-    export GIT_TEST_OPTS=\"'"$GIT_TEST_OPTS"'\" &&
-    export GIT_TEST_CLONE_2GB='$GIT_TEST_CLONE_2GB' &&
     make --jobs=2 &&
-    make --quiet test || (
-
-    : make test-results readable to non-root user on TravisCI &&
-    test '$TRAVIS' &&
-    find t/test-results/ -type f -exec chmod o+r {} \; &&
-    false )
-"'
+    make --quiet test
+'

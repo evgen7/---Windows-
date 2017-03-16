@@ -198,6 +198,10 @@ If the submodule is not yet initialized, and you just want to use the
 setting as stored in .gitmodules, you can automatically initialize the
 submodule with the `--init` option.
 
+You can configure a set of submodules using pathspec syntax in
+submodule.active you can use `--init-active` to initialize
+those before updating.
+
 If `--recursive` is specified, this command will recurse into the
 registered submodules, and update any nested submodules within.
 --
@@ -383,6 +387,11 @@ the submodule itself.
 	This option is only valid for the update command.
 	Initialize all submodules for which "git submodule init" has not been
 	called so far before updating.
+
+--init-active::
+	This option is only valid for the update command.
+	Initialize all submodules configured in "`submodule.active`"
+	that have not been updated before.
 
 --name::
 	This option is only valid for the add command. It sets the submodule's
