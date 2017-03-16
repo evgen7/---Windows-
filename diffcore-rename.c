@@ -80,6 +80,18 @@ static struct diff_rename_src *locate_rename_src(struct diff_filespec *one,
 
 	first = 0;
 	last = rename_src_nr;
+
+	if (last > 0) {
+		struct diff_rename_src *src = &(rename_src[last-1]);
+		int cmp = strcmp(one->path, src->p->one->path);
+		if (!cmp)
+			return src;
+		if (cmp > 0) {
+			first = last;
+			goto append_it;
+		}
+	}
+
 	while (last > first) {
 		int next = (last + first) >> 1;
 		struct diff_rename_src *src = &(rename_src[next]);
@@ -93,6 +105,7 @@ static struct diff_rename_src *locate_rename_src(struct diff_filespec *one,
 		first = next+1;
 	}
 
+append_it:
 	if (!insert_ok)
 		return NULL;
 
