@@ -126,6 +126,13 @@ static int ssl_cert_password_required;
 #ifdef LIBCURL_CAN_HANDLE_AUTH_ANY
 static unsigned long http_auth_methods = CURLAUTH_ANY;
 static int http_auth_methods_restricted;
+/* Modes for which empty_auth cannot actually help us. */
+static unsigned long empty_auth_useless =
+	CURLAUTH_BASIC
+#ifdef CURLAUTH_DIGEST_IE
+	| CURLAUTH_DIGEST_IE
+#endif
+	| CURLAUTH_DIGEST;
 #endif
 
 static struct curl_slist *pragma_header;
@@ -264,10 +271,10 @@ static int http_options(const char *var, const char *value, void *cb)
 	if (!strcmp("http.sslversion", var))
 		return git_config_string(&ssl_version, var, value);
 	if (!strcmp("http.sslcert", var))
-		return git_config_pathname(&ssl_cert, var, value);
+		return git_config_string(&ssl_cert, var, value);
 #if LIBCURL_VERSION_NUM >= 0x070903
 	if (!strcmp("http.sslkey", var))
-		return git_config_pathname(&ssl_key, var, value);
+		return git_config_string(&ssl_key, var, value);
 #endif
 #if LIBCURL_VERSION_NUM >= 0x070908
 	if (!strcmp("http.sslcapath", var))
@@ -334,7 +341,10 @@ static int http_options(const char *var, const char *value, void *cb)
 		return git_config_string(&user_agent, var, value);
 
 	if (!strcmp("http.emptyauth", var)) {
-		curl_empty_auth = git_config_bool(var, value);
+		if (value && !strcmp("auto", value))
+			curl_empty_auth = -1;
+		else
+			curl_empty_auth = git_config_bool(var, value);
 		return 0;
 	}
 
@@ -385,29 +395,29 @@ static int http_options(const char *var, const char *value, void *cb)
 
 static int curl_empty_auth_enabled(void)
 {
-	if (curl_empty_auth < 0) {
-#ifdef LIBCURL_CAN_HANDLE_AUTH_ANY
-		/*
-		 * In the automatic case, kick in the empty-auth
-		 * hack as long as we would potentially try some
-		 * method more exotic than "Basic".
-		 *
-		 * But only do so when this is _not_ our initial
-		 * request, as we would not then yet know what
-		 * methods are available.
-		 */
-		return http_auth_methods_restricted &&
-		       http_auth_methods != CURLAUTH_BASIC;
-#else
-		/*
-		 * Our libcurl is too old to do AUTH_ANY in the first place;
-		 * just default to turning the feature off.
-		 */
-		return 0;
-#endif
-	}
+	if (curl_empty_auth >= 0)
+		return curl_empty_auth;
 
-	return curl_empty_auth;
+#ifndef LIBCURL_CAN_HANDLE_AUTH_ANY
+	/*
+	 * Our libcurl is too old to do AUTH_ANY in the first place;
+	 * just default to turning the feature off.
+	 */
+#else
+	/*
+	 * In the automatic case, kick in the empty-auth
+	 * hack as long as we would potentially try some
+	 * method more exotic than "Basic" or "Digest".
+	 *
+	 * But only do this when this is our second or
+	 * subsequent request, as by then we know what
+	 * methods are available.
+	 */
+	if (http_auth_methods_restricted &&
+	    (http_auth_methods & ~empty_auth_useless))
+		return 1;
+#endif
+	return 0;
 }
 
 static void init_curl_http_auth(CURL *result)
@@ -664,11 +674,25 @@ void setup_curl_trace(CURL *handle)
 	curl_easy_setopt(handle, CURLOPT_DEBUGDATA, NULL);
 }
 
+static long get_curl_allowed_protocols(int from_user)
+{
+	long allowed_protocols = 0;
+
+	if (is_transport_allowed("http", from_user))
+		allowed_protocols |= CURLPROTO_HTTP;
+	if (is_transport_allowed("https", from_user))
+		allowed_protocols |= CURLPROTO_HTTPS;
+	if (is_transport_allowed("ftp", from_user))
+		allowed_protocols |= CURLPROTO_FTP;
+	if (is_transport_allowed("ftps", from_user))
+		allowed_protocols |= CURLPROTO_FTPS;
+
+	return allowed_protocols;
+}
 
 static CURL *get_curl_handle(void)
 {
 	CURL *result = curl_easy_init();
-	long allowed_protocols = 0;
 
 	if (!result)
 		die("curl_easy_init failed");
@@ -764,20 +788,13 @@ static CURL *get_curl_handle(void)
 	curl_easy_setopt(result, CURLOPT_POST301, 1);
 #endif
 #if LIBCURL_VERSION_NUM >= 0x071304
-	if (is_transport_allowed("http"))
-		allowed_protocols |= CURLPROTO_HTTP;
-	if (is_transport_allowed("https"))
-		allowed_protocols |= CURLPROTO_HTTPS;
-	if (is_transport_allowed("ftp"))
-		allowed_protocols |= CURLPROTO_FTP;
-	if (is_transport_allowed("ftps"))
-		allowed_protocols |= CURLPROTO_FTPS;
-	curl_easy_setopt(result, CURLOPT_REDIR_PROTOCOLS, allowed_protocols);
-	curl_easy_setopt(result, CURLOPT_PROTOCOLS, allowed_protocols);
+	curl_easy_setopt(result, CURLOPT_REDIR_PROTOCOLS,
+			 get_curl_allowed_protocols(0));
+	curl_easy_setopt(result, CURLOPT_PROTOCOLS,
+			 get_curl_allowed_protocols(-1));
 #else
-	if (transport_restrict_protocols())
-		warning("protocol restrictions not applied to curl redirects because\n"
-			"your curl version is too old (>= 7.19.4)");
+	warning("protocol restrictions not applied to curl redirects because\n"
+		"your curl version is too old (>= 7.19.4)");
 #endif
 	if (getenv("GIT_CURL_VERBOSE"))
 		curl_easy_setopt(result, CURLOPT_VERBOSE, 1L);
@@ -1751,6 +1768,9 @@ static int http_request_reauth(const char *url,
 			       struct http_get_options *options)
 {
 	int ret = http_request(url, result, target, options);
+
+	if (ret != HTTP_OK && ret != HTTP_REAUTH)
+		return ret;
 
 	if (options && options->effective_url && options->base_url) {
 		if (update_url_from_redirect(options->base_url,
