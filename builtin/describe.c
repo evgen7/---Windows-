@@ -40,11 +40,11 @@ static const char *diff_index_args[] = {
 
 struct commit_name {
 	struct hashmap_entry entry;
-	struct object_id peeled;
+	unsigned char peeled[20];
 	struct tag *tag;
 	unsigned prio:2; /* annotated tag = 2, tag = 1, head = 0 */
 	unsigned name_checked:1;
-	struct object_id oid;
+	unsigned char sha1[20];
 	char *path;
 };
 
@@ -55,17 +55,17 @@ static const char *prio_names[] = {
 static int commit_name_cmp(const struct commit_name *cn1,
 		const struct commit_name *cn2, const void *peeled)
 {
-	return oidcmp(&cn1->peeled, peeled ? peeled : &cn2->peeled);
+	return hashcmp(cn1->peeled, peeled ? peeled : cn2->peeled);
 }
 
-static inline struct commit_name *find_commit_name(const struct object_id *peeled)
+static inline struct commit_name *find_commit_name(const unsigned char *peeled)
 {
-	return hashmap_get_from_hash(&names, sha1hash(peeled->hash), peeled->hash);
+	return hashmap_get_from_hash(&names, sha1hash(peeled), peeled);
 }
 
 static int replace_name(struct commit_name *e,
 			       int prio,
-			       const struct object_id *oid,
+			       const unsigned char *sha1,
 			       struct tag **tag)
 {
 	if (!e || e->prio < prio)
@@ -78,13 +78,13 @@ static int replace_name(struct commit_name *e,
 		struct tag *t;
 
 		if (!e->tag) {
-			t = lookup_tag(e->oid.hash);
+			t = lookup_tag(e->sha1);
 			if (!t || parse_tag(t))
 				return 1;
 			e->tag = t;
 		}
 
-		t = lookup_tag(oid->hash);
+		t = lookup_tag(sha1);
 		if (!t || parse_tag(t))
 			return 0;
 		*tag = t;
@@ -97,24 +97,24 @@ static int replace_name(struct commit_name *e,
 }
 
 static void add_to_known_names(const char *path,
-			       const struct object_id *peeled,
+			       const unsigned char *peeled,
 			       int prio,
-			       const struct object_id *oid)
+			       const unsigned char *sha1)
 {
 	struct commit_name *e = find_commit_name(peeled);
 	struct tag *tag = NULL;
-	if (replace_name(e, prio, oid, &tag)) {
+	if (replace_name(e, prio, sha1, &tag)) {
 		if (!e) {
 			e = xmalloc(sizeof(struct commit_name));
-			oidcpy(&e->peeled, peeled);
-			hashmap_entry_init(e, sha1hash(peeled->hash));
+			hashcpy(e->peeled, peeled);
+			hashmap_entry_init(e, sha1hash(peeled));
 			hashmap_add(&names, e);
 			e->path = NULL;
 		}
 		e->tag = tag;
 		e->prio = prio;
 		e->name_checked = 0;
-		oidcpy(&e->oid, oid);
+		hashcpy(e->sha1, sha1);
 		free(e->path);
 		e->path = xstrdup(path);
 	}
@@ -186,7 +186,7 @@ static int get_name(const char *path, const struct object_id *oid, int flag, voi
 	else
 		prio = 0;
 
-	add_to_known_names(all ? path + 5 : path + 10, &peeled, prio, oid);
+	add_to_known_names(all ? path + 5 : path + 10, peeled.hash, prio, oid->hash);
 	return 0;
 }
 
@@ -244,7 +244,7 @@ static unsigned long finish_depth_computation(
 static void display_name(struct commit_name *n)
 {
 	if (n->prio == 2 && !n->tag) {
-		n->tag = lookup_tag(n->oid.hash);
+		n->tag = lookup_tag(n->sha1);
 		if (!n->tag || parse_tag(n->tag))
 			die(_("annotated tag %s not available"), n->path);
 	}
@@ -262,14 +262,14 @@ static void display_name(struct commit_name *n)
 		printf("%s", n->path);
 }
 
-static void show_suffix(int depth, const struct object_id *oid)
+static void show_suffix(int depth, const unsigned char *sha1)
 {
-	printf("-%d-g%s", depth, find_unique_abbrev(oid->hash, abbrev));
+	printf("-%d-g%s", depth, find_unique_abbrev(sha1, abbrev));
 }
 
 static void describe(const char *arg, int last_one)
 {
-	struct object_id oid;
+	unsigned char sha1[20];
 	struct commit *cmit, *gave_up_on = NULL;
 	struct commit_list *list;
 	struct commit_name *n;
@@ -278,20 +278,20 @@ static void describe(const char *arg, int last_one)
 	unsigned long seen_commits = 0;
 	unsigned int unannotated_cnt = 0;
 
-	if (get_oid(arg, &oid))
+	if (get_sha1(arg, sha1))
 		die(_("Not a valid object name %s"), arg);
-	cmit = lookup_commit_reference(oid.hash);
+	cmit = lookup_commit_reference(sha1);
 	if (!cmit)
 		die(_("%s is not a valid '%s' object"), arg, commit_type);
 
-	n = find_commit_name(&cmit->object.oid);
+	n = find_commit_name(cmit->object.oid.hash);
 	if (n && (tags || all || n->prio == 2)) {
 		/*
 		 * Exact match to an existing ref.
 		 */
 		display_name(n);
 		if (longformat)
-			show_suffix(0, n->tag ? &n->tag->tagged->oid : &oid);
+			show_suffix(0, n->tag ? n->tag->tagged->oid.hash : sha1);
 		if (dirty)
 			printf("%s", dirty);
 		printf("\n");
@@ -308,7 +308,7 @@ static void describe(const char *arg, int last_one)
 		struct commit *c;
 		struct commit_name *n = hashmap_iter_first(&names, &iter);
 		for (; n; n = hashmap_iter_next(&iter)) {
-			c = lookup_commit_reference_gently(n->peeled.hash, 1);
+			c = lookup_commit_reference_gently(n->peeled, 1);
 			if (c)
 				c->util = n;
 		}
@@ -412,7 +412,7 @@ static void describe(const char *arg, int last_one)
 
 	display_name(all_matches[0].name);
 	if (abbrev)
-		show_suffix(all_matches[0].depth, &cmit->object.oid);
+		show_suffix(all_matches[0].depth, cmit->object.oid.hash);
 	if (dirty)
 		printf("%s", dirty);
 	printf("\n");

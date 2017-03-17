@@ -277,26 +277,31 @@ static const char *alt_sha1_path(struct alternate_object_database *alt,
 	return buf->buf;
 }
 
- char *odb_pack_name(struct strbuf *buf,
-		     const unsigned char *sha1,
-		     const char *ext)
+/*
+ * Return the name of the pack or index file with the specified sha1
+ * in its filename.  *base and *name are scratch space that must be
+ * provided by the caller.  which should be "pack" or "idx".
+ */
+static char *sha1_get_pack_name(const unsigned char *sha1,
+				struct strbuf *buf,
+				const char *which)
 {
 	strbuf_reset(buf);
 	strbuf_addf(buf, "%s/pack/pack-%s.%s", get_object_directory(),
-		    sha1_to_hex(sha1), ext);
+		    sha1_to_hex(sha1), which);
 	return buf->buf;
 }
 
 char *sha1_pack_name(const unsigned char *sha1)
 {
 	static struct strbuf buf = STRBUF_INIT;
-	return odb_pack_name(&buf, sha1, "pack");
+	return sha1_get_pack_name(sha1, &buf, "pack");
 }
 
 char *sha1_pack_index_name(const unsigned char *sha1)
 {
 	static struct strbuf buf = STRBUF_INIT;
-	return odb_pack_name(&buf, sha1, "idx");
+	return sha1_get_pack_name(sha1, &buf, "idx");
 }
 
 struct alternate_object_database *alt_odb_list;
@@ -662,7 +667,7 @@ static int freshen_file(const char *fn)
  * either does not exist on disk, or has a stale mtime and may be subject to
  * pruning).
  */
-int check_and_freshen_file(const char *fn, int freshen)
+static int check_and_freshen_file(const char *fn, int freshen)
 {
 	if (access(fn, F_OK))
 		return 0;
@@ -2701,17 +2706,6 @@ const unsigned char *nth_packed_object_sha1(struct packed_git *p,
 	}
 }
 
-const struct object_id *nth_packed_object_oid(struct object_id *oid,
-					      struct packed_git *p,
-					      uint32_t n)
-{
-	const unsigned char *hash = nth_packed_object_sha1(p, n);
-	if (!hash)
-		return NULL;
-	hashcpy(oid->hash, hash);
-	return oid;
-}
-
 void check_pack_index_ptr(const struct packed_git *p, const void *vptr)
 {
 	const unsigned char *ptr = vptr;
@@ -3758,15 +3752,15 @@ static int for_each_file_in_obj_subdir(int subdir_nr,
 		strbuf_setlen(path, baselen);
 		strbuf_addf(path, "/%s", de->d_name);
 
-		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2)  {
-			char hex[GIT_SHA1_HEXSZ+1];
-			struct object_id oid;
+		if (strlen(de->d_name) == 38)  {
+			char hex[41];
+			unsigned char sha1[20];
 
 			snprintf(hex, sizeof(hex), "%02x%s",
 				 subdir_nr, de->d_name);
-			if (!get_oid_hex(hex, &oid)) {
+			if (!get_sha1_hex(hex, sha1)) {
 				if (obj_cb) {
-					r = obj_cb(&oid, path->buf, data);
+					r = obj_cb(sha1, path->buf, data);
 					if (r)
 						break;
 				}
@@ -3872,13 +3866,13 @@ static int for_each_object_in_pack(struct packed_git *p, each_packed_object_fn c
 	int r = 0;
 
 	for (i = 0; i < p->num_objects; i++) {
-		struct object_id oid;
+		const unsigned char *sha1 = nth_packed_object_sha1(p, i);
 
-		if (!nth_packed_object_oid(&oid, p, i))
+		if (!sha1)
 			return error("unable to get sha1 of object %u in %s",
 				     i, p->pack_name);
 
-		r = cb(&oid, p, i, data);
+		r = cb(sha1, p, i, data);
 		if (r)
 			break;
 	}

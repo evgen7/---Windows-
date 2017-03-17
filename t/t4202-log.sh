@@ -398,7 +398,7 @@ cat > expect <<\EOF
 | |
 | |     Merge branch 'side'
 | |
-| * commit tags/side-2
+| * commit side
 | | Author: A U Thor <author@example.com>
 | |
 | |     side-2

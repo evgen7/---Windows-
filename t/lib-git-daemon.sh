@@ -46,8 +46,7 @@ start_git_daemon() {
 
 	say >&3 "Starting git daemon ..."
 	mkfifo git_daemon_output
-	${LIB_GIT_DAEMON_COMMAND:-git daemon} \
-		--listen=127.0.0.1 --port="$LIB_GIT_DAEMON_PORT" \
+	git daemon --listen=127.0.0.1 --port="$LIB_GIT_DAEMON_PORT" \
 		--reuseaddr --verbose \
 		--base-path="$GIT_DAEMON_DOCUMENT_ROOT_PATH" \
 		"$@" "$GIT_DAEMON_DOCUMENT_ROOT_PATH" \

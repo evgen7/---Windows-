@@ -292,7 +292,7 @@ int delete_reflog(const char *refname);
 
 /* iterate over reflog entries */
 typedef int each_reflog_ent_fn(
-		struct object_id *old_oid, struct object_id *new_oid,
+		unsigned char *old_sha1, unsigned char *new_sha1,
 		const char *committer, unsigned long timestamp,
 		int tz, const char *msg, void *cb_data);
 

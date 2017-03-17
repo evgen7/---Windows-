@@ -15,7 +15,6 @@
 #include "version.h"
 #include "trailer.h"
 #include "wt-status.h"
-#include "commit-slab.h"
 
 static struct ref_msg {
 	const char *gone;
@@ -1298,9 +1297,9 @@ static void populate_value(struct ref_array_item *ref)
 	ref->value = xcalloc(used_atom_cnt, sizeof(struct atom_value));
 
 	if (need_symref && (ref->flag & REF_ISSYMREF) && !ref->symref) {
-		struct object_id unused1;
+		unsigned char unused1[20];
 		ref->symref = resolve_refdup(ref->refname, RESOLVE_REF_READING,
-					     unused1.hash, NULL);
+					     unused1, NULL);
 		if (!ref->symref)
 			ref->symref = "";
 	}
@@ -1471,23 +1470,10 @@ static void get_ref_atom_value(struct ref_array_item *ref, int atom, struct atom
 	*v = &ref->value[atom];
 }
 
-/*
- * Unknown has to be "0" here, because that's the default value for
- * contains_cache slab entries that have not yet been assigned.
- */
 enum contains_result {
-	CONTAINS_UNKNOWN = 0,
-	CONTAINS_NO,
-	CONTAINS_YES
-};
-
-define_commit_slab(contains_cache, enum contains_result);
-
-struct ref_filter_cbdata {
-	struct ref_array *array;
-	struct ref_filter *filter;
-	struct contains_cache contains_cache;
-	struct contains_cache no_contains_cache;
+	CONTAINS_UNKNOWN = -1,
+	CONTAINS_NO = 0,
+	CONTAINS_YES = 1
 };
 
 /*
@@ -1518,24 +1504,24 @@ static int in_commit_list(const struct commit_list *want, struct commit *c)
  * Do not recurse to find out, though, but return -1 if inconclusive.
  */
 static enum contains_result contains_test(struct commit *candidate,
-					  const struct commit_list *want,
-					  struct contains_cache *cache)
+			    const struct commit_list *want)
 {
-	enum contains_result *cached = contains_cache_at(cache, candidate);
-
-	/* If we already have the answer cached, return that. */
-	if (*cached)
-		return *cached;
-
+	/* was it previously marked as containing a want commit? */
+	if (candidate->object.flags & TMP_MARK)
+		return 1;
+	/* or marked as not possibly containing a want commit? */
+	if (candidate->object.flags & UNINTERESTING)
+		return 0;
 	/* or are we it? */
 	if (in_commit_list(want, candidate)) {
-		*cached = CONTAINS_YES;
-		return CONTAINS_YES;
+		candidate->object.flags |= TMP_MARK;
+		return 1;
 	}
 
-	/* Otherwise, we don't know; prepare to recurse */
-	parse_commit_or_die(candidate);
-	return CONTAINS_UNKNOWN;
+	if (parse_commit(candidate) < 0)
+		return 0;
+
+	return -1;
 }
 
 static void push_to_contains_stack(struct commit *candidate, struct contains_stack *contains_stack)
@@ -1546,11 +1532,10 @@ static void push_to_contains_stack(struct commit *candidate, struct contains_sta
 }
 
 static enum contains_result contains_tag_algo(struct commit *candidate,
-					      const struct commit_list *want,
-					      struct contains_cache *cache)
+		const struct commit_list *want)
 {
 	struct contains_stack contains_stack = { 0, 0, NULL };
-	enum contains_result result = contains_test(candidate, want, cache);
+	int result = contains_test(candidate, want);
 
 	if (result != CONTAINS_UNKNOWN)
 		return result;
@@ -1562,16 +1547,16 @@ static enum contains_result contains_tag_algo(struct commit *candidate,
 		struct commit_list *parents = entry->parents;
 
 		if (!parents) {
-			*contains_cache_at(cache, commit) = CONTAINS_NO;
+			commit->object.flags |= UNINTERESTING;
 			contains_stack.nr--;
 		}
 		/*
 		 * If we just popped the stack, parents->item has been marked,
-		 * therefore contains_test will return a meaningful yes/no.
+		 * therefore contains_test will return a meaningful 0 or 1.
 		 */
-		else switch (contains_test(parents->item, want, cache)) {
+		else switch (contains_test(parents->item, want)) {
 		case CONTAINS_YES:
-			*contains_cache_at(cache, commit) = CONTAINS_YES;
+			commit->object.flags |= TMP_MARK;
 			contains_stack.nr--;
 			break;
 		case CONTAINS_NO:
@@ -1583,15 +1568,14 @@ static enum contains_result contains_tag_algo(struct commit *candidate,
 		}
 	}
 	free(contains_stack.contains_stack);
-	return contains_test(candidate, want, cache);
+	return contains_test(candidate, want);
 }
 
-static int commit_contains(struct ref_filter *filter, struct commit *commit,
-			   struct commit_list *list, struct contains_cache *cache)
+static int commit_contains(struct ref_filter *filter, struct commit *commit)
 {
 	if (filter->with_commit_tag_algo)
-		return contains_tag_algo(commit, list, cache) == CONTAINS_YES;
-	return is_descendant_of(commit, list);
+		return contains_tag_algo(commit, filter->with_commit);
+	return is_descendant_of(commit, filter->with_commit);
 }
 
 /*
@@ -1781,17 +1765,13 @@ static int ref_filter_handler(const char *refname, const struct object_id *oid, 
 	 * obtain the commit using the 'oid' available and discard all
 	 * non-commits early. The actual filtering is done later.
 	 */
-	if (filter->merge_commit || filter->with_commit || filter->no_commit || filter->verbose) {
+	if (filter->merge_commit || filter->with_commit || filter->verbose) {
 		commit = lookup_commit_reference_gently(oid->hash, 1);
 		if (!commit)
 			return 0;
-		/* We perform the filtering for the '--contains' option... */
+		/* We perform the filtering for the '--contains' option */
 		if (filter->with_commit &&
-		    !commit_contains(filter, commit, filter->with_commit, &ref_cbdata->contains_cache))
-			return 0;
-		/* ...or for the `--no-contains' option */
-		if (filter->no_commit &&
-		    commit_contains(filter, commit, filter->no_commit, &ref_cbdata->no_contains_cache))
+		    !commit_contains(filter, commit))
 			return 0;
 	}
 
@@ -1891,11 +1871,6 @@ int filter_refs(struct ref_array *array, struct ref_filter *filter, unsigned int
 		broken = 1;
 	filter->kind = type & FILTER_REFS_KIND_MASK;
 
-	if (filter->with_commit)
-		init_contains_cache(&ref_cbdata.contains_cache);
-	if (filter->no_commit)
-		init_contains_cache(&ref_cbdata.no_contains_cache);
-
 	/*  Simple per-ref filtering */
 	if (!filter->kind)
 		die("filter_refs: invalid type");
@@ -1918,10 +1893,6 @@ int filter_refs(struct ref_array *array, struct ref_filter *filter, unsigned int
 			head_ref(ref_filter_handler, &ref_cbdata);
 	}
 
-	if (filter->with_commit)
-		clear_contains_cache(&ref_cbdata.contains_cache);
-	if (filter->no_commit)
-		clear_contains_cache(&ref_cbdata.no_contains_cache);
 
 	/*  Filters that need revision walking */
 	if (filter->merge_commit)

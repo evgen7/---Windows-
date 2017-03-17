@@ -53,7 +53,6 @@ struct ref_filter {
 	const char **name_patterns;
 	struct sha1_array points_at;
 	struct commit_list *with_commit;
-	struct commit_list *no_commit;
 
 	enum {
 		REF_FILTER_MERGED_NONE = 0,
@@ -70,6 +69,11 @@ struct ref_filter {
 		lines;
 	int abbrev,
 		verbose;
+};
+
+struct ref_filter_cbdata {
+	struct ref_array *array;
+	struct ref_filter *filter;
 };
 
 /*  Macros for checking --merged and --no-merged options */

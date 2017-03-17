@@ -56,16 +56,6 @@ static struct string_list option_required_reference = STRING_LIST_INIT_NODUP;
 static struct string_list option_optional_reference = STRING_LIST_INIT_NODUP;
 static int option_dissociate;
 static int max_jobs = -1;
-static struct string_list submodule_spec;
-
-static int submodule_spec_cb(const struct option *opt, const char *arg, int unset)
-{
-	if (unset)
-		return -1;
-
-	string_list_append((struct string_list *)opt->value, arg);
-	return 0;
-}
 
 static struct option builtin_clone_options[] = {
 	OPT__VERBOSITY(&option_verbosity),
@@ -122,9 +112,6 @@ static struct option builtin_clone_options[] = {
 			TRANSPORT_FAMILY_IPV4),
 	OPT_SET_INT('6', "ipv6", &family, N_("use IPv6 addresses only"),
 			TRANSPORT_FAMILY_IPV6),
-	OPT_CALLBACK(0, "submodule-spec", &submodule_spec, N_("<pathspec>"),
-			N_("clone specific submodules. Pass multiple times for complex pathspecs"),
-			submodule_spec_cb),
 	OPT_END()
 };
 
@@ -529,7 +516,7 @@ static struct ref *find_remote_branch(const struct ref *refs, const char *branch
 }
 
 static struct ref *wanted_peer_refs(const struct ref *refs,
-		struct refspec *refspec, unsigned int refspec_count)
+		struct refspec *refspec)
 {
 	struct ref *head = copy_ref(find_ref_by_name(refs, "HEAD"));
 	struct ref *local_refs = head;
@@ -550,18 +537,13 @@ static struct ref *wanted_peer_refs(const struct ref *refs,
 			warning(_("Could not find remote branch %s to clone."),
 				option_branch);
 		else {
-			unsigned int i;
-			for (i = 0; i < refspec_count; i++)
-				get_fetch_map(remote_head, &refspec[i], &tail, 0);
+			get_fetch_map(remote_head, refspec, &tail, 0);
 
 			/* if --branch=tag, pull the requested tag explicitly */
 			get_fetch_map(remote_head, tag_refspec, &tail, 0);
 		}
-	} else {
-		unsigned int i;
-		for (i = 0; i < refspec_count; i++)
-			get_fetch_map(refs, &refspec[i], &tail, 0);
-	}
+	} else
+		get_fetch_map(refs, refspec, &tail, 0);
 
 	if (!option_mirror && !option_single_branch)
 		get_fetch_map(refs, tag_refspec, &tail, 0);
@@ -699,7 +681,7 @@ static void update_head(const struct ref *our, const struct ref *remote,
 
 static int checkout(int submodule_progress)
 {
-	struct object_id oid;
+	unsigned char sha1[20];
 	char *head;
 	struct lock_file *lock_file;
 	struct unpack_trees_options opts;
@@ -710,7 +692,7 @@ static int checkout(int submodule_progress)
 	if (option_no_checkout)
 		return 0;
 
-	head = resolve_refdup("HEAD", RESOLVE_REF_READING, oid.hash, NULL);
+	head = resolve_refdup("HEAD", RESOLVE_REF_READING, sha1, NULL);
 	if (!head) {
 		warning(_("remote HEAD refers to nonexistent ref, "
 			  "unable to checkout.\n"));
@@ -718,7 +700,7 @@ static int checkout(int submodule_progress)
 	}
 	if (!strcmp(head, "HEAD")) {
 		if (advice_detached_head)
-			detach_advice(oid_to_hex(&oid));
+			detach_advice(sha1_to_hex(sha1));
 	} else {
 		if (!starts_with(head, "refs/heads/"))
 			die(_("HEAD not found below refs/heads!"));
@@ -739,7 +721,7 @@ static int checkout(int submodule_progress)
 	opts.src_index = &the_index;
 	opts.dst_index = &the_index;
 
-	tree = parse_tree_indirect(oid.hash);
+	tree = parse_tree_indirect(sha1);
 	parse_tree(tree);
 	init_tree_desc(&t, tree->buffer, tree->size);
 	if (unpack_trees(1, &t, &opts) < 0)
@@ -749,22 +731,14 @@ static int checkout(int submodule_progress)
 		die(_("unable to write new index file"));
 
 	err |= run_hook_le(NULL, "post-checkout", sha1_to_hex(null_sha1),
-			   oid_to_hex(&oid), "1", NULL);
+			   sha1_to_hex(sha1), "1", NULL);
 
-	if (!err && (option_recursive || submodule_spec.nr > 0)) {
+	if (!err && option_recursive) {
 		struct argv_array args = ARGV_ARRAY_INIT;
-		argv_array_pushl(&args, "submodule", "update", NULL);
-
-		if (submodule_spec.nr > 0)
-			argv_array_pushf(&args, "--init-active");
-		else
-			argv_array_pushf(&args, "--init");
+		argv_array_pushl(&args, "submodule", "update", "--init", "--recursive", NULL);
 
 		if (option_shallow_submodules == 1)
 			argv_array_push(&args, "--depth=1");
-
-		if (option_recursive)
-			argv_array_pushf(&args, "--recursive");
 
 		if (max_jobs != -1)
 			argv_array_pushf(&args, "--jobs=%d", max_jobs);
@@ -882,9 +856,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	int submodule_progress;
 
 	struct refspec *refspec;
-	unsigned int refspec_count = 1;
-	const char **fetch_patterns;
-	const struct string_list *config_fetch_patterns;
+	const char *fetch_pattern;
 
 	packet_trace_identity("clone");
 	argc = parse_options(argc, argv, prefix, builtin_clone_options,
@@ -913,17 +885,6 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 		if (real_git_dir)
 			die(_("--bare and --separate-git-dir are incompatible."));
 		option_no_checkout = 1;
-	}
-
-	if (submodule_spec.nr > 0) {
-		struct string_list_item *item;
-		struct strbuf sb = STRBUF_INIT;
-		for_each_string_list_item(item, &submodule_spec) {
-			strbuf_addf(&sb, "submodule.active=%s",
-				    item->string);
-			string_list_append(&option_config,
-					   strbuf_detach(&sb, NULL));
-		}
 	}
 
 	if (!option_origin)
@@ -1041,21 +1002,9 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	if (option_required_reference.nr || option_optional_reference.nr)
 		setup_reference();
 
-	strbuf_addf(&key, "remote.%s.fetch", option_origin);
-	config_fetch_patterns = git_config_get_value_multi(key.buf);
-	if (config_fetch_patterns)
-		refspec_count = 1 + config_fetch_patterns->nr;
-	fetch_patterns = xcalloc(refspec_count, sizeof(*fetch_patterns));
-	fetch_patterns[0] = value.buf;
-	if (config_fetch_patterns) {
-		struct string_list_item *fp;
-		unsigned int i = 1;
-		for_each_string_list_item(fp, config_fetch_patterns)
-			fetch_patterns[i++] = fp->string;
-	}
-	refspec = parse_fetch_refspec(refspec_count, fetch_patterns);
+	fetch_pattern = value.buf;
+	refspec = parse_fetch_refspec(1, &fetch_pattern);
 
-	strbuf_reset(&key);
 	strbuf_reset(&value);
 
 	remote = remote_get(option_origin);
@@ -1109,7 +1058,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	refs = transport_get_remote_refs(transport);
 
 	if (refs) {
-		mapped_refs = wanted_peer_refs(refs, refspec, refspec_count);
+		mapped_refs = wanted_peer_refs(refs, refspec);
 		/*
 		 * transport_get_remote_refs() may return refs with null sha-1
 		 * in mapped_refs (see struct transport->get_refs_list
@@ -1198,7 +1147,6 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	strbuf_release(&value);
 	junk_mode = JUNK_LEAVE_ALL;
 
-	free(fetch_patterns);
 	free(refspec);
 	return err;
 }

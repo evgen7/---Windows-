@@ -12,7 +12,6 @@
 #include "diff.h"
 #include "revision.h"
 #include "split-index.h"
-#include "submodule.h"
 
 #define DO_REVS		1
 #define DO_NOREV	2
@@ -536,34 +535,6 @@ N_("git rev-parse --parseopt [<options>] -- [<args>...]\n"
    "\n"
    "Run \"git rev-parse --parseopt -h\" for more information on the first usage.");
 
-/*
- * Parse "opt" or "opt=<value>", setting value respectively to either
- * NULL or the string after "=".
- */
-static int opt_with_value(const char *arg, const char *opt, const char **value)
-{
-	if (skip_prefix(arg, opt, &arg)) {
-		if (!*arg) {
-			*value = NULL;
-			return 1;
-		}
-		if (*arg++ == '=') {
-			*value = arg;
-			return 1;
-		}
-	}
-	return 0;
-}
-
-static void handle_ref_opt(const char *pattern, const char *prefix)
-{
-	if (pattern)
-		for_each_glob_ref_in(show_reference, pattern, prefix, NULL);
-	else
-		for_each_ref_in(prefix, show_reference, NULL);
-	clear_ref_exclusion(&ref_excludes);
-}
-
 int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 {
 	int i, as_is = 0, verify = 0, quiet = 0, revs_count = 0, type = 0;
@@ -703,13 +674,14 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				flags |= GET_SHA1_QUIETLY;
 				continue;
 			}
-			if (opt_with_value(arg, "--short", &arg)) {
+			if (!strcmp(arg, "--short") ||
+			    starts_with(arg, "--short=")) {
 				filter &= ~(DO_FLAGS|DO_NOREV);
 				verify = 1;
 				abbrev = DEFAULT_ABBREV;
-				if (!arg)
+				if (!arg[7])
 					continue;
-				abbrev = strtoul(arg, NULL, 10);
+				abbrev = strtoul(arg + 8, NULL, 10);
 				if (abbrev < MINIMUM_ABBREV)
 					abbrev = MINIMUM_ABBREV;
 				else if (40 <= abbrev)
@@ -732,17 +704,17 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				symbolic = SHOW_SYMBOLIC_FULL;
 				continue;
 			}
-			if (opt_with_value(arg, "--abbrev-ref", &arg)) {
+			if (starts_with(arg, "--abbrev-ref") &&
+			    (!arg[12] || arg[12] == '=')) {
 				abbrev_ref = 1;
 				abbrev_ref_strict = warn_ambiguous_refs;
-				if (arg) {
-					if (!strcmp(arg, "strict"))
+				if (arg[12] == '=') {
+					if (!strcmp(arg + 13, "strict"))
 						abbrev_ref_strict = 1;
-					else if (!strcmp(arg, "loose"))
+					else if (!strcmp(arg + 13, "loose"))
 						abbrev_ref_strict = 0;
 					else
-						die("unknown mode for --abbrev-ref: %s",
-						    arg);
+						die("unknown mode for %s", arg);
 				}
 				continue;
 			}
@@ -750,8 +722,8 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				for_each_ref(show_reference, NULL);
 				continue;
 			}
-			if (skip_prefix(arg, "--disambiguate=", &arg)) {
-				for_each_abbrev(arg, show_abbrev, NULL);
+			if (starts_with(arg, "--disambiguate=")) {
+				for_each_abbrev(arg + 15, show_abbrev, NULL);
 				continue;
 			}
 			if (!strcmp(arg, "--bisect")) {
@@ -759,36 +731,52 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				for_each_ref_in("refs/bisect/good", anti_reference, NULL);
 				continue;
 			}
-			if (opt_with_value(arg, "--branches", &arg)) {
-				handle_ref_opt(arg, "refs/heads/");
+			if (starts_with(arg, "--branches=")) {
+				for_each_glob_ref_in(show_reference, arg + 11,
+					"refs/heads/", NULL);
+				clear_ref_exclusion(&ref_excludes);
 				continue;
 			}
-			if (opt_with_value(arg, "--tags", &arg)) {
-				handle_ref_opt(arg, "refs/tags/");
+			if (!strcmp(arg, "--branches")) {
+				for_each_branch_ref(show_reference, NULL);
+				clear_ref_exclusion(&ref_excludes);
 				continue;
 			}
-			if (skip_prefix(arg, "--glob=", &arg)) {
-				handle_ref_opt(arg, NULL);
+			if (starts_with(arg, "--tags=")) {
+				for_each_glob_ref_in(show_reference, arg + 7,
+					"refs/tags/", NULL);
+				clear_ref_exclusion(&ref_excludes);
 				continue;
 			}
-			if (opt_with_value(arg, "--remotes", &arg)) {
-				handle_ref_opt(arg, "refs/remotes/");
+			if (!strcmp(arg, "--tags")) {
+				for_each_tag_ref(show_reference, NULL);
+				clear_ref_exclusion(&ref_excludes);
 				continue;
 			}
-			if (skip_prefix(arg, "--exclude=", &arg)) {
-				add_ref_exclusion(&ref_excludes, arg);
+			if (starts_with(arg, "--glob=")) {
+				for_each_glob_ref(show_reference, arg + 7, NULL);
+				clear_ref_exclusion(&ref_excludes);
+				continue;
+			}
+			if (starts_with(arg, "--remotes=")) {
+				for_each_glob_ref_in(show_reference, arg + 10,
+					"refs/remotes/", NULL);
+				clear_ref_exclusion(&ref_excludes);
+				continue;
+			}
+			if (!strcmp(arg, "--remotes")) {
+				for_each_remote_ref(show_reference, NULL);
+				clear_ref_exclusion(&ref_excludes);
+				continue;
+			}
+			if (starts_with(arg, "--exclude=")) {
+				add_ref_exclusion(&ref_excludes, arg + 10);
 				continue;
 			}
 			if (!strcmp(arg, "--show-toplevel")) {
 				const char *work_tree = get_git_work_tree();
 				if (work_tree)
 					puts(work_tree);
-				continue;
-			}
-			if (!strcmp(arg, "--show-superproject-working-tree")) {
-				const char *superproject = get_superproject_working_tree();
-				if (superproject)
-					puts(superproject);
 				continue;
 			}
 			if (!strcmp(arg, "--show-prefix")) {
@@ -877,20 +865,20 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				}
 				continue;
 			}
-			if (skip_prefix(arg, "--since=", &arg)) {
-				show_datestring("--max-age=", arg);
+			if (starts_with(arg, "--since=")) {
+				show_datestring("--max-age=", arg+8);
 				continue;
 			}
-			if (skip_prefix(arg, "--after=", &arg)) {
-				show_datestring("--max-age=", arg);
+			if (starts_with(arg, "--after=")) {
+				show_datestring("--max-age=", arg+8);
 				continue;
 			}
-			if (skip_prefix(arg, "--before=", &arg)) {
-				show_datestring("--min-age=", arg);
+			if (starts_with(arg, "--before=")) {
+				show_datestring("--min-age=", arg+9);
 				continue;
 			}
-			if (skip_prefix(arg, "--until=", &arg)) {
-				show_datestring("--min-age=", arg);
+			if (starts_with(arg, "--until=")) {
+				show_datestring("--min-age=", arg+8);
 				continue;
 			}
 			if (show_flag(arg) && verify)
