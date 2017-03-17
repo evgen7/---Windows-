@@ -51,23 +51,6 @@
 #endif
 #endif
 
-/*
- * Under certain circumstances Git's source code is cleverer than the C
- * compiler when the latter warns about some "uninitialized value", e.g. when
- * a value is both initialized and used under the same condition.
- *
- * GCC can be fooled to not spit out this warning by using the construct:
- * "int value = value;". Other C compilers are not that easily fooled and would
- * require a #pragma (which is not portable, and would litter the source code).
- *
- * To keep things simple, we only fool GCC, and initialize such values instead
- * when compiling with other C compilers.
- */
-#ifdef __GNUC__
-#define FAKE_INIT(a, b, c) a b = b
-#else
-#define FAKE_INIT(a, b, c) a b = c
-#endif
 
 /*
  * BUILD_ASSERT_OR_ZERO - assert a build-time dependency, as an expression.
@@ -435,10 +418,6 @@ static inline char *git_find_last_dir_sep(const char *path)
 
 #ifndef query_user_email
 #define query_user_email() NULL
-#endif
-
-#ifndef git_program_data_config
-#define git_program_data_config() NULL
 #endif
 
 #if defined(__HP_cc) && (__HP_cc >= 61000)
@@ -869,8 +848,6 @@ extern FILE *xfopen(const char *path, const char *mode);
 extern FILE *xfdopen(int fd, const char *mode);
 extern int xmkstemp(char *template);
 extern int xmkstemp_mode(char *template, int mode);
-extern int odb_mkstemp(char *template, size_t limit, const char *pattern);
-extern int odb_pack_keep(char *name, size_t namesz, const unsigned char *sha1);
 extern char *xgetcwd(void);
 extern FILE *fopen_for_writing(const char *path);
 

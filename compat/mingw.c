@@ -928,17 +928,6 @@ revert_attrs:
 	return rc;
 }
 
-#undef strftime
-size_t mingw_strftime(char *s, size_t max,
-		      const char *format, const struct tm *tm)
-{
-	size_t ret = strftime(s, max, format, tm);
-
-	if (!ret && errno == EINVAL)
-		die("invalid strftime format: '%s'", format);
-	return ret;
-}
-
 unsigned int sleep (unsigned int seconds)
 {
 	Sleep(seconds*1000);
@@ -1018,30 +1007,8 @@ struct tm *localtime_r(const time_t *timep, struct tm *result)
 
 char *mingw_getcwd(char *pointer, int len)
 {
-	wchar_t cwd[MAX_PATH], wpointer[MAX_PATH];
-	DECLARE_PROC_ADDR(kernel32.dll, DWORD, GetFinalPathNameByHandleW,
-			  HANDLE, LPWSTR, DWORD, DWORD);
-	DWORD ret = GetCurrentDirectoryW(ARRAY_SIZE(cwd), cwd);
-
-	if (ret < 0 || ret >= ARRAY_SIZE(cwd))
-		return NULL;
-	ret = GetLongPathNameW(cwd, wpointer, ARRAY_SIZE(wpointer));
-	if (!ret && GetLastError() == ERROR_ACCESS_DENIED &&
-		INIT_PROC_ADDR(GetFinalPathNameByHandleW)) {
-		HANDLE hnd = CreateFileW(cwd, 0,
-			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-			OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-		if (hnd == INVALID_HANDLE_VALUE)
-			return NULL;
-		ret = GetFinalPathNameByHandleW(hnd, wpointer, ARRAY_SIZE(wpointer), 0);
-		CloseHandle(hnd);
-		if (!ret || ret >= ARRAY_SIZE(wpointer))
-			return NULL;
-		if (xwcstoutf(pointer, normalize_ntpath(wpointer), len) < 0)
-			return NULL;
-		return pointer;
-	}
-	if (!ret || ret >= ARRAY_SIZE(wpointer))
+	wchar_t wpointer[MAX_PATH];
+	if (!_wgetcwd(wpointer, ARRAY_SIZE(wpointer)))
 		return NULL;
 	if (xwcstoutf(pointer, wpointer, len) < 0)
 		return NULL;
@@ -1201,21 +1168,14 @@ static void free_path_split(char **path)
 static char *lookup_prog(const char *dir, const char *cmd, int isexe, int exe_only)
 {
 	char path[MAX_PATH];
-	wchar_t wpath[MAX_PATH];
-	snprintf(path, sizeof(path), "%s\\%s.exe", dir, cmd);
+	snprintf(path, sizeof(path), "%s/%s.exe", dir, cmd);
 
-	if (xutftowcs_path(wpath, path) < 0)
-		return NULL;
-
-	if (!isexe && _waccess(wpath, F_OK) == 0)
+	if (!isexe && access(path, F_OK) == 0)
 		return xstrdup(path);
-	wpath[wcslen(wpath)-4] = '\0';
-	if ((!exe_only || isexe) && _waccess(wpath, F_OK) == 0) {
-		if (!(GetFileAttributesW(wpath) & FILE_ATTRIBUTE_DIRECTORY)) {
-			path[strlen(path)-4] = '\0';
+	path[strlen(path)-4] = '\0';
+	if ((!exe_only || isexe) && access(path, F_OK) == 0)
+		if (!(GetFileAttributes(path) & FILE_ATTRIBUTE_DIRECTORY))
 			return xstrdup(path);
-		}
-	}
 	return NULL;
 }
 
@@ -1532,9 +1492,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	si.hStdError = winansi_get_osfhandle(fherr);
 
 	/* executables and the current directory don't support long paths */
-	if (*argv && !strcmp(cmd, *argv))
-		wcmd[0] = L'\0';
-	else if (xutftowcs_path(wcmd, cmd) < 0)
+	if (xutftowcs_path(wcmd, cmd) < 0)
 		return -1;
 	if (dir && xutftowcs_path(wdir, dir) < 0)
 		return -1;
@@ -1573,8 +1531,8 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	wenvblk = make_environment_block(deltaenv);
 
 	memset(&pi, 0, sizeof(pi));
-	ret = CreateProcessW(*wcmd ? wcmd : NULL, wargs, NULL, NULL, TRUE,
-		flags, wenvblk, dir ? wdir : NULL, &si, &pi);
+	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags,
+		wenvblk, dir ? wdir : NULL, &si, &pi);
 
 	free(wenvblk);
 	free(wargs);
@@ -2654,6 +2612,12 @@ int readlink(const char *path, char *buf, size_t bufsiz)
 	char tmpbuf[MAX_LONG_PATH];
 	int len;
 
+	/* fail if symlinks are disabled */
+	if (!has_symlinks) {
+		errno = ENOSYS;
+		return -1;
+	}
+
 	if (xutftowcs_long_path(wpath, path) < 0)
 		return -1;
 
@@ -2930,9 +2894,6 @@ static void setup_windows_environment(void)
 	 */
 	if (!(tmp = getenv("MSYS")) || !strstr(tmp, "winsymlinks:nativestrict"))
 		has_symlinks = 0;
-
-	if (!getenv("LC_ALL") && !getenv("LC_CTYPE") && !getenv("LANG"))
-		setenv("LC_CTYPE", "C", 1);
 }
 
 int handle_long_path(wchar_t *path, int len, int max_path, int expand)
@@ -3090,10 +3051,6 @@ static void maybe_redirect_std_handles(void)
 
 #if defined(_MSC_VER)
 
-#ifdef _DEBUG
-#include <crtdbg.h>
-#endif
-
 /*
  * This routine sits between wmain() and "main" in git.exe.
  * We receive UNICODE (wchar_t) values for argv and env.
@@ -3117,10 +3074,6 @@ int msc_startup(int argc, wchar_t **w_argv, wchar_t **w_env)
 	char *buffer = NULL;
 	int maxlen;
 	int k, exit_status;
-
-#ifdef _DEBUG
-	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
-#endif
 
 #ifdef USE_MSVC_CRTDBG
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
@@ -3277,23 +3230,4 @@ int uname(struct utsname *buf)
 	xsnprintf(buf->version, sizeof(buf->version),
 		  "%u", (v >> 16) & 0x7fff);
 	return 0;
-}
-
-const char *program_data_config(void)
-{
-	static struct strbuf path = STRBUF_INIT;
-	static unsigned initialized;
-
-	if (!initialized) {
-		const char *env = mingw_getenv("PROGRAMDATA");
-		const char *extra = "";
-		if (!env) {
-			env = mingw_getenv("ALLUSERSPROFILE");
-			extra = "/Application Data";
-		}
-		if (env)
-			strbuf_addf(&path, "%s%s/Git/config", env, extra);
-		initialized = 1;
-	}
-	return *path.buf ? path.buf : NULL;
 }
