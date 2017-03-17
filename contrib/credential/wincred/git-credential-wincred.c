@@ -75,8 +75,7 @@ static CredDeleteWT CredDeleteW;
 static void load_cred_funcs(void)
 {
 	/* load DLLs */
-	advapi = LoadLibraryExA("advapi32.dll", NULL,
-				LOAD_LIBRARY_SEARCH_SYSTEM32);
+	advapi = LoadLibrary("advapi32.dll");
 	if (!advapi)
 		die("failed to load advapi32.dll");
 
