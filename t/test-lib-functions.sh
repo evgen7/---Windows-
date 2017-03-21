@@ -136,17 +136,12 @@ test_tick () {
 	export GIT_COMMITTER_DATE GIT_AUTHOR_DATE
 }
 
-# Stop execution and start a shell. This is useful for debugging tests and
-# only makes sense together with "-v".
+# Stop execution and start a shell. This is useful for debugging tests.
 #
 # Be sure to remove all invocations of this command before submitting.
 
 test_pause () {
-	if test "$verbose" = t; then
-		"$SHELL_PATH" <&6 >&3 2>&4
-	else
-		error >&5 "test_pause requires --verbose"
-	fi
+	"$SHELL_PATH" <&6 >&5 2>&7
 }
 
 # Wrap git in gdb. Adding this to a command can make it easier to
@@ -154,7 +149,7 @@ test_pause () {
 #
 # Example: "debug git checkout master".
 debug () {
-	 GIT_TEST_GDB=1 "$@"
+	 GIT_TEST_GDB=1 "$@" <&6 >&5 2>&7
 }
 
 # Call test_commit with the arguments
@@ -796,7 +791,7 @@ test_create_repo () {
 	mkdir -p "$repo"
 	(
 		cd "$repo" || error "Cannot setup test environment"
-		"$GIT_EXEC_PATH/git$X" init "--template=$GIT_BUILD_DIR/templates/blt/" >&3 2>&4 ||
+		"$GIT_EXEC_PATH/git-init" "--template=$GIT_BUILD_DIR/templates/blt/" >&3 2>&4 ||
 		error "cannot run git init -- have you built things yet?"
 		mv .git/hooks .git/hooks-disabled
 	) || exit

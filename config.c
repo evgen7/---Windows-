@@ -13,6 +13,7 @@
 #include "hashmap.h"
 #include "string-list.h"
 #include "utf8.h"
+#include "dir.h"
 
 struct config_source {
 	struct config_source *prev;
@@ -170,9 +171,94 @@ static int handle_path_include(const char *path, struct config_include_data *inc
 	return ret;
 }
 
+static int prepare_include_condition_pattern(struct strbuf *pat)
+{
+	struct strbuf path = STRBUF_INIT;
+	char *expanded;
+	int prefix = 0;
+
+	expanded = expand_user_path(pat->buf);
+	if (expanded) {
+		strbuf_reset(pat);
+		strbuf_addstr(pat, expanded);
+		free(expanded);
+	}
+
+	if (pat->buf[0] == '.' && is_dir_sep(pat->buf[1])) {
+		const char *slash;
+
+		if (!cf || !cf->path)
+			return error(_("relative config include "
+				       "conditionals must come from files"));
+
+		strbuf_add_absolute_path(&path, cf->path);
+		slash = find_last_dir_sep(path.buf);
+		if (!slash)
+			die("BUG: how is this possible?");
+		strbuf_splice(pat, 0, 1, path.buf, slash - path.buf);
+		prefix = slash - path.buf + 1 /* slash */;
+	} else if (!is_absolute_path(pat->buf))
+		strbuf_insert(pat, 0, "**/", 3);
+
+	if (pat->len && is_dir_sep(pat->buf[pat->len - 1]))
+		strbuf_addstr(pat, "**");
+
+	strbuf_release(&path);
+	return prefix;
+}
+
+static int include_by_gitdir(const char *cond, size_t cond_len, int icase)
+{
+	struct strbuf text = STRBUF_INIT;
+	struct strbuf pattern = STRBUF_INIT;
+	int ret = 0, prefix;
+
+	strbuf_add_absolute_path(&text, get_git_dir());
+	strbuf_add(&pattern, cond, cond_len);
+	prefix = prepare_include_condition_pattern(&pattern);
+
+	if (prefix < 0)
+		goto done;
+
+	if (prefix > 0) {
+		/*
+		 * perform literal matching on the prefix part so that
+		 * any wildcard character in it can't create side effects.
+		 */
+		if (text.len < prefix)
+			goto done;
+		if (!icase && strncmp(pattern.buf, text.buf, prefix))
+			goto done;
+		if (icase && strncasecmp(pattern.buf, text.buf, prefix))
+			goto done;
+	}
+
+	ret = !wildmatch(pattern.buf + prefix, text.buf + prefix,
+			 icase ? WM_CASEFOLD : 0, NULL);
+
+done:
+	strbuf_release(&pattern);
+	strbuf_release(&text);
+	return ret;
+}
+
+static int include_condition_is_true(const char *cond, size_t cond_len)
+{
+
+	if (skip_prefix_mem(cond, cond_len, "gitdir:", &cond, &cond_len))
+		return include_by_gitdir(cond, cond_len, 0);
+	else if (skip_prefix_mem(cond, cond_len, "gitdir/i:", &cond, &cond_len))
+		return include_by_gitdir(cond, cond_len, 1);
+
+	/* unknown conditionals are always false */
+	return 0;
+}
+
 int git_config_include(const char *var, const char *value, void *data)
 {
 	struct config_include_data *inc = data;
+	const char *cond, *key;
+	int cond_len;
 	int ret;
 
 	/*
@@ -185,6 +271,12 @@ int git_config_include(const char *var, const char *value, void *data)
 
 	if (!strcmp(var, "include.path"))
 		ret = handle_path_include(value, inc);
+
+	if (!parse_config_key(var, "includeif", &cond, &cond_len, &key) &&
+	    (cond && include_condition_is_true(cond, cond_len)) &&
+	    !strcmp(key, "path"))
+		ret = handle_path_include(value, inc);
+
 	return ret;
 }
 
@@ -1105,8 +1197,16 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
+	if (!strcmp(var, "core.hidedotfiles")) {
+		if (value && !strcasecmp(value, "dotgitonly"))
+			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
+		else
+			hide_dotfiles = git_config_bool(var, value);
+		return 0;
+	}
+
 	/* Add other config variables here and to Documentation/config.txt. */
-	return platform_core_config(var, value);
+	return 0;
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1402,16 +1502,9 @@ static int do_git_config_sequence(config_fn_t fn, void *data)
 	char *repo_config = have_git_dir() ? git_pathdup("config") : NULL;
 
 	current_parsing_scope = CONFIG_SCOPE_SYSTEM;
-	if (git_config_system()) {
-		if (git_program_data_config() &&
-		    !access_or_die(git_program_data_config(), R_OK, 0))
-			ret += git_config_from_file(fn,
-						    git_program_data_config(),
-						    data);
-		if (!access_or_die(git_etc_gitconfig(), R_OK, 0))
-			ret += git_config_from_file(fn, git_etc_gitconfig(),
-						    data);
-	}
+	if (git_config_system() && !access_or_die(git_etc_gitconfig(), R_OK, 0))
+		ret += git_config_from_file(fn, git_etc_gitconfig(),
+					    data);
 
 	current_parsing_scope = CONFIG_SCOPE_GLOBAL;
 	if (xdg_config && !access_or_die(xdg_config, R_OK, ACCESS_EACCES_OK))
@@ -1500,6 +1593,31 @@ static void configset_iter(struct config_set *cs, config_fn_t fn, void *data)
 
 		current_config_kvi = NULL;
 	}
+}
+
+void read_early_config(config_fn_t cb, void *data)
+{
+	struct strbuf buf = STRBUF_INIT;
+
+	git_config_with_options(cb, data, NULL, 1);
+
+	/*
+	 * When setup_git_directory() was not yet asked to discover the
+	 * GIT_DIR, we ask discover_git_directory() to figure out whether there
+	 * is any repository config we should use (but unlike
+	 * setup_git_directory_gently(), no global state is changed, most
+	 * notably, the current working directory is still the same after the
+	 * call).
+	 */
+	if (!have_git_dir() && discover_git_directory(&buf)) {
+		struct git_config_source repo_config;
+
+		memset(&repo_config, 0, sizeof(repo_config));
+		strbuf_addstr(&buf, "/config");
+		repo_config.file = buf.buf;
+		git_config_with_options(cb, data, &repo_config, 1);
+	}
+	strbuf_release(&buf);
 }
 
 static void git_config_check_init(void);
@@ -1802,6 +1920,19 @@ int git_config_get_pathname(const char *key, const char **dest)
 	return ret;
 }
 
+int git_config_get_expiry(const char *key, const char **output)
+{
+	int ret = git_config_get_string_const(key, output);
+	if (ret)
+		return ret;
+	if (strcmp(*output, "now")) {
+		unsigned long now = approxidate("now");
+		if (approxidate(*output) >= now)
+			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
+	}
+	return ret;
+}
+
 int git_config_get_untracked_cache(void)
 {
 	int val = -1;
@@ -1818,9 +1949,34 @@ int git_config_get_untracked_cache(void)
 		if (!strcasecmp(v, "keep"))
 			return -1;
 
-		error("unknown core.untrackedCache value '%s'; "
-		      "using 'keep' default value", v);
+		error(_("unknown core.untrackedCache value '%s'; "
+			"using 'keep' default value"), v);
 		return -1;
+	}
+
+	return -1; /* default value */
+}
+
+int git_config_get_split_index(void)
+{
+	int val;
+
+	if (!git_config_get_maybe_bool("core.splitindex", &val))
+		return val;
+
+	return -1; /* default value */
+}
+
+int git_config_get_max_percent_split_change(void)
+{
+	int val = -1;
+
+	if (!git_config_get_int("splitindex.maxpercentchange", &val)) {
+		if (0 <= val && val <= 100)
+			return val;
+
+		return error(_("splitIndex.maxPercentChange value '%d' "
+			       "should be between 0 and 100"), val);
 	}
 
 	return -1; /* default value */

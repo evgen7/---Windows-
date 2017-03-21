@@ -947,6 +947,11 @@ static int get_sha1_1(const char *name, int len, unsigned char *sha1, unsigned l
 	if (!ret)
 		return 0;
 
+	if (*name == '-' && len == 1) {
+		name = "@{-1}";
+		len = 5;
+	}
+
 	ret = get_sha1_basic(name, len, sha1, lookup_flags);
 	if (!ret)
 		return 0;
@@ -1051,7 +1056,7 @@ struct grab_nth_branch_switch_cbdata {
 	struct strbuf buf;
 };
 
-static int grab_nth_branch_switch(unsigned char *osha1, unsigned char *nsha1,
+static int grab_nth_branch_switch(struct object_id *ooid, struct object_id *noid,
 				  const char *email, unsigned long timestamp, int tz,
 				  const char *message, void *cb_data)
 {

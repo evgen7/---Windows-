@@ -496,7 +496,7 @@ static const char *prepare_index(int argc, const char **argv, const char *prefix
 static int run_status(FILE *fp, const char *index_file, const char *prefix, int nowarn,
 		      struct wt_status *s)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 
 	if (s->relative_paths)
 		s->prefix = prefix;
@@ -509,9 +509,9 @@ static int run_status(FILE *fp, const char *index_file, const char *prefix, int 
 	s->index_file = index_file;
 	s->fp = fp;
 	s->nowarn = nowarn;
-	s->is_initial = get_sha1(s->reference, sha1) ? 1 : 0;
+	s->is_initial = get_sha1(s->reference, oid.hash) ? 1 : 0;
 	if (!s->is_initial)
-		hashcpy(s->sha1_commit, sha1);
+		hashcpy(s->sha1_commit, oid.hash);
 	s->status_format = status_format;
 	s->ignore_submodule_arg = ignore_submodule_arg;
 
@@ -885,7 +885,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 		commitable = run_status(s->fp, index_file, prefix, 1, s);
 		s->use_color = saved_color_setting;
 	} else {
-		unsigned char sha1[20];
+		struct object_id oid;
 		const char *parent = "HEAD";
 
 		if (!active_nr && read_cache() < 0)
@@ -894,7 +894,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 		if (amend)
 			parent = "HEAD^1";
 
-		if (get_sha1(parent, sha1)) {
+		if (get_sha1(parent, oid.hash)) {
 			int i, ita_nr = 0;
 
 			for (i = 0; i < active_nr; i++)
@@ -1330,10 +1330,9 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
-	static int no_lock_index = 0;
 	static struct wt_status s;
 	int fd;
-	unsigned char sha1[20];
+	struct object_id oid;
 	static struct option builtin_status_options[] = {
 		OPT__VERBOSE(&verbose, N_("be verbose")),
 		OPT_SET_INT('s', "short", &status_format,
@@ -1358,8 +1357,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
-		OPT_BOOL(0, "no-lock-index", &no_lock_index,
-			 N_("do not lock the index")),
 		OPT_END(),
 	};
 
@@ -1373,11 +1370,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
 
-	if (no_lock_index)
-		setenv("GIT_LOCK_INDEX", "false", 1);
-	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
-		no_lock_index = 1;
-
 	handle_untracked_files_arg(&s);
 	if (show_ignored_in_status)
 		s.show_ignored_files = 1;
@@ -1385,15 +1377,14 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
-	enable_fscache(1);
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
-	fd = no_lock_index ? -1 : hold_locked_index(&index_lock, 0);
+	fd = hold_locked_index(&index_lock, 0);
 
-	s.is_initial = get_sha1(s.reference, sha1) ? 1 : 0;
+	s.is_initial = get_sha1(s.reference, oid.hash) ? 1 : 0;
 	if (!s.is_initial)
-		hashcpy(s.sha1_commit, sha1);
+		hashcpy(s.sha1_commit, oid.hash);
 
 	s.ignore_submodule_arg = ignore_submodule_arg;
 	s.status_format = status_format;
@@ -1427,19 +1418,19 @@ static const char *implicit_ident_advice(void)
 
 }
 
-static void print_summary(const char *prefix, const unsigned char *sha1,
+static void print_summary(const char *prefix, const struct object_id *oid,
 			  int initial_commit)
 {
 	struct rev_info rev;
 	struct commit *commit;
 	struct strbuf format = STRBUF_INIT;
-	unsigned char junk_sha1[20];
+	struct object_id junk_oid;
 	const char *head;
 	struct pretty_print_context pctx = {0};
 	struct strbuf author_ident = STRBUF_INIT;
 	struct strbuf committer_ident = STRBUF_INIT;
 
-	commit = lookup_commit(sha1);
+	commit = lookup_commit(oid->hash);
 	if (!commit)
 		die(_("couldn't look up newly created commit"));
 	if (parse_commit(commit))
@@ -1486,7 +1477,7 @@ static void print_summary(const char *prefix, const unsigned char *sha1,
 	rev.diffopt.break_opt = 0;
 	diff_setup_done(&rev.diffopt);
 
-	head = resolve_ref_unsafe("HEAD", 0, junk_sha1, NULL);
+	head = resolve_ref_unsafe("HEAD", 0, junk_oid.hash, NULL);
 	if (!strcmp(head, "HEAD"))
 		head = _("detached HEAD");
 	else
@@ -1531,8 +1522,8 @@ static int git_commit_config(const char *k, const char *v, void *cb)
 	return git_status_config(k, v, s);
 }
 
-static int run_rewrite_hook(const unsigned char *oldsha1,
-			    const unsigned char *newsha1)
+static int run_rewrite_hook(const struct object_id *oldoid,
+			    const struct object_id *newoid)
 {
 	struct child_process proc = CHILD_PROCESS_INIT;
 	const char *argv[3];
@@ -1553,7 +1544,7 @@ static int run_rewrite_hook(const unsigned char *oldsha1,
 	code = start_command(&proc);
 	if (code)
 		return code;
-	strbuf_addf(&sb, "%s %s\n", sha1_to_hex(oldsha1), sha1_to_hex(newsha1));
+	strbuf_addf(&sb, "%s %s\n", oid_to_hex(oldoid), oid_to_hex(newoid));
 	sigchain_push(SIGPIPE, SIG_IGN);
 	write_in_full(proc.in, sb.buf, sb.len);
 	close(proc.in);
@@ -1645,7 +1636,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	struct strbuf author_ident = STRBUF_INIT;
 	const char *index_file, *reflog_msg;
 	char *nl;
-	unsigned char sha1[20];
+	struct object_id oid;
 	struct commit_list *parents = NULL;
 	struct stat statbuf;
 	struct commit *current_head = NULL;
@@ -1660,10 +1651,10 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	status_format = STATUS_FORMAT_NONE; /* Ignore status.short */
 	s.colopts = 0;
 
-	if (get_sha1("HEAD", sha1))
+	if (get_sha1("HEAD", oid.hash))
 		current_head = NULL;
 	else {
-		current_head = lookup_commit_or_die(sha1, "HEAD");
+		current_head = lookup_commit_or_die(oid.hash, "HEAD");
 		if (parse_commit(current_head))
 			die(_("could not parse HEAD commit"));
 	}
@@ -1768,7 +1759,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	}
 
 	if (commit_tree_extended(sb.buf, sb.len, active_cache_tree->sha1,
-			 parents, sha1, author_ident.buf, sign_commit, extra)) {
+			 parents, oid.hash, author_ident.buf, sign_commit, extra)) {
 		rollback_index_files();
 		die(_("failed to write commit object"));
 	}
@@ -1785,7 +1776,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 
 	transaction = ref_transaction_begin(&err);
 	if (!transaction ||
-	    ref_transaction_update(transaction, "HEAD", sha1,
+	    ref_transaction_update(transaction, "HEAD", oid.hash,
 				   current_head
 				   ? current_head->object.oid.hash : null_sha1,
 				   0, sb.buf, &err) ||
@@ -1814,13 +1805,13 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		cfg = init_copy_notes_for_rewrite("amend");
 		if (cfg) {
 			/* we are amending, so current_head is not NULL */
-			copy_note_for_rewrite(cfg, current_head->object.oid.hash, sha1);
+			copy_note_for_rewrite(cfg, current_head->object.oid.hash, oid.hash);
 			finish_copy_notes_for_rewrite(cfg, "Notes added by 'git commit --amend'");
 		}
-		run_rewrite_hook(current_head->object.oid.hash, sha1);
+		run_rewrite_hook(&current_head->object.oid, &oid);
 	}
 	if (!quiet)
-		print_summary(prefix, sha1, !current_head);
+		print_summary(prefix, &oid, !current_head);
 
 	strbuf_release(&err);
 	return 0;

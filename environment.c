@@ -62,6 +62,7 @@ int core_apply_sparse_checkout;
 int merge_log_config = -1;
 int precomposed_unicode = -1; /* see probe_utf8_pathname_composition() */
 unsigned long pack_size_limit_cfg;
+enum hide_dotfiles_type hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
 enum log_refs_config log_all_ref_updates = LOG_REFS_UNSET;
 
 #ifndef PROTECT_HFS_DEFAULT
@@ -166,8 +167,11 @@ static void setup_git_env(void)
 	const char *replace_ref_base;
 
 	git_dir = getenv(GIT_DIR_ENVIRONMENT);
-	if (!git_dir)
+	if (!git_dir) {
+		if (!startup_info->have_repository)
+			die("BUG: setup_git_env called without repository");
 		git_dir = DEFAULT_GIT_DIR_ENVIRONMENT;
+	}
 	gitfile = read_gitfile(git_dir);
 	git_dir = xstrdup(gitfile ? gitfile : git_dir);
 	if (get_common_dir(&sb, git_dir))
@@ -213,6 +217,8 @@ const char *get_git_dir(void)
 
 const char *get_git_common_dir(void)
 {
+	if (!git_dir)
+		setup_git_env();
 	return git_common_dir;
 }
 
@@ -295,18 +301,16 @@ int odb_mkstemp(char *template, size_t limit, const char *pattern)
 	return xmkstemp_mode(template, mode);
 }
 
-int odb_pack_keep(char *name, size_t namesz, const unsigned char *sha1)
+int odb_pack_keep(const char *name)
 {
 	int fd;
 
-	snprintf(name, namesz, "%s/pack/pack-%s.keep",
-		 get_object_directory(), sha1_to_hex(sha1));
 	fd = open(name, O_RDWR|O_CREAT|O_EXCL, 0600);
 	if (0 <= fd)
 		return fd;
 
 	/* slow path */
-	safe_create_leading_directories(name);
+	safe_create_leading_directories_const(name);
 	return open(name, O_RDWR|O_CREAT|O_EXCL, 0600);
 }
 

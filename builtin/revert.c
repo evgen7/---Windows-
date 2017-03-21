@@ -54,6 +54,24 @@ static int option_parse_x(const struct option *opt,
 	return 0;
 }
 
+static int option_parse_m(const struct option *opt,
+			  const char *arg, int unset)
+{
+	struct replay_opts *replay = opt->value;
+	char *end;
+
+	if (unset) {
+		replay->mainline = 0;
+		return 0;
+	}
+
+	replay->mainline = strtol(arg, &end, 10);
+	if (*end || replay->mainline <= 0)
+		return opterror(opt, "expects a number greater than zero", 0);
+
+	return 0;
+}
+
 LAST_ARG_MUST_BE_NULL
 static void verify_opt_compatible(const char *me, const char *base_opt, ...)
 {
@@ -84,7 +102,8 @@ static int run_sequencer(int argc, const char **argv, struct replay_opts *opts)
 		OPT_BOOL('e', "edit", &opts->edit, N_("edit the commit message")),
 		OPT_NOOP_NOARG('r', NULL),
 		OPT_BOOL('s', "signoff", &opts->signoff, N_("add Signed-off-by:")),
-		OPT_INTEGER('m', "mainline", &opts->mainline, N_("parent number")),
+		OPT_CALLBACK('m', "mainline", opts, N_("parent-number"),
+			     N_("select mainline parent"), option_parse_m),
 		OPT_RERERE_AUTOUPDATE(&opts->allow_rerere_auto),
 		OPT_STRING(0, "strategy", &opts->strategy, N_("strategy"), N_("merge strategy")),
 		OPT_CALLBACK('X', "strategy-option", &opts, N_("option"),
@@ -155,8 +174,6 @@ static int run_sequencer(int argc, const char **argv, struct replay_opts *opts)
 		opts->revs->no_walk = REVISION_WALK_NO_WALK_UNSORTED;
 		if (argc < 2)
 			usage_with_options(usage_str, options);
-		if (!strcmp(argv[1], "-"))
-			argv[1] = "@{-1}";
 		memset(&s_r_opt, 0, sizeof(s_r_opt));
 		s_r_opt.assume_dashdash = 1;
 		argc = setup_revisions(argc, argv, opts->revs, &s_r_opt);

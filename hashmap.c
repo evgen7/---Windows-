@@ -50,16 +50,13 @@ unsigned int memihash(const void *buf, size_t len)
 	return hash;
 }
 
-/*
- * Incoporate another chunk of data into a memihash
- * computation.
- */ 
-unsigned int memihash_cont(unsigned int hash_seed, const void *buf, size_t len)
+/* Incoporate another chunk of data into a memihash computation. */
+unsigned int memihash_continue(unsigned int hash,
+			       const void *buf, size_t len)
 {
-	unsigned int hash = hash_seed;
-	unsigned char *ucbuf = (unsigned char *) buf;
+	const unsigned char *p = buf;
 	while (len--) {
-		unsigned int c = *ucbuf++;
+		unsigned int c = *p++;
 		if (c >= 'a' && c <= 'z')
 			c -= 'a' - 'A';
 		hash = (hash * FNV32_PRIME) ^ c;
