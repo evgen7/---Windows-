@@ -148,7 +148,7 @@ test_expect_success \
 	'test $(git tag -l mytag) = mytag'
 
 test_expect_success \
-	'listing tags using a non-matching pattern should suceed' \
+	'listing tags using a non-matching pattern should succeed' \
 	'git tag -l xxx'
 
 test_expect_success \
@@ -1304,6 +1304,13 @@ test_expect_success GPG \
 	'test_config user.signingkey BobTheMouse &&
 	test_must_fail git tag -s -m tail tag-gpg-failure'
 
+# try to produce invalid signature
+test_expect_success GPG \
+	'git tag -s fails if gpg is misconfigured (bad signature format)' \
+	'test_config gpg.program echo &&
+	 test_must_fail git tag -s -m tail tag-gpg-failure'
+
+
 # try to verify without gpg:
 
 rm -rf gpghome
@@ -1582,6 +1589,10 @@ test_expect_success 'mixing incompatibles modes and options is forbidden' '
 	test_must_fail git tag -l -m msg &&
 	test_must_fail git tag -l -F some file &&
 	test_must_fail git tag -v -s &&
+	test_must_fail git tag --contains tag-tree &&
+	test_must_fail git tag --contains tag-blob &&
+	test_must_fail git tag --no-contains tag-tree &&
+	test_must_fail git tag --no-contains tag-blob &&
 	test_must_fail git tag --contains --no-contains
 '
 
@@ -1608,6 +1619,7 @@ test_expect_success '--points-at can be used in non-list mode' '
 '
 
 test_expect_success '--points-at is a synonym for --points-at HEAD' '
+	echo v4.0 >expect &&
 	git tag --points-at >actual &&
 	test_cmp expect actual
 '
@@ -1895,6 +1907,10 @@ test_expect_success '--merged can be used in non-list mode' '
 	EOF
 	git tag --merged=mergetest-2 "mergetest*" >actual &&
 	test_cmp expect actual
+'
+
+test_expect_success '--merged is incompatible with --no-merged' '
+	test_must_fail git tag --merged HEAD --no-merged HEAD
 '
 
 test_expect_success '--merged shows merged tags' '

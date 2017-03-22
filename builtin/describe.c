@@ -9,6 +9,7 @@
 #include "diff.h"
 #include "hashmap.h"
 #include "argv-array.h"
+#include "run-command.h"
 
 #define SEEN		(1u << 0)
 #define MAX_TAGS	(FLAG_BITS - 1)
@@ -31,12 +32,7 @@ static int have_util;
 static struct string_list patterns = STRING_LIST_INIT_NODUP;
 static struct string_list exclude_patterns = STRING_LIST_INIT_NODUP;
 static int always;
-static const char *dirty;
-
-/* diff-index command arguments to check if working tree is dirty. */
-static const char *diff_index_args[] = {
-	"diff-index", "--quiet", "HEAD", "--", NULL
-};
+static const char *append, *dirty, *broken;
 
 struct commit_name {
 	struct hashmap_entry entry;
@@ -292,8 +288,8 @@ static void describe(const char *arg, int last_one)
 		display_name(n);
 		if (longformat)
 			show_suffix(0, n->tag ? &n->tag->tagged->oid : &oid);
-		if (dirty)
-			printf("%s", dirty);
+		if (append)
+			printf("%s", append);
 		printf("\n");
 		return;
 	}
@@ -369,8 +365,8 @@ static void describe(const char *arg, int last_one)
 		struct object_id *oid = &cmit->object.oid;
 		if (always) {
 			printf("%s", find_unique_abbrev(oid->hash, abbrev));
-			if (dirty)
-				printf("%s", dirty);
+			if (append)
+				printf("%s", append);
 			printf("\n");
 			return;
 		}
@@ -413,8 +409,8 @@ static void describe(const char *arg, int last_one)
 	display_name(all_matches[0].name);
 	if (abbrev)
 		show_suffix(all_matches[0].depth, &cmit->object.oid);
-	if (dirty)
-		printf("%s", dirty);
+	if (append)
+		printf("%s", append);
 	printf("\n");
 
 	if (!last_one)
@@ -445,6 +441,9 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 		{OPTION_STRING, 0, "dirty",  &dirty, N_("mark"),
 			N_("append <mark> on dirty working tree (default: \"-dirty\")"),
 			PARSE_OPT_OPTARG, NULL, (intptr_t) "-dirty"},
+		{OPTION_STRING, 0, "broken",  &broken, N_("mark"),
+			N_("append <mark> on broken working tree (default: \"-broken\")"),
+			PARSE_OPT_OPTARG, NULL, (intptr_t) "-broken"},
 		OPT_END(),
 	};
 
@@ -493,9 +492,34 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 		die(_("No names found, cannot describe anything."));
 
 	if (argc == 0) {
-		if (dirty) {
+		if (broken) {
+			struct child_process cp = CHILD_PROCESS_INIT;
+			argv_array_pushl(&cp.args, "diff-index", "--quiet", "HEAD", "--", NULL);
+			cp.git_cmd = 1;
+			cp.no_stdin = 1;
+			cp.no_stdout = 1;
+
+			if (!dirty)
+				dirty = "-dirty";
+
+			switch (run_command(&cp)) {
+			case 0:
+				append = NULL;
+				break;
+			case 1:
+				/* keep dirty as is */
+				append = dirty;
+				break;
+			default:
+				/* diff-index aborted abnormally */
+				append = broken;
+			}
+		} else if (dirty) {
+			struct argv_array args = ARGV_ARRAY_INIT;
 			static struct lock_file index_lock;
 			int fd;
+
+			argv_array_pushl(&args, "diff-index", "--quiet", "HEAD", "--", NULL);
 
 			read_cache_preload(NULL);
 			refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED,
@@ -504,13 +528,16 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			if (0 <= fd)
 				update_index_if_able(&the_index, &index_lock);
 
-			if (!cmd_diff_index(ARRAY_SIZE(diff_index_args) - 1,
-					    diff_index_args, prefix))
-				dirty = NULL;
+			if (cmd_diff_index(args.argc, args.argv, prefix))
+				append = dirty;
+			else
+				append = NULL;
 		}
 		describe("HEAD", 1);
 	} else if (dirty) {
 		die(_("--dirty is incompatible with commit-ishes"));
+	} else if (broken) {
+		die(_("--broken is incompatible with commit-ishes"));
 	} else {
 		while (argc-- > 0)
 			describe(*argv++, argc == 0);

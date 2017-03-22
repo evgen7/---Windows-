@@ -8,12 +8,10 @@
 
 #include "compat/win32/lazyload.h"
 
-static inline int file_attr_to_st_mode (DWORD attr, DWORD tag)
+static inline int file_attr_to_st_mode (DWORD attr)
 {
 	int fMode = S_IREAD;
-	if ((attr & FILE_ATTRIBUTE_REPARSE_POINT) && tag == IO_REPARSE_TAG_SYMLINK)
-		fMode |= S_IFLNK;
-	else if (attr & FILE_ATTRIBUTE_DIRECTORY)
+	if (attr & FILE_ATTRIBUTE_DIRECTORY)
 		fMode |= S_IFDIR;
 	else
 		fMode |= S_IFREG;

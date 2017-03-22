@@ -22,7 +22,7 @@
 static const char * const git_tag_usage[] = {
 	N_("git tag [-a | -s | -u <key-id>] [-f] [-m <msg> | -F <file>] <tagname> [<head>]"),
 	N_("git tag -d <tagname>..."),
-	N_("git tag -l [-n[<num>]] [--[no-]contains <commit>] [--points-at <object>]"
+	N_("git tag -l [-n[<num>]] [--contains <commit>] [--no-contains <commit>] [--points-at <object>]"
 		"\n\t\t[--format=<format>] [--[no-]merged [<commit>]] [<pattern>...]"),
 	N_("git tag -v [--format=<format>] <tagname>..."),
 	NULL
@@ -457,14 +457,16 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 	}
 	create_tag_object = (opt.sign || annotate || msg.given || msgfile);
 
-	if (!cmdmode && !create_tag_object) {
+	if (!cmdmode) {
 		if (argc == 0)
 			cmdmode = 'l';
-		else if (filter.with_commit || filter.no_commit || filter.points_at.nr || filter.merge_commit || filter.lines != -1)
+		else if (filter.with_commit || filter.no_commit ||
+			 filter.points_at.nr || filter.merge_commit ||
+			 filter.lines != -1)
 			cmdmode = 'l';
 	}
 
-	if ((create_tag_object || force) && (cmdmode || (!cmdmode && !argc)))
+	if ((create_tag_object || force) && (cmdmode != 0))
 		usage_with_options(git_tag_usage, options);
 
 	finalize_colopts(&colopts, -1);
@@ -490,18 +492,17 @@ int cmd_tag(int argc, const char **argv, const char *prefix)
 		if (column_active(colopts))
 			stop_column_filter();
 		return ret;
-	} else {
-		if (filter.lines != -1)
-			die(_("-n option is only allowed in list mode."));
-		if (filter.with_commit)
-			die(_("--contains option is only allowed in list mode."));
-		if (filter.no_commit)
-			die(_("--no-contains option is only allowed in list mode."));
-		if (filter.points_at.nr)
-			die(_("--points-at option is only allowed in list mode."));
-		if (filter.merge_commit)
-			die(_("--merged and --no-merged options are only allowed in list mode."));
 	}
+	if (filter.lines != -1)
+		die(_("-n option is only allowed in list mode"));
+	if (filter.with_commit)
+		die(_("--contains option is only allowed in list mode"));
+	if (filter.no_commit)
+		die(_("--no-contains option is only allowed in list mode"));
+	if (filter.points_at.nr)
+		die(_("--points-at option is only allowed in list mode"));
+	if (filter.merge_commit)
+		die(_("--merged and --no-merged options are only allowed in list mode"));
 	if (cmdmode == 'd')
 		return for_each_tag_name(argv, delete_tag, NULL);
 	if (cmdmode == 'v') {

@@ -11,7 +11,7 @@ SYNOPSIS
 'git for-each-ref' [--count=<count>] [--shell|--perl|--python|--tcl]
 		   [(--sort=<key>)...] [--format=<format>] [<pattern>...]
 		   [--points-at <object>] [(--merged | --no-merged) [<object>]]
-		   [(--contains | --no-contains) [<object>]]
+		   [--contains [<object>]] [--no-contains [<object>]]
 
 DESCRIPTION
 -----------
@@ -69,11 +69,13 @@ OPTIONS
 
 --merged [<object>]::
 	Only list refs whose tips are reachable from the
-	specified commit (HEAD if not specified).
+	specified commit (HEAD if not specified),
+	incompatible with `--no-merged`.
 
 --no-merged [<object>]::
 	Only list refs whose tips are not reachable from the
-	specified commit (HEAD if not specified).
+	specified commit (HEAD if not specified),
+	incompatible with `--merged`.
 
 --contains [<object>]::
 	Only list refs which contain the specified commit (HEAD if not
