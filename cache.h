@@ -173,10 +173,9 @@ struct cache_entry {
 	unsigned int ce_flags;
 	unsigned int ce_namelen;
 	unsigned int index;	/* for link extension */
-	struct {
-		unsigned initialized:1, root_entry:1;
-		unsigned int name, dir;
-	} precomputed_hash;
+	unsigned int precompute_hash_state;
+	unsigned int precompute_hash_name;
+	unsigned int precompute_hash_dir;
 	struct object_id oid;
 	char name[FLEX_ARRAY]; /* more */
 };
@@ -232,6 +231,17 @@ struct cache_entry {
 #if CE_EXTENDED_FLAGS & 0x803FFFFF
 #error "CE_EXTENDED_FLAGS out of range"
 #endif
+
+/*
+ * Bit set if preload-index precomputed the hash value(s)
+ * for this cache-entry.
+ */ 
+#define CE_PRECOMPUTE_HASH_STATE__SET   (1 << 0)
+/*
+ * Bit set if precompute-index also precomputed the hash value
+ * for the parent directory.
+ */ 
+#define CE_PRECOMPUTE_HASH_STATE__DIR   (1 << 1)
 
 void precompute_istate_hashes(struct cache_entry *ce);
 
@@ -416,7 +426,6 @@ static inline enum object_type object_type(unsigned int mode)
 #define GIT_WORK_TREE_ENVIRONMENT "GIT_WORK_TREE"
 #define GIT_PREFIX_ENVIRONMENT "GIT_PREFIX"
 #define GIT_SUPER_PREFIX_ENVIRONMENT "GIT_INTERNAL_SUPER_PREFIX"
-#define GIT_TOPLEVEL_PREFIX_ENVIRONMENT "GIT_INTERNAL_TOPLEVEL_PREFIX"
 #define DEFAULT_GIT_DIR_ENVIRONMENT ".git"
 #define DB_ENVIRONMENT "GIT_OBJECT_DIRECTORY"
 #define INDEX_ENVIRONMENT "GIT_INDEX_FILE"
@@ -536,19 +545,7 @@ extern const char *setup_git_directory_gently(int *);
 extern const char *setup_git_directory(void);
 extern char *prefix_path(const char *prefix, int len, const char *path);
 extern char *prefix_path_gently(const char *prefix, int len, int *remaining, const char *path);
-
-/*
- * Concatenate "prefix" (if len is non-zero) and "path", with no
- * connecting characters (so "prefix" should end with a "/").
- * Unlike prefix_path, this should be used if the named file does
- * not have to interact with index entry; i.e. name of a random file
- * on the filesystem.
- *
- * The return value is always a newly allocated string (even if the
- * prefix was empty).
- */
-extern char *prefix_filename(const char *prefix, const char *path);
-
+extern const char *prefix_filename(const char *prefix, int len, const char *path);
 extern int check_filename(const char *prefix, const char *name);
 extern void verify_filename(const char *prefix,
 			    const char *name,
@@ -588,6 +585,7 @@ extern int daemonize(void);
 /* Initialize and use the cache information */
 struct lock_file;
 extern int read_index(struct index_state *);
+extern void preload_index(struct index_state *, const struct pathspec *pathspec);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
@@ -600,6 +598,7 @@ extern int write_locked_index(struct index_state *, struct lock_file *lock, unsi
 extern int discard_index(struct index_state *);
 extern int unmerged_index(const struct index_state *);
 extern int verify_path(const char *path);
+extern int strcmp_offset(const char *s1_in, const char *s2_in, int *first_change);
 extern int index_dir_exists(struct index_state *istate, const char *name, int namelen);
 extern void adjust_dirname_case(struct index_state *istate, char *name);
 extern struct cache_entry *index_file_exists(struct index_state *istate, const char *name, int namelen, int igncase);
@@ -779,14 +778,6 @@ extern int ref_paranoia;
  */
 extern char comment_line_char;
 extern int auto_comment_line_char;
-
-/* Windows only */
-enum hide_dotfiles_type {
-	HIDE_DOTFILES_FALSE = 0,
-	HIDE_DOTFILES_TRUE,
-	HIDE_DOTFILES_DOTGITONLY
-};
-extern enum hide_dotfiles_type hide_dotfiles;
 
 enum log_refs_config {
 	LOG_REFS_UNSET = -1,
@@ -1550,7 +1541,6 @@ struct checkout {
 
 #define TEMPORARY_FILENAME_LENGTH 25
 extern int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *topath);
-extern int checkout_delayed_entries(const struct checkout *state);
 
 struct cache_def {
 	struct strbuf path;
@@ -2231,8 +2221,5 @@ void sleep_millisec(int millisec);
  * directories.
  */
 void safe_create_dir(const char *dir, int share);
-
-/* Return 1 if the file is empty or does not exists, 0 otherwise. */
-extern int is_empty_or_missing_file(const char *filename);
 
 #endif /* CACHE_H */

@@ -658,7 +658,7 @@ test_expect_success 'rm of a populated nested submodule with nested untracked fi
 	test_cmp expect actual
 '
 
-test_expect_success 'rm of a populated nested submodule with a nested .git directory absorbs the nested git dir' '
+test_expect_success 'rm of a populated nested submodule with a nested .git directory fails even when forced' '
 	git reset --hard &&
 	git submodule update --recursive &&
 	(cd submod/subsubmod &&

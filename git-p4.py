@@ -582,7 +582,7 @@ def currentGitBranch():
         # on a detached head
         return None
     else:
-        return read_pipe(["git", "symbolic-ref", "HEAD"]).strip()[11:]
+        return read_pipe(["git", "name-rev", "HEAD"]).split(" ")[1].strip()
 
 def isValidGitDir(path):
     return git_dir(path) != None

@@ -1487,7 +1487,6 @@ struct ref_filter_cbdata {
 	struct ref_array *array;
 	struct ref_filter *filter;
 	struct contains_cache contains_cache;
-	struct contains_cache no_contains_cache;
 };
 
 /*
@@ -1587,11 +1586,11 @@ static enum contains_result contains_tag_algo(struct commit *candidate,
 }
 
 static int commit_contains(struct ref_filter *filter, struct commit *commit,
-			   struct commit_list *list, struct contains_cache *cache)
+			   struct contains_cache *cache)
 {
 	if (filter->with_commit_tag_algo)
-		return contains_tag_algo(commit, list, cache) == CONTAINS_YES;
-	return is_descendant_of(commit, list);
+		return contains_tag_algo(commit, filter->with_commit, cache) == CONTAINS_YES;
+	return is_descendant_of(commit, filter->with_commit);
 }
 
 /*
@@ -1781,17 +1780,13 @@ static int ref_filter_handler(const char *refname, const struct object_id *oid, 
 	 * obtain the commit using the 'oid' available and discard all
 	 * non-commits early. The actual filtering is done later.
 	 */
-	if (filter->merge_commit || filter->with_commit || filter->no_commit || filter->verbose) {
+	if (filter->merge_commit || filter->with_commit || filter->verbose) {
 		commit = lookup_commit_reference_gently(oid->hash, 1);
 		if (!commit)
 			return 0;
-		/* We perform the filtering for the '--contains' option... */
+		/* We perform the filtering for the '--contains' option */
 		if (filter->with_commit &&
-		    !commit_contains(filter, commit, filter->with_commit, &ref_cbdata->contains_cache))
-			return 0;
-		/* ...or for the `--no-contains' option */
-		if (filter->no_commit &&
-		    commit_contains(filter, commit, filter->no_commit, &ref_cbdata->no_contains_cache))
+		    !commit_contains(filter, commit, &ref_cbdata->contains_cache))
 			return 0;
 	}
 
@@ -1892,7 +1887,6 @@ int filter_refs(struct ref_array *array, struct ref_filter *filter, unsigned int
 	filter->kind = type & FILTER_REFS_KIND_MASK;
 
 	init_contains_cache(&ref_cbdata.contains_cache);
-	init_contains_cache(&ref_cbdata.no_contains_cache);
 
 	/*  Simple per-ref filtering */
 	if (!filter->kind)
@@ -1917,7 +1911,6 @@ int filter_refs(struct ref_array *array, struct ref_filter *filter, unsigned int
 	}
 
 	clear_contains_cache(&ref_cbdata.contains_cache);
-	clear_contains_cache(&ref_cbdata.no_contains_cache);
 
 	/*  Filters that need revision walking */
 	if (filter->merge_commit)
@@ -2091,17 +2084,8 @@ int parse_opt_merge_filter(const struct option *opt, const char *arg, int unset)
 {
 	struct ref_filter *rf = opt->value;
 	unsigned char sha1[20];
-	int no_merged = starts_with(opt->long_name, "no");
 
-	if (rf->merge) {
-		if (no_merged) {
-			return opterror(opt, "is incompatible with --merged", 0);
-		} else {
-			return opterror(opt, "is incompatible with --no-merged", 0);
-		}
-	}
-
-	rf->merge = no_merged
+	rf->merge = starts_with(opt->long_name, "no")
 		? REF_FILTER_MERGED_OMIT
 		: REF_FILTER_MERGED_INCLUDE;
 

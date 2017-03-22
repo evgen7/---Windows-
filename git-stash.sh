@@ -299,10 +299,10 @@ push_stash () {
 	then
 		if test $# != 0
 		then
-			git reset -q -- "$@"
+			git reset ${GIT_QUIET:+-q} -- "$@"
 			git ls-files -z --modified -- "$@" |
 			git checkout-index -z --force --stdin
-			git clean --force -q -d -- "$@"
+			git clean --force ${GIT_QUIET:+-q} -d -- "$@"
 		else
 			git reset --hard ${GIT_QUIET:+-q}
 		fi
@@ -322,7 +322,7 @@ push_stash () {
 
 		if test "$keep_index" != "t"
 		then
-			git reset ${GIT_QUIET:+-q} -- "$@"
+			git reset
 		fi
 	fi
 }
@@ -568,7 +568,7 @@ apply_stash () {
 
 	if test -n "$u_tree"
 	then
-		GIT_INDEX_FILE="$TMPindex" git-read-tree "$u_tree" &&
+		GIT_INDEX_FILE="$TMPindex" git read-tree "$u_tree" &&
 		GIT_INDEX_FILE="$TMPindex" git checkout-index --all &&
 		rm -f "$TMPindex" ||
 		die "$(gettext "Could not restore untracked files from stash")"
