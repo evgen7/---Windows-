@@ -108,11 +108,6 @@ configuration variable documented in linkgit:git-config[1].
 	without options are equivalent to 'always' and 'never'
 	respectively.
 
---no-lock-index::
---lock-index::
-	Specifies whether `git status` should try to lock the index and
-	update it afterwards if any changes were detected. Defaults to
-	`--lock-index`.
 
 OUTPUT
 ------
@@ -186,6 +181,13 @@ in which case `XY` are `!!`.
     !           !    ignored
     -------------------------------------------------
 
+Submodules have more state and instead report
+		M    the submodule has a different HEAD than
+		     recorded in the index
+		m    the submodule has modified content
+		?    the submodule has untracked files
+
+
 If -b is used the short-format status is preceded by a line
 
     ## branchname tracking info
@@ -214,6 +216,8 @@ and the terminating newline (but a space still separates the status
 field from the first filename).  Third, filenames containing special
 characters are not specially formatted; no quoting or
 backslash-escaping is performed.
+
+Any submodule changes are reported as modified `M` instead of `m` or single `?`.
 
 Porcelain Format Version 2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

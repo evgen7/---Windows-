@@ -22,9 +22,7 @@ clean:
 	$(RM) $(makfile).old
 	$(RM) PM.stamp
 
-ifneq (,$(wildcard PM.stamp))
 $(makfile): PM.stamp
-endif
 
 ifdef NO_PERL_MAKEMAKER
 instdir_SQ = $(subst ','\'',$(prefix)/lib)

@@ -50,6 +50,15 @@ test_expect_success 'status with modified file in submodule (porcelain)' '
 	EOF
 '
 
+test_expect_success 'status with modified file in submodule (short)' '
+	(cd sub && git reset --hard) &&
+	echo "changed" >sub/foo &&
+	git status --short >output &&
+	diff output - <<-\EOF
+	 m sub
+	EOF
+'
+
 test_expect_success 'status with added file in submodule' '
 	(cd sub && git reset --hard && echo >foo && git add foo) &&
 	git status >output &&
@@ -61,6 +70,14 @@ test_expect_success 'status with added file in submodule (porcelain)' '
 	git status --porcelain >output &&
 	diff output - <<-\EOF
 	 M sub
+	EOF
+'
+
+test_expect_success 'status with added file in submodule (short)' '
+	(cd sub && git reset --hard && echo >foo && git add foo) &&
+	git status --short >output &&
+	diff output - <<-\EOF
+	 m sub
 	EOF
 '
 
@@ -80,6 +97,13 @@ test_expect_success 'status with untracked file in submodule (porcelain)' '
 	git status --porcelain >output &&
 	diff output - <<-\EOF
 	 M sub
+	EOF
+'
+
+test_expect_success 'status with untracked file in submodule (short)' '
+	git status --short >output &&
+	diff output - <<-\EOF
+	 ? sub
 	EOF
 '
 
@@ -269,6 +293,39 @@ test_expect_success 'diff --submodule with merge conflict in .gitmodules' '
 		git diff --submodule >../diff_submodule_actual 2>&1
 	) &&
 	test_cmp diff_submodule_actual diff_submodule_expect
+'
+
+test_expect_success 'setup superproject with untracked file in nested submodule' '
+	(
+		cd super &&
+		git clean -dfx &&
+		rm .gitmodules &&
+		git submodule add -f ./sub1 &&
+		git submodule add -f ./sub2 &&
+		git commit -a -m "messy merge in superproject" &&
+		(
+			cd sub1 &&
+			git submodule add ../sub2 &&
+			git commit -a -m "add sub2 to sub1"
+		) &&
+		git add sub1 &&
+		git commit -a -m "update sub1 to contain nested sub"
+	) &&
+	echo untracked >super/sub1/sub2/untracked
+'
+
+test_expect_success 'status with untracked file in nested submodule (porcelain)' '
+	git -C super status --porcelain >output &&
+	diff output - <<-\EOF
+	 M sub1
+	EOF
+'
+
+test_expect_success 'status with untracked file in nested submodule (short)' '
+	git -C super status --short >output &&
+	diff output - <<-\EOF
+	 ? sub1
+	EOF
 '
 
 test_done

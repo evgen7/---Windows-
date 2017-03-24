@@ -36,16 +36,6 @@ int option_parse_push_signed(const struct option *opt,
 	die("bad %s argument: %s", opt->long_name, arg);
 }
 
-static int config_use_sideband = 1;
-
-static int send_pack_config(const char *var, const char *value, void *unused)
-{
-	if (!strcmp("sendpack.sideband", var))
-		config_use_sideband = git_config_bool(var, value);
-
-	return 0;
-}
-
 static void feed_object(const unsigned char *sha1, FILE *fh, int negative)
 {
 	if (negative && !has_sha1_file(sha1))
@@ -408,8 +398,6 @@ int send_pack(struct send_pack_args *args,
 	struct async demux;
 	const char *push_cert_nonce = NULL;
 
-	git_config(send_pack_config, NULL);
-
 	/* Does the other end support the reporting? */
 	if (server_supports("report-status"))
 		status_report = 1;
@@ -417,7 +405,7 @@ int send_pack(struct send_pack_args *args,
 		allow_deleting_refs = 1;
 	if (server_supports("ofs-delta"))
 		args->use_ofs_delta = 1;
-	if (config_use_sideband && server_supports("side-band-64k"))
+	if (server_supports("side-band-64k"))
 		use_sideband = 1;
 	if (server_supports("quiet"))
 		quiet_supported = 1;
@@ -544,6 +532,14 @@ int send_pack(struct send_pack_args *args,
 		}
 	}
 
+	if (use_push_options) {
+		struct string_list_item *item;
+
+		packet_buf_flush(&req_buf);
+		for_each_string_list_item(item, args->push_options)
+			packet_buf_write(&req_buf, "%s", item->string);
+	}
+
 	if (args->stateless_rpc) {
 		if (!args->dry_run && (cmds_sent || is_repository_shallow())) {
 			packet_buf_flush(&req_buf);
@@ -555,18 +551,6 @@ int send_pack(struct send_pack_args *args,
 	}
 	strbuf_release(&req_buf);
 	strbuf_release(&cap_buf);
-
-	if (use_push_options) {
-		struct string_list_item *item;
-		struct strbuf sb = STRBUF_INIT;
-
-		for_each_string_list_item(item, args->push_options)
-			packet_buf_write(&sb, "%s", item->string);
-
-		write_or_die(out, sb.buf, sb.len);
-		packet_flush(out);
-		strbuf_release(&sb);
-	}
 
 	if (use_sideband && cmds_sent) {
 		memset(&demux, 0, sizeof(demux));

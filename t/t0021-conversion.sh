@@ -276,7 +276,7 @@ test_expect_success 'filter that does not read is fine' '
 	test_cmp expect actual
 '
 
-test_expect_success EXPENSIVE,!MINGW 'filter large file' '
+test_expect_success EXPENSIVE 'filter large file' '
 	test_config filter.largefile.smudge cat &&
 	test_config filter.largefile.clean cat &&
 	for i in $(test_seq 1 2048); do printf "%1048576d" 1; done >2GB &&
@@ -698,6 +698,59 @@ test_expect_success PERL 'invalid process filter must fail (and not hang!)' '
 		cp "$TEST_ROOT/test.o" test.r &&
 		test_must_fail git add . 2>git-stderr.log &&
 		grep "does not support filter protocol version" git-stderr.log
+	)
+'
+
+test_expect_success PERL 'delayed checkout in process filter' '
+	test_config_global filter.protocol.process "rot13-filter.pl clean smudge" &&
+	test_config_global filter.protocol.required true &&
+	rm -rf repo &&
+	mkdir repo &&
+	(
+		cd repo &&
+		git init &&
+		echo "*.r filter=protocol" >.gitattributes &&
+		cp "$TEST_ROOT/test.o" test.r &&
+		cp "$TEST_ROOT/test.o" test-delay1.r &&
+		cp "$TEST_ROOT/test.o" test-delay3.r &&
+		git add . &&
+		git commit -m "test commit 1"
+	) &&
+
+	S=$(file_size repo/test.r) &&
+	rm -rf repo-cloned &&
+	filter_git clone repo repo-cloned &&
+	cat >expected.log <<-EOF &&
+		START
+		init handshake complete
+		IN: smudge test.r $S [OK] -- OUT: $S . [OK]
+		IN: smudge test-delay1.r $S [OK] -- OUT: $S [DELAYED]
+		IN: smudge test-delay1.r $S [OK] -- OUT: $S . [OK]
+		IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+		IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+		IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+		IN: smudge test-delay3.r $S [OK] -- OUT: $S . [OK]
+		STOP
+	EOF
+	test_cmp_count expected.log repo-cloned/rot13-filter.log &&
+
+	(
+		cd repo-cloned &&
+		rm *.r rot13-filter.log &&
+		filter_git checkout . &&
+		cat >expected.log <<-EOF &&
+			START
+			init handshake complete
+			IN: smudge test.r $S [OK] -- OUT: $S . [OK]
+			IN: smudge test-delay1.r $S [OK] -- OUT: $S [DELAYED]
+			IN: smudge test-delay1.r $S [OK] -- OUT: $S . [OK]
+			IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+			IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+			IN: smudge test-delay3.r $S [OK] -- OUT: $S [DELAYED]
+			IN: smudge test-delay3.r $S [OK] -- OUT: $S . [OK]
+			STOP
+		EOF
+		test_cmp_count expected.log rot13-filter.log
 	)
 '
 
