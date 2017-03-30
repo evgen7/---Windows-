@@ -91,9 +91,8 @@ If the tag is not annotated, the commit message is displayed instead.
 
 -l::
 --list::
-	Activate the list mode. `git tag <tagname>` would try to
-	create a tag, use `git tag --list <pattern>...` to list
-	matching branches, (or all if no pattern is given).
+	List tags. With optional `<pattern>...`, e.g. `git tag --list
+	'v-*'`, list only the tags that match the pattern(s).
 +
 Running "git tag" without arguments also lists all tags. The pattern
 is a shell wildcard (i.e., matched using fnmatch(3)). Multiple

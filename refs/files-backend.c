@@ -332,9 +332,9 @@ static void files_reflog_path(struct files_ref_store *refs,
 	}
 }
 
-static void files_refname_path(struct files_ref_store *refs,
-			       struct strbuf *sb,
-			       const char *refname)
+static void files_ref_path(struct files_ref_store *refs,
+			   struct strbuf *sb,
+			   const char *refname)
 {
 	switch (ref_type(refname)) {
 	case REF_TYPE_PER_WORKTREE:
@@ -423,7 +423,7 @@ static void loose_fill_ref_dir(struct ref_store *ref_store,
 	struct strbuf path = STRBUF_INIT;
 	size_t path_baselen;
 
-	files_refname_path(refs, &path, dirname);
+	files_ref_path(refs, &path, dirname);
 	path_baselen = path.len;
 
 	d = opendir(path.buf);
@@ -580,7 +580,7 @@ static int files_read_raw_ref(struct ref_store *ref_store,
 	*type = 0;
 	strbuf_reset(&sb_path);
 
-	files_refname_path(refs, &sb_path, refname);
+	files_ref_path(refs, &sb_path, refname);
 
 	path = sb_path.buf;
 
@@ -768,7 +768,7 @@ static int lock_raw_ref(struct files_ref_store *refs,
 	*lock_p = lock = xcalloc(1, sizeof(*lock));
 
 	lock->ref_name = xstrdup(refname);
-	files_refname_path(refs, &ref_file, refname);
+	files_ref_path(refs, &ref_file, refname);
 
 retry:
 	switch (safe_create_leading_directories(ref_file.buf)) {
@@ -1070,8 +1070,6 @@ static struct ref_iterator *files_ref_iterator_begin(
 	refs = files_downcast(ref_store,
 			      REF_STORE_READ | (ref_paranoia ? 0 : REF_STORE_ODB),
 			      "ref_iterator_begin");
-	if (!refs)
-		return empty_ref_iterator_begin();
 
 	iter = xcalloc(1, sizeof(*iter));
 	ref_iterator = &iter->base;
@@ -1190,7 +1188,7 @@ static struct ref_lock *lock_ref_sha1_basic(struct files_ref_store *refs,
 	if (flags & REF_DELETING)
 		resolve_flags |= RESOLVE_REF_ALLOW_BAD_NAME;
 
-	files_refname_path(refs, &ref_file, refname);
+	files_ref_path(refs, &ref_file, refname);
 	resolved = !!refs_resolve_ref_unsafe(&refs->base,
 					     refname, resolve_flags,
 					     lock->old_oid.hash, type);
@@ -1426,7 +1424,7 @@ static void try_remove_empty_parents(struct files_ref_store *refs,
 		strbuf_setlen(&buf, q - buf.buf);
 
 		strbuf_reset(&sb);
-		files_refname_path(refs, &sb, buf.buf);
+		files_ref_path(refs, &sb, buf.buf);
 		if ((flags & REMOVE_EMPTY_PARENTS_REF) && rmdir(sb.buf))
 			flags &= ~REMOVE_EMPTY_PARENTS_REF;
 
@@ -1780,7 +1778,7 @@ static int files_rename_ref(struct ref_store *ref_store,
 			struct strbuf path = STRBUF_INIT;
 			int result;
 
-			files_refname_path(refs, &path, newrefname);
+			files_ref_path(refs, &path, newrefname);
 			result = remove_empty_directories(&path);
 			strbuf_release(&path);
 
@@ -2006,10 +2004,10 @@ static int log_ref_write_fd(int fd, const unsigned char *old_sha1,
 	return 0;
 }
 
-int files_log_ref_write(struct files_ref_store *refs,
-			const char *refname, const unsigned char *old_sha1,
-			const unsigned char *new_sha1, const char *msg,
-			int flags, struct strbuf *err)
+static int files_log_ref_write(struct files_ref_store *refs,
+			       const char *refname, const unsigned char *old_sha1,
+			       const unsigned char *new_sha1, const char *msg,
+			       int flags, struct strbuf *err)
 {
 	int logfd, result;
 
@@ -3017,7 +3015,7 @@ static int files_transaction_commit(struct ref_store *ref_store,
 			    update->type & REF_ISSYMREF) {
 				/* It is a loose reference. */
 				strbuf_reset(&sb);
-				files_refname_path(refs, &sb, lock->ref_name);
+				files_ref_path(refs, &sb, lock->ref_name);
 				if (unlink_or_msg(sb.buf, err)) {
 					ret = TRANSACTION_GENERIC_ERROR;
 					goto cleanup;
@@ -3326,11 +3324,11 @@ static int files_init_db(struct ref_store *ref_store, struct strbuf *err)
 	/*
 	 * Create .git/refs/{heads,tags}
 	 */
-	files_refname_path(refs, &sb, "refs/heads");
+	files_ref_path(refs, &sb, "refs/heads");
 	safe_create_dir(sb.buf, 1);
 
 	strbuf_reset(&sb);
-	files_refname_path(refs, &sb, "refs/tags");
+	files_ref_path(refs, &sb, "refs/tags");
 	safe_create_dir(sb.buf, 1);
 
 	strbuf_release(&sb);

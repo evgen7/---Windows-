@@ -12,8 +12,8 @@
 #include "sha1-array.h"
 #include "argv-array.h"
 
-static struct sha1_array good_revs;
-static struct sha1_array skipped_revs;
+static struct oid_array good_revs;
+static struct oid_array skipped_revs;
 
 static struct object_id *current_bad_oid;
 
@@ -200,6 +200,7 @@ static struct commit_list *best_bisection_sorted(struct commit_list *list, int n
 {
 	struct commit_list *p;
 	struct commit_dist *array = xcalloc(nr, sizeof(*array));
+	struct strbuf buf = STRBUF_INIT;
 	int cnt, i;
 
 	for (p = list, cnt = 0; p; p = p->next) {
@@ -217,17 +218,18 @@ static struct commit_list *best_bisection_sorted(struct commit_list *list, int n
 	}
 	QSORT(array, cnt, compare_commit_dist);
 	for (p = list, i = 0; i < cnt; i++) {
-		char buf[100]; /* enough for dist=%d */
 		struct object *obj = &(array[i].commit->object);
 
-		snprintf(buf, sizeof(buf), "dist=%d", array[i].distance);
-		add_name_decoration(DECORATION_NONE, buf, obj);
+		strbuf_reset(&buf);
+		strbuf_addf(&buf, "dist=%d", array[i].distance);
+		add_name_decoration(DECORATION_NONE, buf.buf, obj);
 
 		p->item = array[i].commit;
 		p = p->next;
 	}
 	if (p)
 		p->next = NULL;
+	strbuf_release(&buf);
 	free(array);
 	return list;
 }
@@ -413,9 +415,9 @@ static int register_ref(const char *refname, const struct object_id *oid,
 		current_bad_oid = xmalloc(sizeof(*current_bad_oid));
 		oidcpy(current_bad_oid, oid);
 	} else if (starts_with(refname, good_prefix.buf)) {
-		sha1_array_append(&good_revs, oid->hash);
+		oid_array_append(&good_revs, oid);
 	} else if (starts_with(refname, "skip-")) {
-		sha1_array_append(&skipped_revs, oid->hash);
+		oid_array_append(&skipped_revs, oid);
 	}
 
 	strbuf_release(&good_prefix);
@@ -457,13 +459,13 @@ static void read_bisect_paths(struct argv_array *array)
 	fclose(fp);
 }
 
-static char *join_sha1_array_hex(struct sha1_array *array, char delim)
+static char *join_sha1_array_hex(struct oid_array *array, char delim)
 {
 	struct strbuf joined_hexs = STRBUF_INIT;
 	int i;
 
 	for (i = 0; i < array->nr; i++) {
-		strbuf_addstr(&joined_hexs, sha1_to_hex(array->sha1[i]));
+		strbuf_addstr(&joined_hexs, oid_to_hex(array->oid + i));
 		if (i + 1 < array->nr)
 			strbuf_addch(&joined_hexs, delim);
 	}
@@ -505,8 +507,7 @@ struct commit_list *filter_skipped(struct commit_list *list,
 	while (list) {
 		struct commit_list *next = list->next;
 		list->next = NULL;
-		if (0 <= sha1_array_lookup(&skipped_revs,
-					   list->item->object.oid.hash)) {
+		if (0 <= oid_array_lookup(&skipped_revs, &list->item->object.oid)) {
 			if (skipped_first && !*skipped_first)
 				*skipped_first = 1;
 			/* Move current to tried list */
@@ -633,7 +634,7 @@ static void bisect_rev_setup(struct rev_info *revs, const char *prefix,
 	argv_array_pushf(&rev_argv, bad_format, oid_to_hex(current_bad_oid));
 	for (i = 0; i < good_revs.nr; i++)
 		argv_array_pushf(&rev_argv, good_format,
-				 sha1_to_hex(good_revs.sha1[i]));
+				 oid_to_hex(good_revs.oid + i));
 	argv_array_push(&rev_argv, "--");
 	if (read_paths)
 		read_bisect_paths(&rev_argv);
@@ -705,7 +706,7 @@ static int is_expected_rev(const struct object_id *oid)
 
 static int bisect_checkout(const unsigned char *bisect_rev, int no_checkout)
 {
-	char bisect_rev_hex[GIT_SHA1_HEXSZ + 1];
+	char bisect_rev_hex[GIT_MAX_HEXSZ + 1];
 
 	memcpy(bisect_rev_hex, sha1_to_hex(bisect_rev), GIT_SHA1_HEXSZ + 1);
 	update_ref(NULL, "BISECT_EXPECTED_REV", bisect_rev, NULL, 0, UPDATE_REFS_DIE_ON_ERR);
@@ -724,11 +725,11 @@ static int bisect_checkout(const unsigned char *bisect_rev, int no_checkout)
 	return run_command_v_opt(argv_show_branch, RUN_GIT_CMD);
 }
 
-static struct commit *get_commit_reference(const unsigned char *sha1)
+static struct commit *get_commit_reference(const struct object_id *oid)
 {
-	struct commit *r = lookup_commit_reference(sha1);
+	struct commit *r = lookup_commit_reference(oid->hash);
 	if (!r)
-		die(_("Not a valid commit name %s"), sha1_to_hex(sha1));
+		die(_("Not a valid commit name %s"), oid_to_hex(oid));
 	return r;
 }
 
@@ -738,9 +739,9 @@ static struct commit **get_bad_and_good_commits(int *rev_nr)
 	int i, n = 0;
 
 	ALLOC_ARRAY(rev, 1 + good_revs.nr);
-	rev[n++] = get_commit_reference(current_bad_oid->hash);
+	rev[n++] = get_commit_reference(current_bad_oid);
 	for (i = 0; i < good_revs.nr; i++)
-		rev[n++] = get_commit_reference(good_revs.sha1[i]);
+		rev[n++] = get_commit_reference(good_revs.oid + i);
 	*rev_nr = n;
 
 	return rev;
@@ -783,9 +784,9 @@ static int handle_bad_merge_base(void)
 	return 1;
 }
 
-static int handle_skipped_merge_base(const unsigned char *mb)
+static int handle_skipped_merge_base(const struct object_id *mb)
 {
-	char *mb_hex = sha1_to_hex(mb);
+	char *mb_hex = oid_to_hex(mb);
 	char *bad_hex = oid_to_hex(current_bad_oid);
 	char *good_hex = join_sha1_array_hex(&good_revs, ' ');
 
@@ -817,18 +818,18 @@ static int check_merge_bases(int no_checkout)
 	result = get_merge_bases_many(rev[0], rev_nr - 1, rev + 1);
 
 	for (; result; result = result->next) {
-		const unsigned char *mb = result->item->object.oid.hash;
-		if (!hashcmp(mb, current_bad_oid->hash)) {
+		const struct object_id *mb = &result->item->object.oid;
+		if (!oidcmp(mb, current_bad_oid)) {
 			res = handle_bad_merge_base();
 			break;
-		} else if (0 <= sha1_array_lookup(&good_revs, mb)) {
+		} else if (0 <= oid_array_lookup(&good_revs, mb)) {
 			continue;
-		} else if (0 <= sha1_array_lookup(&skipped_revs, mb)) {
+		} else if (0 <= oid_array_lookup(&skipped_revs, mb)) {
 			res = handle_skipped_merge_base(mb);
 			break;
 		} else {
 			printf(_("Bisecting: a merge base must be tested\n"));
-			res = bisect_checkout(mb, no_checkout);
+			res = bisect_checkout(mb->hash, no_checkout);
 			/*
 			 * We don't want to clean the bisection state
 			 * as we need to get back to where we started

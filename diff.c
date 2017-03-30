@@ -398,7 +398,7 @@ static struct diff_tempfile {
 	 */
 	const char *name;
 
-	char hex[GIT_SHA1_HEXSZ + 1];
+	char hex[GIT_MAX_HEXSZ + 1];
 	char mode[10];
 
 	/*
@@ -4219,7 +4219,7 @@ const char *diff_aligned_abbrev(const struct object_id *oid, int len)
 	 * uniqueness across all objects (statistically speaking).
 	 */
 	if (abblen < GIT_SHA1_HEXSZ - 3) {
-		static char hex[GIT_SHA1_HEXSZ + 1];
+		static char hex[GIT_MAX_HEXSZ + 1];
 		if (len < abblen && abblen <= len + 2)
 			xsnprintf(hex, sizeof(hex), "%s%.*s", abbrev, len+3-abblen, "..");
 		else
@@ -4577,7 +4577,7 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 	int i;
 	git_SHA_CTX ctx;
 	struct patch_id_t data;
-	char buffer[PATH_MAX * 4 + 20];
+	struct strbuf buffer = STRBUF_INIT;
 
 	git_SHA1_Init(&ctx);
 	memset(&data, 0, sizeof(struct patch_id_t));
@@ -4607,10 +4607,11 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 		diff_fill_sha1_info(p->one);
 		diff_fill_sha1_info(p->two);
 
+		strbuf_reset(&buffer);
 		len1 = remove_space(p->one->path, strlen(p->one->path));
 		len2 = remove_space(p->two->path, strlen(p->two->path));
 		if (p->one->mode == 0)
-			len1 = snprintf(buffer, sizeof(buffer),
+			strbuf_addf(&buffer,
 					"diff--gita/%.*sb/%.*s"
 					"newfilemode%06o"
 					"---/dev/null"
@@ -4620,7 +4621,7 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 					p->two->mode,
 					len2, p->two->path);
 		else if (p->two->mode == 0)
-			len1 = snprintf(buffer, sizeof(buffer),
+			strbuf_addf(&buffer,
 					"diff--gita/%.*sb/%.*s"
 					"deletedfilemode%06o"
 					"---a/%.*s"
@@ -4630,7 +4631,7 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 					p->one->mode,
 					len1, p->one->path);
 		else
-			len1 = snprintf(buffer, sizeof(buffer),
+			strbuf_addf(&buffer,
 					"diff--gita/%.*sb/%.*s"
 					"---a/%.*s"
 					"+++b/%.*s",
@@ -4638,14 +4639,16 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 					len2, p->two->path,
 					len1, p->one->path,
 					len2, p->two->path);
-		git_SHA1_Update(&ctx, buffer, len1);
+		git_SHA1_Update(&ctx, buffer.buf, buffer.len);
 
 		if (diff_header_only)
 			continue;
 
 		if (fill_mmfile(&mf1, p->one) < 0 ||
-		    fill_mmfile(&mf2, p->two) < 0)
+		    fill_mmfile(&mf2, p->two) < 0) {
+			strbuf_release(&buffer);
 			return error("unable to read files to diff");
+		}
 
 		if (diff_filespec_is_binary(p->one) ||
 		    diff_filespec_is_binary(p->two)) {
@@ -4660,11 +4663,14 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 		xecfg.ctxlen = 3;
 		xecfg.flags = 0;
 		if (xdi_diff_outf(&mf1, &mf2, patch_id_consume, &data,
-				  &xpp, &xecfg))
+				  &xpp, &xecfg)) {
+			strbuf_release(&buffer);
 			return error("unable to generate patch-id diff for %s",
 				     p->one->path);
+		}
 	}
 
+	strbuf_release(&buffer);
 	git_SHA1_Final(sha1, &ctx);
 	return 0;
 }

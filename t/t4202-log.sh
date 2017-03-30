@@ -4,6 +4,7 @@ test_description='git log'
 
 . ./test-lib.sh
 . "$TEST_DIRECTORY/lib-gpg.sh"
+. "$TEST_DIRECTORY/lib-terminal.sh"
 
 test_expect_success setup '
 
@@ -574,6 +575,13 @@ test_expect_success 'log.decorate configuration' '
 	git log --pretty=raw >actual &&
 	test_cmp expect.raw actual
 
+'
+
+test_expect_success TTY 'log output on a TTY' '
+	git log --oneline --decorate >expect.short &&
+
+	test_terminal git log --oneline >actual &&
+	test_cmp expect.short actual
 '
 
 test_expect_success 'reflog is expected format' '

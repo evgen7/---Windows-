@@ -934,7 +934,7 @@ test_expect_success GPG 'verifying a forged tag should fail' '
 	test_must_fail git tag -v forged-tag
 '
 
-test_expect_success 'verifying a proper tag with --format pass and format accordingly' '
+test_expect_success GPG 'verifying a proper tag with --format pass and format accordingly' '
 	cat >expect <<-\EOF &&
 	tagname : signed-tag
 	EOF
@@ -942,7 +942,7 @@ test_expect_success 'verifying a proper tag with --format pass and format accord
 	test_cmp expect actual
 '
 
-test_expect_success 'verifying a forged tag with --format should fail silently' '
+test_expect_success GPG 'verifying a forged tag with --format should fail silently' '
 	>expect &&
 	test_must_fail git tag -v --format="tagname : %(tag)" "forged-tag" >actual &&
 	test_cmp expect actual
@@ -1305,6 +1305,13 @@ test_expect_success GPG \
 	'git tag -s fails if gpg is misconfigured (bad key)' \
 	'test_config user.signingkey BobTheMouse &&
 	test_must_fail git tag -s -m tail tag-gpg-failure'
+
+# try to produce invalid signature
+test_expect_success GPG \
+	'git tag -s fails if gpg is misconfigured (bad signature format)' \
+	'test_config gpg.program echo &&
+	 test_must_fail git tag -s -m tail tag-gpg-failure'
+
 
 # try to verify without gpg:
 

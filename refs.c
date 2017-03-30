@@ -457,29 +457,31 @@ int expand_ref(const char *str, int len, unsigned char *sha1, char **ref)
 {
 	const char **p, *r;
 	int refs_found = 0;
+	struct strbuf fullref = STRBUF_INIT;
 
 	*ref = NULL;
 	for (p = ref_rev_parse_rules; *p; p++) {
-		char fullref[PATH_MAX];
 		unsigned char sha1_from_ref[20];
 		unsigned char *this_result;
 		int flag;
 
 		this_result = refs_found ? sha1_from_ref : sha1;
-		mksnpath(fullref, sizeof(fullref), *p, len, str);
-		r = resolve_ref_unsafe(fullref, RESOLVE_REF_READING,
+		strbuf_reset(&fullref);
+		strbuf_addf(&fullref, *p, len, str);
+		r = resolve_ref_unsafe(fullref.buf, RESOLVE_REF_READING,
 				       this_result, &flag);
 		if (r) {
 			if (!refs_found++)
 				*ref = xstrdup(r);
 			if (!warn_ambiguous_refs)
 				break;
-		} else if ((flag & REF_ISSYMREF) && strcmp(fullref, "HEAD")) {
-			warning("ignoring dangling symref %s.", fullref);
-		} else if ((flag & REF_ISBROKEN) && strchr(fullref, '/')) {
-			warning("ignoring broken ref %s.", fullref);
+		} else if ((flag & REF_ISSYMREF) && strcmp(fullref.buf, "HEAD")) {
+			warning("ignoring dangling symref %s.", fullref.buf);
+		} else if ((flag & REF_ISBROKEN) && strchr(fullref.buf, '/')) {
+			warning("ignoring broken ref %s.", fullref.buf);
 		}
 	}
+	strbuf_release(&fullref);
 	return refs_found;
 }
 
@@ -488,21 +490,22 @@ int dwim_log(const char *str, int len, unsigned char *sha1, char **log)
 	char *last_branch = substitute_branch_name(&str, &len);
 	const char **p;
 	int logs_found = 0;
+	struct strbuf path = STRBUF_INIT;
 
 	*log = NULL;
 	for (p = ref_rev_parse_rules; *p; p++) {
 		unsigned char hash[20];
-		char path[PATH_MAX];
 		const char *ref, *it;
 
-		mksnpath(path, sizeof(path), *p, len, str);
-		ref = resolve_ref_unsafe(path, RESOLVE_REF_READING,
+		strbuf_reset(&path);
+		strbuf_addf(&path, *p, len, str);
+		ref = resolve_ref_unsafe(path.buf, RESOLVE_REF_READING,
 					 hash, NULL);
 		if (!ref)
 			continue;
-		if (reflog_exists(path))
-			it = path;
-		else if (strcmp(ref, path) && reflog_exists(ref))
+		if (reflog_exists(path.buf))
+			it = path.buf;
+		else if (strcmp(ref, path.buf) && reflog_exists(ref))
 			it = ref;
 		else
 			continue;
@@ -513,6 +516,7 @@ int dwim_log(const char *str, int len, unsigned char *sha1, char **log)
 		if (!warn_ambiguous_refs)
 			break;
 	}
+	strbuf_release(&path);
 	free(last_branch);
 	return logs_found;
 }
@@ -1003,6 +1007,7 @@ char *shorten_unambiguous_ref(const char *refname, int strict)
 	static char **scanf_fmts;
 	static int nr_rules;
 	char *short_name;
+	struct strbuf resolved_buf = STRBUF_INIT;
 
 	if (!nr_rules) {
 		/*
@@ -1061,7 +1066,6 @@ char *shorten_unambiguous_ref(const char *refname, int strict)
 		 */
 		for (j = 0; j < rules_to_fail; j++) {
 			const char *rule = ref_rev_parse_rules[j];
-			char refname[PATH_MAX];
 
 			/* skip matched rule */
 			if (i == j)
@@ -1072,9 +1076,10 @@ char *shorten_unambiguous_ref(const char *refname, int strict)
 			 * (with this previous rule) to a valid ref
 			 * read_ref() returns 0 on success
 			 */
-			mksnpath(refname, sizeof(refname),
-				 rule, short_name_len, short_name);
-			if (ref_exists(refname))
+			strbuf_reset(&resolved_buf);
+			strbuf_addf(&resolved_buf, rule,
+				    short_name_len, short_name);
+			if (ref_exists(resolved_buf.buf))
 				break;
 		}
 
@@ -1082,10 +1087,13 @@ char *shorten_unambiguous_ref(const char *refname, int strict)
 		 * short name is non-ambiguous if all previous rules
 		 * haven't resolved to a valid ref
 		 */
-		if (j == rules_to_fail)
+		if (j == rules_to_fail) {
+			strbuf_release(&resolved_buf);
 			return short_name;
+		}
 	}
 
+	strbuf_release(&resolved_buf);
 	free(short_name);
 	return xstrdup(refname);
 }
@@ -1503,18 +1511,15 @@ static struct ref_store *ref_store_init(const char *gitdir,
 
 struct ref_store *get_main_ref_store(void)
 {
-	struct ref_store *refs;
-
 	if (main_ref_store)
 		return main_ref_store;
 
-	refs = ref_store_init(get_git_dir(),
-			      (REF_STORE_READ |
-			       REF_STORE_WRITE |
-			       REF_STORE_ODB |
-			       REF_STORE_MAIN));
-	main_ref_store = refs;
-	return refs;
+	main_ref_store = ref_store_init(get_git_dir(),
+					(REF_STORE_READ |
+					 REF_STORE_WRITE |
+					 REF_STORE_ODB |
+					 REF_STORE_MAIN));
+	return main_ref_store;
 }
 
 /*

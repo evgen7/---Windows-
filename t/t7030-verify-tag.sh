@@ -125,7 +125,7 @@ test_expect_success GPG 'verify multiple tags' '
 	test_cmp expect.stderr actual.stderr
 '
 
-test_expect_success 'verifying tag with --format' '
+test_expect_success GPG 'verifying tag with --format' '
 	cat >expect <<-\EOF &&
 	tagname : fourth-signed
 	EOF
@@ -133,7 +133,7 @@ test_expect_success 'verifying tag with --format' '
 	test_cmp expect actual
 '
 
-test_expect_success 'verifying a forged tag with --format should fail silently' '
+test_expect_success GPG 'verifying a forged tag with --format should fail silently' '
 	>expect &&
 	test_must_fail git verify-tag --format="tagname : %(tag)" $(cat forged1.tag) >actual-forged &&
 	test_cmp expect actual-forged

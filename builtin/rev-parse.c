@@ -205,21 +205,22 @@ static int anti_reference(const char *refname, const struct object_id *oid, int 
 	return 0;
 }
 
-static int show_abbrev(const unsigned char *sha1, void *cb_data)
+static int show_abbrev(const struct object_id *oid, void *cb_data)
 {
-	show_rev(NORMAL, sha1, NULL);
+	show_rev(NORMAL, oid->hash, NULL);
 	return 0;
 }
 
 static void show_datestring(const char *flag, const char *datestr)
 {
-	static char buffer[100];
+	char *buffer;
 
 	/* date handling requires both flags and revs */
 	if ((filter & (DO_FLAGS | DO_REVS)) != (DO_FLAGS | DO_REVS))
 		return;
-	snprintf(buffer, sizeof(buffer), "%s%lu", flag, approxidate(datestr));
+	buffer = xstrfmt("%s%lu", flag, approxidate(datestr));
 	show(buffer);
+	free(buffer);
 }
 
 static int show_file(const char *arg, int output_prefix)

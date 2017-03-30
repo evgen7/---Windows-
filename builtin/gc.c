@@ -135,8 +135,6 @@ static int too_many_loose_objects(void)
 	 * distributed, we can check only one and get a reasonable
 	 * estimate.
 	 */
-	char path[PATH_MAX];
-	const char *objdir = get_object_directory();
 	DIR *dir;
 	struct dirent *ent;
 	int auto_threshold;
@@ -146,11 +144,7 @@ static int too_many_loose_objects(void)
 	if (gc_auto_threshold <= 0)
 		return 0;
 
-	if (sizeof(path) <= snprintf(path, sizeof(path), "%s/17", objdir)) {
-		warning(_("insanely long object directory %.*s"), 50, objdir);
-		return 0;
-	}
-	dir = opendir(path);
+	dir = opendir(git_path("objects/17"));
 	if (!dir)
 		return 0;
 
@@ -470,10 +464,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 
 	report_garbage = report_pack_garbage;
 	reprepare_packed_git();
-	if (pack_garbage.nr > 0) {
-		close_all_packs();
+	if (pack_garbage.nr > 0)
 		clean_pack_garbage();
-	}
 
 	if (auto_gc && too_many_loose_objects())
 		warning(_("There are too many unreachable loose objects; "

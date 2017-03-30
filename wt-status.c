@@ -407,6 +407,16 @@ static void wt_longstatus_print_change_data(struct wt_status *s,
 	strbuf_release(&twobuf);
 }
 
+static char short_submodule_status(struct wt_status_change_data *d) {
+	if (d->new_submodule_commits)
+		return 'M';
+	if (d->dirty_submodule & DIRTY_SUBMODULE_MODIFIED)
+		return 'm';
+	if (d->dirty_submodule & DIRTY_SUBMODULE_UNTRACKED)
+		return '?';
+	return d->worktree_status;
+}
+
 static void wt_status_collect_changed_cb(struct diff_queue_struct *q,
 					 struct diff_options *options,
 					 void *data)
@@ -435,14 +445,8 @@ static void wt_status_collect_changed_cb(struct diff_queue_struct *q,
 			d->dirty_submodule = p->two->dirty_submodule;
 			d->new_submodule_commits = !!oidcmp(&p->one->oid,
 							    &p->two->oid);
-			if (s->status_format == STATUS_FORMAT_SHORT) {
-				if (d->new_submodule_commits)
-					d->worktree_status = 'M';
-				else if (d->dirty_submodule & DIRTY_SUBMODULE_MODIFIED)
-					d->worktree_status = 'm';
-				else if (d->dirty_submodule & DIRTY_SUBMODULE_UNTRACKED)
-					d->worktree_status = '?';
-			}
+			if (s->status_format == STATUS_FORMAT_SHORT)
+				d->worktree_status = short_submodule_status(d);
 		}
 
 		switch (p->status) {
