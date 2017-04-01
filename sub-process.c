@@ -66,7 +66,7 @@ void subprocess_stop(struct subprocess_entry *entry)
 	hashmap_remove(&subprocess_map, entry, NULL);
 }
 
-void subprocess_exit_handler(struct child_process *process)
+static void subprocess_exit_handler(struct child_process *process)
 {
 	sigchain_push(SIGPIPE, SIG_IGN);
 	/* Closing the pipe signals the filter to initiate a shutdown. */

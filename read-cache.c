@@ -19,10 +19,6 @@
 #include "split-index.h"
 #include "utf8.h"
 
-#ifndef NO_PTHREADS
-#include <pthread.h>
-#endif
-
 /* Mask for the name length in ce_flags in the on-disk index */
 
 #define CE_NAMEMASK  (0x0fff)
@@ -894,34 +890,6 @@ static int has_file_name(struct index_state *istate,
 }
 
 /*
- * Like strcmp(), but also return the offset of the first change.
- */
-int strcmp_offset(const char *s1_in, const char *s2_in, int *first_change)
-{
-	const unsigned char *s1 = (const unsigned char *)s1_in;
-	const unsigned char *s2 = (const unsigned char *)s2_in;
-	int diff = 0;
-	int k;
-
-	*first_change = 0;
-	for (k=0; s1[k]; k++)
-		if ((diff = (s1[k] - s2[k])))
-			goto found_it;
-	if (!s2[k])
-		return 0;
-	diff = -1;
-
-found_it:
-	*first_change = k;
-	if (diff > 0)
-		return 1;
-	else if (diff < 0)
-		return -1;
-	else
-		return 0;
-}
-
-/*
  * Do we have another file with a pathname that is a proper
  * subset of the name we're trying to add?
  */
@@ -932,21 +900,6 @@ static int has_dir_name(struct index_state *istate,
 	int stage = ce_stage(ce);
 	const char *name = ce->name;
 	const char *slash = name + ce_namelen(ce);
-	int len_eq_last;
-	int cmp_last = 0;
-
-	if (istate->cache_nr > 0) {
-		/*
-		 * Compare the entry's full path with the last path in the index.
-		 * If it sorts AFTER the last entry in the index and they have no
-		 * common prefix, then there cannot be any F/D name conflicts.
-		 */
-		cmp_last = strcmp_offset(name,
-			istate->cache[istate->cache_nr-1]->name,
-			&len_eq_last);
-		if (cmp_last > 0 && len_eq_last == 0)
-			return retval;
-	}
 
 	for (;;) {
 		int len;
@@ -958,24 +911,6 @@ static int has_dir_name(struct index_state *istate,
 				return retval;
 		}
 		len = slash - name;
-
-		if (cmp_last > 0) {
-			/*
-			 * If this part of the directory prefix (including the trailing
-			 * slash) already appears in the path of the last entry in the
-			 * index, then we cannot also have a file with this prefix (or
-			 * any parent directory prefix).
-			 */
-			if (len+1 <= len_eq_last)
-				return retval;
-			/*
-			 * If this part of the directory prefix (excluding the trailing
-			 * slash) is longer than the known equal portions, then this part
-			 * of the prefix cannot collide with a file.  Go on to the parent.
-			 */
-			if (len > len_eq_last)
-				continue;
-		}
 
 		pos = index_name_stage_pos(istate, name, len, stage);
 		if (pos >= 0) {
@@ -1068,16 +1003,7 @@ static int add_index_entry_with_check(struct index_state *istate, struct cache_e
 
 	if (!(option & ADD_CACHE_KEEP_CACHE_TREE))
 		cache_tree_invalidate_path(istate, ce->name);
-
-	/*
-	 * If this entry's path sorts after the last entry in the index,
-	 * we can avoid searching for it.
-	 */
-	if (istate->cache_nr > 0 &&
-		strcmp(ce->name, istate->cache[istate->cache_nr - 1]->name) > 0)
-		pos = -istate->cache_nr - 1;
-	else
-		pos = index_name_stage_pos(istate, ce->name, ce_namelen(ce), ce_stage(ce));
+	pos = index_name_stage_pos(istate, ce->name, ce_namelen(ce), ce_stage(ce));
 
 	/* existing match? Just replace it. */
 	if (pos >= 0) {
@@ -1452,12 +1378,24 @@ static int verify_hdr(struct cache_header *hdr, unsigned long size)
 	git_SHA_CTX c;
 	unsigned char sha1[20];
 	int hdr_version;
+	int do_checksum = 1; /* default to true for now */
 
 	if (hdr->hdr_signature != htonl(CACHE_SIGNATURE))
 		return error("bad signature");
 	hdr_version = ntohl(hdr->hdr_version);
 	if (hdr_version < INDEX_FORMAT_LB || INDEX_FORMAT_UB < hdr_version)
 		return error("bad index version %d", hdr_version);
+
+	/*
+	 * Since we run very early in command startup, git_config()
+	 * may not have been called yet and the various "core_*"
+	 * global variables haven't been set.  So look it up
+	 * explicitly.
+	 */
+	git_config_get_bool("core.checksumindex", &do_checksum);
+	if (!do_checksum)
+		return 0;
+
 	git_SHA1_Init(&c);
 	git_SHA1_Update(&c, hdr, size - 20);
 	git_SHA1_Final(sha1, &c);
@@ -1465,34 +1403,6 @@ static int verify_hdr(struct cache_header *hdr, unsigned long size)
 		return error("bad index file sha1 signature");
 	return 0;
 }
-
-#ifndef NO_PTHREADS
-/*
- * Require index file to be larger than this threshold before
- * we bother using a thread to verify the SHA.
- * This value was arbitrarily chosen.
- */
-#define VERIFY_HDR_THRESHOLD	10*1024*1024
-
-struct verify_hdr_thread_data
-{
-	pthread_t thread_id;
-	struct cache_header *hdr;
-	size_t size;
-	int result;
-};
-
-/*
- * A thread proc to run the verify_hdr() computation
- * in a background thread.
- */
-static void *verify_hdr_thread(void *_data)
-{
-	struct verify_hdr_thread_data *p = _data;
-	p->result = verify_hdr(p->hdr, (unsigned long)p->size);
-	return NULL;
-}
-#endif
 
 static int read_index_extension(struct index_state *istate,
 				const char *ext, void *data, unsigned long sz)
@@ -1696,9 +1606,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	void *mmap;
 	size_t mmap_size;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-#ifndef NO_PTHREADS
-	struct verify_hdr_thread_data verify_hdr_thread_data;
-#endif
 
 	if (istate->initialized)
 		return istate->cache_nr;
@@ -1725,23 +1632,8 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	close(fd);
 
 	hdr = mmap;
-#ifdef NO_PTHREADS
 	if (verify_hdr(hdr, mmap_size) < 0)
 		goto unmap;
-#else
-	if (mmap_size < VERIFY_HDR_THRESHOLD) {
-		if (verify_hdr(hdr, mmap_size) < 0)
-			goto unmap;
-	} else {
-		verify_hdr_thread_data.hdr = hdr;
-		verify_hdr_thread_data.size = mmap_size;
-		verify_hdr_thread_data.result = -1;
-		if (pthread_create(
-				&verify_hdr_thread_data.thread_id, NULL,
-				verify_hdr_thread, &verify_hdr_thread_data))
-			die_errno("unable to start verify_hdr_thread");
-	}
-#endif
 
 	hashcpy(istate->sha1, (const unsigned char *)hdr + mmap_size - 20);
 	istate->version = ntohl(hdr->hdr_version);
@@ -1789,16 +1681,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 		src_offset += 8;
 		src_offset += extsize;
 	}
-
-#ifndef NO_PTHREADS
-	if (mmap_size >= VERIFY_HDR_THRESHOLD) {
-		if (pthread_join(verify_hdr_thread_data.thread_id, NULL))
-			die_errno("unable to join verify_hdr_thread");
-		if (verify_hdr_thread_data.result < 0)
-			goto unmap;
-	}
-#endif
-
 	munmap(mmap, mmap_size);
 	return istate->cache_nr;
 
@@ -2060,7 +1942,7 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 {
 	int size;
 	struct ondisk_cache_entry *ondisk;
-	FAKE_INIT(int, saved_namelen, 0);
+	int saved_namelen = saved_namelen; /* compiler workaround */
 	char *name;
 	int result;
 

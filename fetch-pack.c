@@ -1042,7 +1042,7 @@ static void update_shallow(struct fetch_pack_args *args,
 		struct object_id *oid = si->shallow->oid;
 		for (i = 0; i < si->shallow->nr; i++)
 			if (has_object_file(&oid[i]))
-				oid_array_append(&extra, oid + i);
+				oid_array_append(&extra, &oid[i]);
 		if (extra.nr) {
 			setup_alternate_shallow(&shallow_lock,
 						&alternate_shallow_file,
@@ -1078,9 +1078,9 @@ static void update_shallow(struct fetch_pack_args *args,
 			return;
 		}
 		for (i = 0; i < si->nr_ours; i++)
-			oid_array_append(&extra, oid + si->ours[i]);
+			oid_array_append(&extra, &oid[si->ours[i]]);
 		for (i = 0; i < si->nr_theirs; i++)
-			oid_array_append(&extra, oid + si->theirs[i]);
+			oid_array_append(&extra, &oid[si->theirs[i]]);
 		setup_alternate_shallow(&shallow_lock,
 					&alternate_shallow_file,
 					&extra);

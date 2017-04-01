@@ -834,6 +834,15 @@ int git_parse_ulong(const char *value, unsigned long *ret)
 	return 1;
 }
 
+static int git_parse_ssize_t(const char *value, ssize_t *ret)
+{
+	ssize_t tmp;
+	if (!git_parse_signed(value, &tmp, maximum_signed_value_of_type(ssize_t)))
+		return 0;
+	*ret = tmp;
+	return 1;
+}
+
 NORETURN
 static void die_bad_number(const char *name, const char *value)
 {
@@ -888,6 +897,14 @@ unsigned long git_config_ulong(const char *name, const char *value)
 {
 	unsigned long ret;
 	if (!git_parse_ulong(value, &ret))
+		die_bad_number(name, value);
+	return ret;
+}
+
+ssize_t git_config_ssize_t(const char *name, const char *value)
+{
+	ssize_t ret;
+	if (!git_parse_ssize_t(value, &ret))
 		die_bad_number(name, value);
 	return ret;
 }
@@ -1197,8 +1214,16 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
+	if (!strcmp(var, "core.hidedotfiles")) {
+		if (value && !strcasecmp(value, "dotgitonly"))
+			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
+		else
+			hide_dotfiles = git_config_bool(var, value);
+		return 0;
+	}
+
 	/* Add other config variables here and to Documentation/config.txt. */
-	return platform_core_config(var, value);
+	return 0;
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1494,16 +1519,9 @@ static int do_git_config_sequence(config_fn_t fn, void *data)
 	char *repo_config = have_git_dir() ? git_pathdup("config") : NULL;
 
 	current_parsing_scope = CONFIG_SCOPE_SYSTEM;
-	if (git_config_system()) {
-		if (git_program_data_config() &&
-		    !access_or_die(git_program_data_config(), R_OK, 0))
-			ret += git_config_from_file(fn,
-						    git_program_data_config(),
-						    data);
-		if (!access_or_die(git_etc_gitconfig(), R_OK, 0))
-			ret += git_config_from_file(fn, git_etc_gitconfig(),
-						    data);
-	}
+	if (git_config_system() && !access_or_die(git_etc_gitconfig(), R_OK, 0))
+		ret += git_config_from_file(fn, git_etc_gitconfig(),
+					    data);
 
 	current_parsing_scope = CONFIG_SCOPE_GLOBAL;
 	if (xdg_config && !access_or_die(xdg_config, R_OK, ACCESS_EACCES_OK))

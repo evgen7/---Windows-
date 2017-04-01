@@ -842,7 +842,7 @@ static int update_shallow_ref(struct command *cmd, struct shallow_info *si)
 		if (si->used_shallow[i] &&
 		    (si->used_shallow[i][cmd->index / 32] & mask) &&
 		    !delayed_reachability_test(si, i))
-			oid_array_append(&extra, si->shallow->oid + i);
+			oid_array_append(&extra, &si->shallow->oid[i]);
 
 	opt.env = tmp_objdir_env(tmp_objdir);
 	setup_alternate_shallow(&shallow_lock, &opt.shallow_file, &extra);
