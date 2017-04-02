@@ -177,9 +177,6 @@ struct cache_entry {
 	unsigned int ce_flags;
 	unsigned int ce_namelen;
 	unsigned int index;	/* for link extension */
-	unsigned int precompute_hash_state;
-	unsigned int precompute_hash_name;
-	unsigned int precompute_hash_dir;
 	struct object_id oid;
 	char name[FLEX_ARRAY]; /* more */
 };
@@ -235,19 +232,6 @@ struct cache_entry {
 #if CE_EXTENDED_FLAGS & 0x803FFFFF
 #error "CE_EXTENDED_FLAGS out of range"
 #endif
-
-/*
- * Bit set if preload-index precomputed the hash value(s)
- * for this cache-entry.
- */ 
-#define CE_PRECOMPUTE_HASH_STATE__SET   (1 << 0)
-/*
- * Bit set if precompute-index also precomputed the hash value
- * for the parent directory.
- */ 
-#define CE_PRECOMPUTE_HASH_STATE__DIR   (1 << 1)
-
-void precompute_istate_hashes(struct cache_entry *ce);
 
 /* Forward structure decls */
 struct pathspec;
@@ -794,14 +778,6 @@ extern int ref_paranoia;
  */
 extern char comment_line_char;
 extern int auto_comment_line_char;
-
-/* Windows only */
-enum hide_dotfiles_type {
-	HIDE_DOTFILES_FALSE = 0,
-	HIDE_DOTFILES_TRUE,
-	HIDE_DOTFILES_DOTGITONLY
-};
-extern enum hide_dotfiles_type hide_dotfiles;
 
 enum log_refs_config {
 	LOG_REFS_UNSET = -1,
