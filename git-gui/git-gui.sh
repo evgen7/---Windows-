@@ -2209,6 +2209,8 @@ proc do_gitk {revs {is_submodule false}} {
 
 		if {$old_GIT_DIR ne {}} {
 			set env(GIT_DIR) $old_GIT_DIR
+		} else {
+			unset env(GIT_DIR)
 		}
 		cd $pwd
 
@@ -2514,6 +2516,10 @@ proc toggle_or_diff {mode w args} {
 		if {$last_clicked ne {}} {
 			set lno [lindex $last_clicked 1]
 		} else {
+			if {[llength $file_lists($w)] == 0} {
+				set last_clicked {}
+				return
+			}
 			set lno [expr {int([lindex [$w tag ranges in_diff] 0])}]
 		}
 		if {$mode eq "toggle"} {
