@@ -1703,7 +1703,7 @@ static const char *unpack(int err_fd, struct shallow_info *si)
 		argv_array_pushl(&child.args, "index-pack", "--stdin", NULL);
 		push_header_arg(&child.args, &hdr);
 
-		if (gethostname(hostname, sizeof(hostname)))
+		if (xgethostname(hostname, sizeof(hostname)))
 			xsnprintf(hostname, sizeof(hostname), "localhost");
 		argv_array_pushf(&child.args,
 				 "--keep=receive-pack %"PRIuMAX" on %s",

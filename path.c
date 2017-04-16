@@ -7,7 +7,6 @@
 #include "dir.h"
 #include "worktree.h"
 #include "submodule-config.h"
-#include "exec_cmd.h"
 
 static int get_st_mode_bits(const char *path, int *mode)
 {
@@ -618,18 +617,16 @@ static struct passwd *getpw_str(const char *username, size_t len)
  * Return a string with ~ and ~user expanded via getpw*.  If buf != NULL,
  * then it is a newly allocated string. Returns NULL on getpw failure or
  * if path is NULL.
+ *
+ * If real_home is true, real_path($HOME) is used in the expansion.
  */
-char *expand_user_path(const char *path)
+char *expand_user_path(const char *path, int real_home)
 {
 	struct strbuf user_path = STRBUF_INIT;
 	const char *to_copy = path;
 
 	if (path == NULL)
 		goto return_null;
-#ifdef __MINGW32__
-	if (path[0] == '/')
-		return system_path(path + 1);
-#endif
 	if (path[0] == '~') {
 		const char *first_slash = strchrnul(path, '/');
 		const char *username = path + 1;
@@ -638,7 +635,10 @@ char *expand_user_path(const char *path)
 			const char *home = getenv("HOME");
 			if (!home)
 				goto return_null;
-			strbuf_addstr(&user_path, home);
+			if (real_home)
+				strbuf_addstr(&user_path, real_path(home));
+			else
+				strbuf_addstr(&user_path, home);
 #ifdef GIT_WINDOWS_NATIVE
 			convert_slashes(user_path.buf);
 #endif
@@ -707,7 +707,7 @@ const char *enter_repo(const char *path, int strict)
 		strbuf_add(&validated_path, path, len);
 
 		if (used_path.buf[0] == '~') {
-			char *newpath = expand_user_path(used_path.buf);
+			char *newpath = expand_user_path(used_path.buf, 0);
 			if (!newpath)
 				return NULL;
 			strbuf_attach(&used_path, newpath, strlen(newpath),

@@ -1580,7 +1580,7 @@ struct ref_store *get_submodule_ref_store(const char *submodule)
 	if (ret)
 		goto done;
 
-	/* pretend that add_submodule_odb() has been called */
+	/* assume that add_submodule_odb() has been called */
 	refs = ref_store_init(submodule_sb.buf,
 			      REF_STORE_READ | REF_STORE_ODB);
 	register_submodule_ref_store(refs, submodule);
