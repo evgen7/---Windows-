@@ -280,6 +280,7 @@ int cmd_main(int argc, const char **argv)
 	struct command *cmd;
 
 	setup_git_directory();
+
 	argv = get_store(argv + 1, &refs);
 
 	func = *argv++;

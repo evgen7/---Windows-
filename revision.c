@@ -1336,7 +1336,7 @@ void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
 	worktrees = get_worktrees(0);
 	for (p = worktrees; *p; p++) {
 		struct worktree *wt = *p;
-		struct index_state istate = {0};
+		struct index_state istate = { NULL };
 
 		if (wt->is_current)
 			continue; /* current index already taken care of */

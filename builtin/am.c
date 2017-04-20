@@ -746,14 +746,18 @@ static int split_mail_conv(mail_conv_fn fn, struct am_state *state,
 		mail = mkpath("%s/%0*d", state->dir, state->prec, i + 1);
 
 		out = fopen(mail, "w");
-		if (!out)
+		if (!out) {
+			if (in != stdin)
+				fclose(in);
 			return error_errno(_("could not open '%s' for writing"),
 					   mail);
+		}
 
 		ret = fn(out, in, keep_cr);
 
 		fclose(out);
-		fclose(in);
+		if (in != stdin)
+			fclose(in);
 
 		if (ret)
 			return error(_("could not parse patch '%s'"), *paths);
@@ -1165,42 +1169,39 @@ static void NORETURN die_user_resolve(const struct am_state *state)
 	exit(128);
 }
 
-static void am_signoff(struct strbuf *sb)
-{
-	char *cp;
-	struct strbuf mine = STRBUF_INIT;
-
-	/* Does it end with our own sign-off? */
-	strbuf_addf(&mine, "\n%s%s\n",
-		    sign_off_header,
-		    fmt_name(getenv("GIT_COMMITTER_NAME"),
-			     getenv("GIT_COMMITTER_EMAIL")));
-	if (mine.len < sb->len &&
-	    !strcmp(mine.buf, sb->buf + sb->len - mine.len))
-		goto exit; /* no need to duplicate */
-
-	/* Does it have any Signed-off-by: in the text */
-	for (cp = sb->buf;
-	     cp && *cp && (cp = strstr(cp, sign_off_header)) != NULL;
-	     cp = strchr(cp, '\n')) {
-		if (sb->buf == cp || cp[-1] == '\n')
-			break;
-	}
-
-	strbuf_addstr(sb, mine.buf + !!cp);
-exit:
-	strbuf_release(&mine);
-}
-
 /**
  * Appends signoff to the "msg" field of the am_state.
  */
 static void am_append_signoff(struct am_state *state)
 {
+	char *cp;
+	struct strbuf mine = STRBUF_INIT;
 	struct strbuf sb = STRBUF_INIT;
 
 	strbuf_attach(&sb, state->msg, state->msg_len, state->msg_len);
-	am_signoff(&sb);
+
+	/* our sign-off */
+	strbuf_addf(&mine, "\n%s%s\n",
+		    sign_off_header,
+		    fmt_name(getenv("GIT_COMMITTER_NAME"),
+			     getenv("GIT_COMMITTER_EMAIL")));
+
+	/* Does sb end with it already? */
+	if (mine.len < sb.len &&
+	    !strcmp(mine.buf, sb.buf + sb.len - mine.len))
+		goto exit; /* no need to duplicate */
+
+	/* Does it have any Signed-off-by: in the text */
+	for (cp = sb.buf;
+	     cp && *cp && (cp = strstr(cp, sign_off_header)) != NULL;
+	     cp = strchr(cp, '\n')) {
+		if (sb.buf == cp || cp[-1] == '\n')
+			break;
+	}
+
+	strbuf_addstr(&sb, mine.buf + !!cp);
+exit:
+	strbuf_release(&mine);
 	state->msg = strbuf_detach(&sb, &state->msg_len);
 }
 

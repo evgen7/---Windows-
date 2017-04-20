@@ -17,6 +17,6 @@ grep '<meta name="generator" content="AsciiDoc ' Documentation/git.html
 
 # Build docs with AsciiDoctor
 make clean
-make --jobs=2 doc USE_ASCIIDOCTOR=1
+make --jobs=2 USE_ASCIIDOCTOR=1 doc
 test -s Documentation/git.html
 grep '<meta name="generator" content="Asciidoctor ' Documentation/git.html
