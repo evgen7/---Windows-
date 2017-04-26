@@ -24,17 +24,10 @@ all::
 # Define NO_OPENSSL environment variable if you do not have OpenSSL.
 # This also implies BLK_SHA1.
 #
-# Define USE_LIBPCRE if you have and want to use libpcre. Various
-# commands such as log and grep offer runtime options to use
-# Perl-compatible regular expressions instead of standard or extended
-# POSIX regular expressions.
+# Define USE_LIBPCRE if you have and want to use libpcre. git-grep will be
+# able to use Perl-compatible regular expressions.
 #
-# The USE_LIBPCRE flag is a synonym for USE_LIBPCRE2, in previous
-# versions it meant the same thing USE_LIBPCRE1 does now. Define
-# USE_LIBPCRE1 instead if you'd like to use the legacy version 1 of
-# the PCRE library.
-#
-# Define LIBPCREDIR=/foo/bar if your PCRE header and library files are in
+# Define LIBPCREDIR=/foo/bar if your libpcre header and library files are in
 # /foo/bar/include and /foo/bar/lib directories.
 #
 # Define HAVE_ALLOCA_H if you have working alloca(3) defined in that header.
@@ -146,13 +139,6 @@ all::
 #
 # Define PPC_SHA1 environment variable when running make to make use of
 # a bundled SHA1 routine optimized for PowerPC.
-#
-# Define DC_SHA1 to unconditionally enable the collision-detecting sha1
-# algorithm. This is slower, but may detect attempted collision attacks.
-# Takes priority over other *_SHA1 knobs.
-#
-# Define OPENSSL_SHA1 environment variable when running make to link
-# with the SHA1 routine from openssl library.
 #
 # Define SHA1_MAX_BLOCK_SIZE to limit the amount of data that will be hashed
 # in one call to the platform's SHA1_Update(). e.g. APPLE_COMMON_CRYPTO
@@ -622,7 +608,6 @@ TEST_PROGRAMS_NEED_X += test-ctype
 TEST_PROGRAMS_NEED_X += test-config
 TEST_PROGRAMS_NEED_X += test-date
 TEST_PROGRAMS_NEED_X += test-delta
-TEST_PROGRAMS_NEED_X += test-dir-iterator
 TEST_PROGRAMS_NEED_X += test-dump-cache-tree
 TEST_PROGRAMS_NEED_X += test-dump-split-index
 TEST_PROGRAMS_NEED_X += test-dump-untracked-cache
@@ -635,12 +620,10 @@ TEST_PROGRAMS_NEED_X += test-line-buffer
 TEST_PROGRAMS_NEED_X += test-match-trees
 TEST_PROGRAMS_NEED_X += test-mergesort
 TEST_PROGRAMS_NEED_X += test-mktemp
-TEST_PROGRAMS_NEED_X += test-online-cpus
 TEST_PROGRAMS_NEED_X += test-parse-options
 TEST_PROGRAMS_NEED_X += test-path-utils
 TEST_PROGRAMS_NEED_X += test-prio-queue
 TEST_PROGRAMS_NEED_X += test-read-cache
-TEST_PROGRAMS_NEED_X += test-ref-store
 TEST_PROGRAMS_NEED_X += test-regex
 TEST_PROGRAMS_NEED_X += test-revision-walking
 TEST_PROGRAMS_NEED_X += test-run-command
@@ -799,7 +782,6 @@ LIB_OBJS += notes-cache.o
 LIB_OBJS += notes-merge.o
 LIB_OBJS += notes-utils.o
 LIB_OBJS += object.o
-LIB_OBJS += oidset.o
 LIB_OBJS += pack-bitmap.o
 LIB_OBJS += pack-bitmap-write.o
 LIB_OBJS += pack-check.o
@@ -826,7 +808,6 @@ LIB_OBJS += reflog-walk.o
 LIB_OBJS += refs.o
 LIB_OBJS += refs/files-backend.o
 LIB_OBJS += refs/iterator.o
-LIB_OBJS += refs/ref-cache.o
 LIB_OBJS += ref-filter.o
 LIB_OBJS += remote.o
 LIB_OBJS += replace_object.o
@@ -851,7 +832,6 @@ LIB_OBJS += streaming.o
 LIB_OBJS += string-list.o
 LIB_OBJS += submodule.o
 LIB_OBJS += submodule-config.o
-LIB_OBJS += sub-process.o
 LIB_OBJS += symlinks.o
 LIB_OBJS += tag.o
 LIB_OBJS += tempfile.o
@@ -1095,24 +1075,13 @@ ifdef NO_LIBGEN_H
 	COMPAT_OBJS += compat/basename.o
 endif
 
-USE_LIBPCRE2 ?= $(USE_LIBPCRE)
-
-ifdef USE_LIBPCRE1
-	BASIC_CFLAGS += -DUSE_LIBPCRE1
-	EXTLIBS += -lpcre
-endif
-
-ifneq (,$(USE_LIBPCRE2))
-	ifdef USE_LIBPCRE1
-$(error Only set USE_LIBPCRE2 (or its alias USE_LIBPCRE) or USE_LIBPCRE1, not both!)
+ifdef USE_LIBPCRE
+	BASIC_CFLAGS += -DUSE_LIBPCRE
+	ifdef LIBPCREDIR
+		BASIC_CFLAGS += -I$(LIBPCREDIR)/include
+		EXTLIBS += -L$(LIBPCREDIR)/$(lib) $(CC_LD_DYNPATH)$(LIBPCREDIR)/$(lib)
 	endif
-	BASIC_CFLAGS += -DUSE_LIBPCRE2
-	EXTLIBS += -lpcre2-8
-endif
-
-ifdef LIBPCREDIR
-	BASIC_CFLAGS += -I$(LIBPCREDIR)/include
-	EXTLIBS += -L$(LIBPCREDIR)/$(lib) $(CC_LD_DYNPATH)$(LIBPCREDIR)/$(lib)
+	EXTLIBS += -lpcre
 endif
 
 ifdef HAVE_ALLOCA_H
@@ -1416,27 +1385,20 @@ ifdef APPLE_COMMON_CRYPTO
 	SHA1_MAX_BLOCK_SIZE = 1024L*1024L*1024L
 endif
 
-ifdef OPENSSL_SHA1
-	EXTLIBS += $(LIB_4_CRYPTO)
-	BASIC_CFLAGS += -DSHA1_OPENSSL
-else
 ifdef BLK_SHA1
+	SHA1_HEADER = "block-sha1/sha1.h"
 	LIB_OBJS += block-sha1/sha1.o
-	BASIC_CFLAGS += -DSHA1_BLK
 else
 ifdef PPC_SHA1
+	SHA1_HEADER = "ppc/sha1.h"
 	LIB_OBJS += ppc/sha1.o ppc/sha1ppc.o
-	BASIC_CFLAGS += -DSHA1_PPC
 else
 ifdef APPLE_COMMON_CRYPTO
 	COMPAT_CFLAGS += -DCOMMON_DIGEST_FOR_OPENSSL
-	BASIC_CFLAGS += -DSHA1_APPLE
+	SHA1_HEADER = <CommonCrypto/CommonDigest.h>
 else
-	DC_SHA1 := YesPlease
-	LIB_OBJS += sha1dc/sha1.o
-	LIB_OBJS += sha1dc/ubc_check.o
-	BASIC_CFLAGS += -DSHA1_DC
-endif
+	SHA1_HEADER = <openssl/sha.h>
+	EXTLIBS += $(LIB_4_CRYPTO)
 endif
 endif
 endif
@@ -1628,6 +1590,7 @@ endif
 
 # Shell quote (do not use $(call) to accommodate ancient setups);
 
+SHA1_HEADER_SQ = $(subst ','\'',$(SHA1_HEADER))
 ETC_GITCONFIG_SQ = $(subst ','\'',$(ETC_GITCONFIG))
 ETC_GITATTRIBUTES_SQ = $(subst ','\'',$(ETC_GITATTRIBUTES))
 
@@ -1661,7 +1624,8 @@ PERLLIB_EXTRA_SQ = $(subst ','\'',$(PERLLIB_EXTRA))
 # from the dependency list, that would make each entry appear twice.
 LIBS = $(filter-out %.o, $(GITLIBS)) $(EXTLIBS)
 
-BASIC_CFLAGS += $(COMPAT_CFLAGS)
+BASIC_CFLAGS += -DSHA1_HEADER='$(SHA1_HEADER_SQ)' \
+	$(COMPAT_CFLAGS)
 LIB_OBJS += $(COMPAT_OBJS)
 
 # Quote for C
@@ -1880,7 +1844,6 @@ perl/perl.mak: perl/PM.stamp
 
 perl/PM.stamp: FORCE
 	@$(FIND) perl -type f -name '*.pm' | sort >$@+ && \
-	$(PERL_PATH) -V >>$@+ && \
 	{ cmp $@+ $@ >/dev/null 2>/dev/null || mv $@+ $@; } && \
 	$(RM) $@+
 
@@ -2263,14 +2226,11 @@ GIT-BUILD-OPTIONS: FORCE
 	@echo TAR=\''$(subst ','\'',$(subst ','\'',$(TAR)))'\' >>$@+
 	@echo NO_CURL=\''$(subst ','\'',$(subst ','\'',$(NO_CURL)))'\' >>$@+
 	@echo NO_EXPAT=\''$(subst ','\'',$(subst ','\'',$(NO_EXPAT)))'\' >>$@+
-	@echo USE_LIBPCRE1=\''$(subst ','\'',$(subst ','\'',$(USE_LIBPCRE)))'\' >>$@+
-	@echo USE_LIBPCRE2=\''$(subst ','\'',$(subst ','\'',$(USE_LIBPCRE2)))'\' >>$@+
+	@echo USE_LIBPCRE=\''$(subst ','\'',$(subst ','\'',$(USE_LIBPCRE)))'\' >>$@+
 	@echo NO_PERL=\''$(subst ','\'',$(subst ','\'',$(NO_PERL)))'\' >>$@+
-	@echo NO_PTHREADS=\''$(subst ','\'',$(subst ','\'',$(NO_PTHREADS)))'\' >>$@+
 	@echo NO_PYTHON=\''$(subst ','\'',$(subst ','\'',$(NO_PYTHON)))'\' >>$@+
 	@echo NO_UNIX_SOCKETS=\''$(subst ','\'',$(subst ','\'',$(NO_UNIX_SOCKETS)))'\' >>$@+
 	@echo PAGER_ENV=\''$(subst ','\'',$(subst ','\'',$(PAGER_ENV)))'\' >>$@+
-	@echo DC_SHA1=\''$(subst ','\'',$(subst ','\'',$(DC_SHA1)))'\' >>$@+
 	@echo X=\'$(X)\' >>$@+
 ifdef TEST_OUTPUT_DIRECTORY
 	@echo TEST_OUTPUT_DIRECTORY=\''$(subst ','\'',$(subst ','\'',$(TEST_OUTPUT_DIRECTORY)))'\' >>$@+
@@ -2384,17 +2344,9 @@ check: common-cmds.h
 C_SOURCES = $(patsubst %.o,%.c,$(C_OBJ))
 %.cocci.patch: %.cocci $(C_SOURCES)
 	@echo '    ' SPATCH $<; \
-	ret=0; \
 	for f in $(C_SOURCES); do \
-		$(SPATCH) --sp-file $< $$f $(SPATCH_FLAGS) || \
-			{ ret=$$?; break; }; \
-	done >$@+ 2>$@.log; \
-	if test $$ret != 0; \
-	then \
-		cat $@.log; \
-		exit 1; \
-	fi; \
-	mv $@+ $@; \
+		$(SPATCH) --sp-file $< $$f $(SPATCH_FLAGS); \
+	done >$@ 2>$@.log; \
 	if test -s $@; \
 	then \
 		echo '    ' SPATCH result: $@; \

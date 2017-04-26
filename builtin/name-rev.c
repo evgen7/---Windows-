@@ -80,7 +80,6 @@ static void name_rev(struct commit *commit,
 	struct rev_name *name = (struct rev_name *)commit->util;
 	struct commit_list *parents;
 	int parent_number = 1;
-	char *p = NULL;
 
 	parse_commit(commit);
 
@@ -88,7 +87,7 @@ static void name_rev(struct commit *commit,
 		return;
 
 	if (deref) {
-		tip_name = p = xstrfmt("%s^0", tip_name);
+		tip_name = xstrfmt("%s^0", tip_name);
 		from_tag += 1;
 
 		if (generation)
@@ -137,10 +136,8 @@ copy_data:
 		name->generation = generation;
 		name->distance = distance;
 		name->from_tag = from_tag;
-	} else {
-		free(p);
+	} else
 		return;
-	}
 
 	for (parents = commit->parents;
 			parents;

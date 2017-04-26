@@ -442,7 +442,6 @@ static void minimize(struct pack_list **min)
 	/* return if there are no objects missing from the unique set */
 	if (missing->size == 0) {
 		*min = unique;
-		free(missing);
 		return;
 	}
 
