@@ -702,7 +702,7 @@ int is_branch(const char *refname)
 
 struct read_ref_at_cb {
 	const char *refname;
-	unsigned long at_time;
+	timestamp_t at_time;
 	int cnt;
 	int reccnt;
 	unsigned char *sha1;
@@ -711,15 +711,15 @@ struct read_ref_at_cb {
 	unsigned char osha1[20];
 	unsigned char nsha1[20];
 	int tz;
-	unsigned long date;
+	timestamp_t date;
 	char **msg;
-	unsigned long *cutoff_time;
+	timestamp_t *cutoff_time;
 	int *cutoff_tz;
 	int *cutoff_cnt;
 };
 
 static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
-		const char *email, unsigned long timestamp, int tz,
+		const char *email, timestamp_t timestamp, int tz,
 		const char *message, void *cb_data)
 {
 	struct read_ref_at_cb *cb = cb_data;
@@ -766,7 +766,7 @@ static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
 }
 
 static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid,
-				  const char *email, unsigned long timestamp,
+				  const char *email, timestamp_t timestamp,
 				  int tz, const char *message, void *cb_data)
 {
 	struct read_ref_at_cb *cb = cb_data;
@@ -786,9 +786,9 @@ static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid
 	return 1;
 }
 
-int read_ref_at(const char *refname, unsigned int flags, unsigned long at_time, int cnt,
+int read_ref_at(const char *refname, unsigned int flags, timestamp_t at_time, int cnt,
 		unsigned char *sha1, char **msg,
-		unsigned long *cutoff_time, int *cutoff_tz, int *cutoff_cnt)
+		timestamp_t *cutoff_time, int *cutoff_tz, int *cutoff_cnt)
 {
 	struct read_ref_at_cb cb;
 
@@ -871,9 +871,9 @@ struct ref_update *ref_transaction_add_update(
 	update->flags = flags;
 
 	if (flags & REF_HAVE_NEW)
-		hashcpy(update->new_sha1, new_sha1);
+		hashcpy(update->new_oid.hash, new_sha1);
 	if (flags & REF_HAVE_OLD)
-		hashcpy(update->old_sha1, old_sha1);
+		hashcpy(update->old_oid.hash, old_sha1);
 	update->msg = xstrdup_or_null(msg);
 	return update;
 }
@@ -1512,11 +1512,7 @@ struct ref_store *get_main_ref_store(void)
 	if (main_ref_store)
 		return main_ref_store;
 
-	main_ref_store = ref_store_init(get_git_dir(),
-					(REF_STORE_READ |
-					 REF_STORE_WRITE |
-					 REF_STORE_ODB |
-					 REF_STORE_MAIN));
+	main_ref_store = ref_store_init(get_git_dir(), REF_STORE_ALL_CAPS);
 	return main_ref_store;
 }
 
@@ -1593,9 +1589,6 @@ done:
 struct ref_store *get_worktree_ref_store(const struct worktree *wt)
 {
 	struct ref_store *refs;
-	unsigned int refs_all_capabilities =
-		REF_STORE_READ | REF_STORE_WRITE |
-		REF_STORE_ODB | REF_STORE_MAIN;
 	const char *id;
 
 	if (wt->is_current)
@@ -1608,10 +1601,10 @@ struct ref_store *get_worktree_ref_store(const struct worktree *wt)
 
 	if (wt->id)
 		refs = ref_store_init(git_common_path("worktrees/%s", wt->id),
-				      refs_all_capabilities);
+				      REF_STORE_ALL_CAPS);
 	else
 		refs = ref_store_init(get_git_common_dir(),
-				      refs_all_capabilities);
+				      REF_STORE_ALL_CAPS);
 
 	if (refs)
 		register_ref_store_map(&worktree_ref_stores, "worktree",

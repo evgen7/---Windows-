@@ -502,6 +502,8 @@ static void compile_submodule_options(const struct grep_opt *opt,
 		break;
 	case GREP_PATTERN_TYPE_UNSPECIFIED:
 		break;
+	default:
+		die("BUG: Added a new grep pattern type without updating switch statement");
 	}
 
 	for (pattern = opt->pattern_list; pattern != NULL;
@@ -522,6 +524,8 @@ static void compile_submodule_options(const struct grep_opt *opt,
 		case GREP_PATTERN_BODY:
 		case GREP_PATTERN_HEAD:
 			break;
+		default:
+			die("BUG: Added a new grep token type without updating case statement");
 		}
 	}
 
@@ -1207,7 +1211,7 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 			break;
 		}
 
-		object = parse_object_or_die(oid.hash, arg);
+		object = parse_object_or_die(&oid, arg);
 		if (!seen_dashdash)
 			verify_non_filename(prefix, arg);
 		add_object_array_with_path(object, arg, &list, oc.mode, oc.path);

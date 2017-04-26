@@ -313,7 +313,7 @@ static void create_base_index(const struct commit *current_head)
 	opts.dst_index = &the_index;
 
 	opts.fn = oneway_merge;
-	tree = parse_tree_indirect(current_head->object.oid.hash);
+	tree = parse_tree_indirect(&current_head->object.oid);
 	if (!tree)
 		die(_("failed to unpack HEAD tree object"));
 	parse_tree(tree);
@@ -821,9 +821,9 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 					"If this is not correct, please remove the file\n"
 					"	%s\n"
 					"and try again.\n"),
-				git_path(whence == FROM_MERGE
-					 ? "MERGE_HEAD"
-					 : "CHERRY_PICK_HEAD"));
+				whence == FROM_MERGE ?
+					git_path_merge_head() :
+					git_path_cherry_pick_head());
 		}
 
 		fprintf(s->fp, "\n");
@@ -1340,7 +1340,6 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
-	static int no_lock_index = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1370,8 +1369,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
-		OPT_BOOL(0, "no-lock-index", &no_lock_index,
-			 N_("do not lock the index")),
 		OPT_END(),
 	};
 
@@ -1385,11 +1382,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
 
-	if (no_lock_index)
-		setenv("GIT_LOCK_INDEX", "false", 1);
-	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
-		no_lock_index = 1;
-
 	handle_untracked_files_arg(&s);
 	if (show_ignored_in_status)
 		s.show_ignored_files = 1;
@@ -1397,11 +1389,10 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
-	enable_fscache(1);
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
-	fd = no_lock_index ? -1 : hold_locked_index(&index_lock, 0);
+	fd = hold_locked_index(&index_lock, 0);
 
 	s.is_initial = get_sha1(s.reference, oid.hash) ? 1 : 0;
 	if (!s.is_initial)
@@ -1451,7 +1442,7 @@ static void print_summary(const char *prefix, const struct object_id *oid,
 	struct strbuf author_ident = STRBUF_INIT;
 	struct strbuf committer_ident = STRBUF_INIT;
 
-	commit = lookup_commit(oid->hash);
+	commit = lookup_commit(oid);
 	if (!commit)
 		die(_("couldn't look up newly created commit"));
 	if (parse_commit(commit))
@@ -1676,7 +1667,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	if (get_sha1("HEAD", oid.hash))
 		current_head = NULL;
 	else {
-		current_head = lookup_commit_or_die(oid.hash, "HEAD");
+		current_head = lookup_commit_or_die(&oid, "HEAD");
 		if (parse_commit(current_head))
 			die(_("could not parse HEAD commit"));
 	}
@@ -1780,7 +1771,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		append_merge_tag_headers(parents, &tail);
 	}
 
-	if (commit_tree_extended(sb.buf, sb.len, active_cache_tree->sha1,
+	if (commit_tree_extended(sb.buf, sb.len, active_cache_tree->oid.hash,
 			 parents, oid.hash, author_ident.buf, sign_commit, extra)) {
 		rollback_index_files();
 		die(_("failed to write commit object"));

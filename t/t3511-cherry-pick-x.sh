@@ -208,6 +208,22 @@ test_expect_success 'cherry-pick -x -s adds sob even when trailing sob exists fo
 	test_cmp expect actual
 '
 
+test_expect_success 'cherry-pick -x handles commits with no NL at end of message' '
+	pristine_detach initial &&
+	signer="S. I. Gner <signer@example.com>" &&
+	printf "title\n\nSigned-off-by: %s" "$signer" >msg &&
+	sha1=$(git commit-tree -p initial mesg-with-footer^{tree} <msg) &&
+	git cherry-pick -x $sha1 &&
+	cat <<-EOF >expect &&
+		title
+
+		Signed-off-by: $signer
+		(cherry picked from commit $sha1)
+	EOF
+	git log -1 --pretty=format:%B >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success 'cherry-pick -x treats "(cherry picked from..." line as part of footer' '
 	pristine_detach initial &&
 	sha1=$(git rev-parse mesg-with-cherry-footer^0) &&

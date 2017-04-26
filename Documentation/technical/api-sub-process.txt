@@ -2,9 +2,10 @@ sub-process API
 ===============
 
 The sub-process API makes it possible to run background sub-processes
-that should run until the git command exits and communicate with it
-through stdin and stdout.  This reduces the overhead of having to fork
-a new process each time it needs to be communicated with.
+for the entire lifetime of a Git invocation. If Git needs to communicate
+with an external process multiple times, then this can reduces the process
+invocation overhead. Git and the sub-process communicate through stdin and
+stdout.
 
 The sub-processes are kept in a hashmap by command name and looked up
 via the subprocess_find_entry function.  If an existing instance can not
@@ -26,11 +27,15 @@ Types
 'int(*subprocess_start_fn)(struct subprocess_entry *entry)'::
 
 	User-supplied function to initialize the sub-process.  This is
-	typically used to negoiate the interface version and capabilities.
+	typically used to negotiate the interface version and capabilities.
 
 
 Functions
 ---------
+
+`cmd2process_cmp`::
+
+	Function to test two subprocess hashmap entries for equality.
 
 `subprocess_start`::
 

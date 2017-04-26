@@ -232,7 +232,7 @@ static void export_blob(const struct object_id *oid)
 
 	if (anonymize) {
 		buf = anonymize_blob(&size);
-		object = (struct object *)lookup_blob(oid->hash);
+		object = (struct object *)lookup_blob(oid);
 		eaten = 0;
 	} else {
 		buf = read_sha1_file(oid->hash, &type, &size);
@@ -240,7 +240,7 @@ static void export_blob(const struct object_id *oid)
 			die ("Could not read blob %s", oid_to_hex(oid));
 		if (check_sha1_signature(oid->hash, buf, size, typename(type)) < 0)
 			die("sha1 mismatch in blob %s", oid_to_hex(oid));
-		object = parse_object_buffer(oid->hash, type, size, buf, &eaten);
+		object = parse_object_buffer(oid, type, size, buf, &eaten);
 	}
 
 	if (!object)
@@ -777,7 +777,7 @@ static struct commit *get_commit(struct rev_cmdline_entry *e, char *full_name)
 
 		/* handle nested tags */
 		while (tag && tag->object.type == OBJ_TAG) {
-			parse_object(tag->object.oid.hash);
+			parse_object(&tag->object.oid);
 			string_list_append(&extra_refs, full_name)->util = tag;
 			tag = (struct tag *)tag->tagged;
 		}
@@ -847,20 +847,9 @@ static void get_tags_and_duplicates(struct rev_cmdline_info *info)
 	}
 }
 
-static void handle_reset(const char *name, struct object *object)
-{
-	int mark = get_object_mark(object);
-
-	if (mark)
-		printf("reset %s\nfrom :%d\n\n", name,
-		       get_object_mark(object));
-	else
-		printf("reset %s\nfrom %s\n\n", name,
-		       oid_to_hex(&object->oid));
-}
-
 static void handle_tags_and_duplicates(void)
 {
+	struct commit *commit;
 	int i;
 
 	for (i = extra_refs.nr - 1; i >= 0; i--) {
@@ -874,7 +863,9 @@ static void handle_tags_and_duplicates(void)
 			if (anonymize)
 				name = anonymize_refname(name);
 			/* create refs pointing to already seen commits */
-			handle_reset(name, object);
+			commit = (struct commit *)object;
+			printf("reset %s\nfrom :%d\n\n", name,
+			       get_object_mark(&commit->object));
 			show_progress();
 			break;
 		}
@@ -947,7 +938,7 @@ static void import_marks(char *input_file)
 			/* only commits */
 			continue;
 
-		commit = lookup_commit(oid.hash);
+		commit = lookup_commit(&oid);
 		if (!commit)
 			die("not a commit? can't happen: %s", oid_to_hex(&oid));
 

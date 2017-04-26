@@ -77,7 +77,7 @@ char *packet_read_line(int fd, int *size);
 /*
  * Convenience wrapper for packet_read that sets the PACKET_READ_GENTLE_ON_EOF
  * and CHOMP_NEWLINE options. The return value specifies the number of bytes
- * read into the buffer or -1 on truncated input. if the *dst_line parameter
+ * read into the buffer or -1 on truncated input. If the *dst_line parameter
  * is not NULL it will return NULL for a flush packet and otherwise points to
  * a static buffer (that may be overwritten by subsequent calls). If the size
  * parameter is not NULL, the length of the packet is written to it.

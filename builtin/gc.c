@@ -33,7 +33,7 @@ static int aggressive_window = 250;
 static int gc_auto_threshold = 6700;
 static int gc_auto_pack_limit = 50;
 static int detach_auto = 1;
-static unsigned long gc_log_expire_time;
+static timestamp_t gc_log_expire_time;
 static const char *gc_log_expire = "1.day.ago";
 static const char *prune_expire = "2.weeks.ago";
 static const char *prune_worktrees_expire = "3.months.ago";
@@ -468,10 +468,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 
 	report_garbage = report_pack_garbage;
 	reprepare_packed_git();
-	if (pack_garbage.nr > 0) {
-		close_all_packs();
+	if (pack_garbage.nr > 0)
 		clean_pack_garbage();
-	}
 
 	if (auto_gc && too_many_loose_objects())
 		warning(_("There are too many unreachable loose objects; "

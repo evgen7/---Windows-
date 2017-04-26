@@ -20,13 +20,16 @@ struct subprocess_entry {
 
 /* subprocess functions */
 
+int cmd2process_cmp(const struct subprocess_entry *e1,
+	const struct subprocess_entry *e2, const void *unused);
+
 typedef int(*subprocess_start_fn)(struct subprocess_entry *entry);
-int subprocess_start(struct subprocess_entry *entry, const char *cmd,
+int subprocess_start(struct hashmap *hashmap, struct subprocess_entry *entry, const char *cmd,
 		subprocess_start_fn startfn);
 
-void subprocess_stop(struct subprocess_entry *entry);
+void subprocess_stop(struct hashmap *hashmap, struct subprocess_entry *entry);
 
-struct subprocess_entry *subprocess_find_entry(const char *cmd);
+struct subprocess_entry *subprocess_find_entry(struct hashmap *hashmap, const char *cmd);
 
 /* subprocess helper functions */
 

@@ -5,29 +5,20 @@
 #include "sigchain.h"
 #include "pkt-line.h"
 
-static int subprocess_map_initialized;
-static struct hashmap subprocess_map;
-
-static int cmd2process_cmp(const struct subprocess_entry *e1,
+int cmd2process_cmp(const struct subprocess_entry *e1,
 			   const struct subprocess_entry *e2,
 			   const void *unused)
 {
 	return strcmp(e1->cmd, e2->cmd);
 }
 
-struct subprocess_entry *subprocess_find_entry(const char *cmd)
+struct subprocess_entry *subprocess_find_entry(struct hashmap *hashmap, const char *cmd)
 {
 	struct subprocess_entry key;
 
-	if (!subprocess_map_initialized) {
-		subprocess_map_initialized = 1;
-		hashmap_init(&subprocess_map, (hashmap_cmp_fn)cmd2process_cmp, 0);
-		return NULL;
-	}
-
 	hashmap_entry_init(&key, strhash(cmd));
 	key.cmd = cmd;
-	return hashmap_get(&subprocess_map, &key, NULL);
+	return hashmap_get(hashmap, &key, NULL);
 }
 
 int subprocess_read_status(int fd, struct strbuf *status)
@@ -38,7 +29,7 @@ int subprocess_read_status(int fd, struct strbuf *status)
 
 	for (;;) {
 		len = packet_read_line_gently(fd, NULL, &line);
-		if ((len == -1) || !line)
+		if ((len < 0) || !line)
 			break;
 		pair = strbuf_split_str(line, '=', 2);
 		if (pair[0] && pair[0]->len && pair[1]) {
@@ -51,10 +42,10 @@ int subprocess_read_status(int fd, struct strbuf *status)
 		strbuf_list_free(pair);
 	}
 
-	return len == -1 ? len : 0;
+	return (len < 0) ? len : 0;
 }
 
-void subprocess_stop(struct subprocess_entry *entry)
+void subprocess_stop(struct hashmap *hashmap, struct subprocess_entry *entry)
 {
 	if (!entry)
 		return;
@@ -63,13 +54,13 @@ void subprocess_stop(struct subprocess_entry *entry)
 	kill(entry->process.pid, SIGTERM);
 	finish_command(&entry->process);
 
-	hashmap_remove(&subprocess_map, entry, NULL);
+	hashmap_remove(hashmap, entry, NULL);
 }
 
 static void subprocess_exit_handler(struct child_process *process)
 {
 	sigchain_push(SIGPIPE, SIG_IGN);
-	/* Closing the pipe signals the filter to initiate a shutdown. */
+	/* Closing the pipe signals the subprocess to initiate a shutdown. */
 	close(process->in);
 	close(process->out);
 	sigchain_pop(SIGPIPE);
@@ -77,17 +68,12 @@ static void subprocess_exit_handler(struct child_process *process)
 	finish_command(process);
 }
 
-int subprocess_start(struct subprocess_entry *entry, const char *cmd,
+int subprocess_start(struct hashmap *hashmap, struct subprocess_entry *entry, const char *cmd,
 	subprocess_start_fn startfn)
 {
 	int err;
 	struct child_process *process;
 	const char *argv[] = { cmd, NULL };
-
-	if (!subprocess_map_initialized) {
-		subprocess_map_initialized = 1;
-		hashmap_init(&subprocess_map, (hashmap_cmp_fn)cmd2process_cmp, 0);
-	}
 
 	entry->cmd = cmd;
 	process = &entry->process;
@@ -102,7 +88,7 @@ int subprocess_start(struct subprocess_entry *entry, const char *cmd,
 
 	err = start_command(process);
 	if (err) {
-		error("cannot fork to run external filter '%s'", cmd);
+		error("cannot fork to run subprocess '%s'", cmd);
 		return err;
 	}
 
@@ -110,11 +96,11 @@ int subprocess_start(struct subprocess_entry *entry, const char *cmd,
 
 	err = startfn(entry);
 	if (err) {
-		error("initialization for external filter '%s' failed", cmd);
-		subprocess_stop(entry);
+		error("initialization for subprocess '%s' failed", cmd);
+		subprocess_stop(hashmap, entry);
 		return err;
 	}
 
-	hashmap_add(&subprocess_map, entry);
+	hashmap_add(hashmap, entry);
 	return 0;
 }

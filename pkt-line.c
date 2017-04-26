@@ -334,7 +334,7 @@ static char *packet_read_line_generic(int fd,
 			      PACKET_READ_CHOMP_NEWLINE);
 	if (dst_len)
 		*dst_len = len;
-	return len ? packet_buffer : NULL;
+	return (len > 0) ? packet_buffer : NULL;
 }
 
 char *packet_read_line(int fd, int *len_p)
@@ -345,8 +345,8 @@ char *packet_read_line(int fd, int *len_p)
 int packet_read_line_gently(int fd, int *dst_len, char** dst_line)
 {
 	int len = packet_read(fd, NULL, NULL,
-		packet_buffer, sizeof(packet_buffer),
-		PACKET_READ_CHOMP_NEWLINE|PACKET_READ_GENTLE_ON_EOF);
+			      packet_buffer, sizeof(packet_buffer),
+			      PACKET_READ_CHOMP_NEWLINE|PACKET_READ_GENTLE_ON_EOF);
 	if (dst_len)
 		*dst_len = len;
 	if (dst_line)

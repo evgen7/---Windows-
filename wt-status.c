@@ -1067,6 +1067,8 @@ static char *read_line_from_git_path(const char *filename)
 	struct strbuf buf = STRBUF_INIT;
 	FILE *fp = fopen(git_path("%s", filename), "r");
 	if (!fp) {
+		if (errno != ENOENT)
+			warn_on_inaccessible(git_path("%s", filename));
 		strbuf_release(&buf);
 		return NULL;
 	}
@@ -1387,7 +1389,7 @@ struct grab_1st_switch_cbdata {
 };
 
 static int grab_1st_switch(struct object_id *ooid, struct object_id *noid,
-			   const char *email, unsigned long timestamp, int tz,
+			   const char *email, timestamp_t timestamp, int tz,
 			   const char *message, void *cb_data)
 {
 	struct grab_1st_switch_cbdata *cb = cb_data;
@@ -1428,7 +1430,7 @@ static void wt_status_get_detached_from(struct wt_status_state *state)
 	    /* sha1 is a commit? match without further lookup */
 	    (!oidcmp(&cb.noid, &oid) ||
 	     /* perhaps sha1 is a tag, try to dereference to a commit */
-	     ((commit = lookup_commit_reference_gently(oid.hash, 1)) != NULL &&
+	     ((commit = lookup_commit_reference_gently(&oid, 1)) != NULL &&
 	      !oidcmp(&cb.noid, &commit->object.oid)))) {
 		const char *from = ref;
 		if (!skip_prefix(from, "refs/tags/", &from))

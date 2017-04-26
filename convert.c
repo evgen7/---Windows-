@@ -510,6 +510,9 @@ struct cmd2process {
 	unsigned int supported_capabilities;
 };
 
+static int subprocess_map_initialized;
+static struct hashmap subprocess_map;
+
 static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 {
 	int err;
@@ -567,9 +570,6 @@ static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 done:
 	sigchain_pop(SIGPIPE);
 
-	if (err || errno == EPIPE)
-		err = err ? err : errno;
-
 	return err;
 }
 
@@ -584,7 +584,13 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 	struct strbuf filter_status = STRBUF_INIT;
 	const char *filter_type;
 
-	entry = (struct cmd2process *)subprocess_find_entry(cmd);
+	if (!subprocess_map_initialized) {
+		subprocess_map_initialized = 1;
+		hashmap_init(&subprocess_map, (hashmap_cmp_fn) cmd2process_cmp, 0);
+		entry = NULL;
+	} else {
+		entry = (struct cmd2process *)subprocess_find_entry(&subprocess_map, cmd);
+	}
 
 	fflush(NULL);
 
@@ -592,7 +598,7 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 		entry = xmalloc(sizeof(*entry));
 		entry->supported_capabilities = 0;
 
-		if (subprocess_start(&entry->subprocess, cmd, start_multi_file_filter_fn)) {
+		if (subprocess_start(&subprocess_map, &entry->subprocess, cmd, start_multi_file_filter_fn)) {
 			free(entry);
 			return 0;
 		}
@@ -662,7 +668,7 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 done:
 	sigchain_pop(SIGPIPE);
 
-	if (err || errno == EPIPE) {
+	if (err) {
 		if (!strcmp(filter_status.buf, "error")) {
 			/* The filter signaled a problem with the file. */
 		} else if (!strcmp(filter_status.buf, "abort")) {
@@ -678,7 +684,7 @@ done:
 			 * Force shutdown and restart if another blob requires filtering.
 			 */
 			error("external filter '%s' failed", cmd);
-			subprocess_stop((struct subprocess_entry *)entry);
+			subprocess_stop(&subprocess_map, &entry->subprocess);
 			free(entry);
 		}
 	} else {

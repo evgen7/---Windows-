@@ -124,7 +124,7 @@ static int branch_merged(int kind, const char *name,
 		    (reference_name = reference_name_to_free =
 		     resolve_refdup(upstream, RESOLVE_REF_READING,
 				    oid.hash, NULL)) != NULL)
-			reference_rev = lookup_commit_reference(oid.hash);
+			reference_rev = lookup_commit_reference(&oid);
 	}
 	if (!reference_rev)
 		reference_rev = head_rev;
@@ -157,7 +157,7 @@ static int check_branch_commit(const char *branchname, const char *refname,
 			       const struct object_id *oid, struct commit *head_rev,
 			       int kinds, int force)
 {
-	struct commit *rev = lookup_commit_reference(oid->hash);
+	struct commit *rev = lookup_commit_reference(oid);
 	if (!rev) {
 		error(_("Couldn't look up commit object for '%s'"), refname);
 		return -1;
@@ -211,7 +211,7 @@ static int delete_branches(int argc, const char **argv, int force, int kinds,
 	}
 
 	if (!force) {
-		head_rev = lookup_commit_reference(head_oid.hash);
+		head_rev = lookup_commit_reference(&head_oid);
 		if (!head_rev)
 			die(_("Couldn't look up commit object for HEAD"));
 	}
@@ -504,7 +504,7 @@ static void rename_branch(const char *oldname, const char *newname, int force)
 	strbuf_release(&newsection);
 }
 
-static const char edit_description[] = "BRANCH_DESCRIPTION";
+static GIT_PATH_FUNC(edit_description, "EDIT_DESCRIPTION")
 
 static int edit_branch_description(const char *branch_name)
 {
@@ -519,9 +519,9 @@ static int edit_branch_description(const char *branch_name)
 		      "  %s\n"
 		      "Lines starting with '%c' will be stripped.\n"),
 		    branch_name, comment_line_char);
-	write_file_buf(git_path(edit_description), buf.buf, buf.len);
+	write_file_buf(edit_description(), buf.buf, buf.len);
 	strbuf_reset(&buf);
-	if (launch_editor(git_path(edit_description), &buf, NULL)) {
+	if (launch_editor(edit_description(), &buf, NULL)) {
 		strbuf_release(&buf);
 		return -1;
 	}
