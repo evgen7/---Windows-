@@ -41,26 +41,21 @@ typedef struct _CONSOLE_FONT_INFOEX {
 #endif
 #endif
 
-typedef BOOL (WINAPI *PGETCURRENTCONSOLEFONTEX)(HANDLE, BOOL,
-		PCONSOLE_FONT_INFOEX);
-
 static void warn_if_raster_font(void)
 {
 	DWORD fontFamily = 0;
-	PGETCURRENTCONSOLEFONTEX pGetCurrentConsoleFontEx;
+	DECLARE_PROC_ADDR(kernel32.dll, BOOL, GetCurrentConsoleFontEx,
+			HANDLE, BOOL, PCONSOLE_FONT_INFOEX);
 
 	/* don't bother if output was ascii only */
 	if (!non_ascii_used)
 		return;
 
 	/* GetCurrentConsoleFontEx is available since Vista */
-	pGetCurrentConsoleFontEx = (PGETCURRENTCONSOLEFONTEX) GetProcAddress(
-			GetModuleHandle("kernel32.dll"),
-			"GetCurrentConsoleFontEx");
-	if (pGetCurrentConsoleFontEx) {
+	if (INIT_PROC_ADDR(GetCurrentConsoleFontEx)) {
 		CONSOLE_FONT_INFOEX cfi;
 		cfi.cbSize = sizeof(cfi);
-		if (pGetCurrentConsoleFontEx(console, 0, &cfi))
+		if (GetCurrentConsoleFontEx(console, 0, &cfi))
 			fontFamily = cfi.FontFamily;
 	} else {
 		/* pre-Vista: check default console font in registry */
@@ -105,6 +100,8 @@ static int is_console(int fd)
 	if (!fd) {
 		if (!GetConsoleMode(hcon, &mode))
 			return 0;
+		sbi.wAttributes = FOREGROUND_BLUE | FOREGROUND_GREEN |
+			FOREGROUND_RED;
 	} else if (!GetConsoleScreenBufferInfo(hcon, &sbi))
 		return 0;
 
@@ -133,6 +130,11 @@ static void write_console(unsigned char *str, size_t len)
 
 	/* convert utf-8 to utf-16 */
 	int wlen = xutftowcsn(wbuf, (char*) str, ARRAY_SIZE(wbuf), len);
+	if (wlen < 0) {
+		wchar_t *err = L"[invalid]";
+		WriteConsoleW(console, err, wcslen(err), &dummy, NULL);
+		return;
+	}
 
 	/* write directly to console */
 	WriteConsoleW(console, wbuf, wlen, &dummy, NULL);
@@ -462,6 +464,18 @@ static void die_lasterr(const char *fmt, ...)
 	va_end(params);
 }
 
+#undef dup2
+int winansi_dup2(int oldfd, int newfd)
+{
+	int ret = dup2(oldfd, newfd);
+
+	if (!ret && newfd >= 0 && newfd <= 2)
+		fd_is_interactive[newfd] = oldfd < 0 || oldfd > 2 ?
+			0 : fd_is_interactive[oldfd];
+
+	return ret;
+}
+
 static HANDLE duplicate_handle(HANDLE hnd)
 {
 	HANDLE hresult, hproc = GetCurrentProcess();
@@ -520,7 +534,20 @@ static HANDLE swap_osfhnd(int fd, HANDLE new_handle)
 #ifdef DETECT_MSYS_TTY
 
 #include <winternl.h>
+
+#if defined(_MSC_VER)
+
+typedef struct _OBJECT_NAME_INFORMATION
+{
+	UNICODE_STRING Name;
+	WCHAR NameBuffer[0];
+} OBJECT_NAME_INFORMATION, *POBJECT_NAME_INFORMATION;
+
+#define ObjectNameInformation 1
+
+#else
 #include <ntstatus.h>
+#endif
 
 static void detect_msys_tty(int fd)
 {
