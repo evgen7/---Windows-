@@ -197,17 +197,27 @@ int add_reflog_for_walk(struct reflog_walk_info *info,
 				reflogs = read_complete_reflog(branch);
 			}
 		}
-		if (!reflogs || reflogs->nr == 0)
+		if (!reflogs || reflogs->nr == 0) {
+			if (reflogs) {
+				free(reflogs->ref);
+				free(reflogs);
+			}
+			free(branch);
 			return -1;
+		}
 		string_list_insert(&info->complete_reflogs, branch)->util
 			= reflogs;
 	}
+	free(branch);
 
 	commit_reflog = xcalloc(1, sizeof(struct commit_reflog));
 	if (recno < 0) {
 		commit_reflog->recno = get_reflog_recno_by_time(reflogs, timestamp);
 		if (commit_reflog->recno < 0) {
-			free(branch);
+			if (reflogs) {
+				free(reflogs->ref);
+				free(reflogs);
+			}
 			free(commit_reflog);
 			return -1;
 		}

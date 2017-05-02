@@ -4,9 +4,9 @@ test_description='CRLF conversion all combinations'
 
 . ./test-lib.sh
 
-if ! test_have_prereq EXPENSIVE && ! test_have_prereq MINGW
+if ! test_have_prereq EXPENSIVE
 then
-	skip_all="Neither EXPENSIVE nor MINGW set"
+	skip_all="EXPENSIVE not set"
 	test_done
 fi
 

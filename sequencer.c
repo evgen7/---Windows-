@@ -152,12 +152,6 @@ static const char *get_todo_path(const struct replay_opts *opts)
  * Returns 1 for conforming footer
  * Returns 2 when sob exists within conforming footer
  * Returns 3 when sob exists within conforming footer as last entry
- *
- * A footer that does not end in a newline is considered non-conforming.
- *
- * ignore_footer, if not zero, should be the return value of an invocation to
- * ignore_non_trailer(). See the documentation of that function for more
- * information.
  */
 static int has_conforming_footer(struct strbuf *sb, struct strbuf *sob,
 	int ignore_footer)
@@ -165,11 +159,6 @@ static int has_conforming_footer(struct strbuf *sb, struct strbuf *sob,
 	struct trailer_info info;
 	int i;
 	int found_sob = 0, found_sob_last = 0;
-
-	if (sb->len <= ignore_footer)
-		return 0;
-	if (sb->buf[sb->len - ignore_footer - 1] != '\n')
-		return 0;
 
 	trailer_info_get(&info, sb->buf);
 
@@ -1061,6 +1050,7 @@ static int do_pick_commit(enum todo_command command, struct commit *commit,
 			strbuf_addstr(&msgbuf, p);
 
 		if (opts->record_origin) {
+			strbuf_complete_line(&msgbuf);
 			if (!has_conforming_footer(&msgbuf, NULL, 0))
 				strbuf_addch(&msgbuf, '\n');
 			strbuf_addstr(&msgbuf, cherry_picked_prefix);
@@ -1216,6 +1206,7 @@ struct todo_list {
 	struct todo_item *items;
 	int nr, alloc, current;
 	int done_nr, total_nr;
+	struct stat_data stat;
 };
 
 #define TODO_LIST_INIT { STRBUF_INIT }
@@ -1346,6 +1337,7 @@ static int count_commands(struct todo_list *todo_list)
 static int read_populate_todo(struct todo_list *todo_list,
 			struct replay_opts *opts)
 {
+	struct stat st;
 	const char *todo_file = get_todo_path(opts);
 	int fd, res;
 
@@ -1358,6 +1350,11 @@ static int read_populate_todo(struct todo_list *todo_list,
 		return error(_("could not read '%s'."), todo_file);
 	}
 	close(fd);
+
+	res = stat(todo_file, &st);
+	if (res)
+		return error(_("could not stat '%s'"), todo_file);
+	fill_stat_data(&todo_list->stat, &st);
 
 	res = parse_insn_buffer(todo_list->buf.buf, todo_list);
 	if (res) {
@@ -2044,10 +2041,25 @@ static int pick_commits(struct todo_list *todo_list, struct replay_opts *opts)
 		} else if (item->command == TODO_EXEC) {
 			char *end_of_arg = (char *)(item->arg + item->arg_len);
 			int saved = *end_of_arg;
+			struct stat st;
 
 			*end_of_arg = '\0';
 			res = do_exec(item->arg);
 			*end_of_arg = saved;
+
+			/* Reread the todo file if it has changed. */
+			if (res)
+				; /* fall through */
+			else if (stat(get_todo_path(opts), &st))
+				res = error_errno(_("could not stat '%s'"),
+						  get_todo_path(opts));
+			else if (match_stat_data(&todo_list->stat, &st)) {
+				todo_list_release(todo_list);
+				if (read_populate_todo(todo_list, opts))
+					res = -1; /* message was printed */
+				/* `current` will be incremented below */
+				todo_list->current = -1;
+			}
 		} else if (!is_noop(item->command))
 			return error(_("unknown command %d"), item->command);
 
@@ -2351,6 +2363,9 @@ void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
 				getenv("GIT_COMMITTER_EMAIL")));
 	strbuf_addch(&sob, '\n');
 
+	if (!ignore_footer)
+		strbuf_complete_line(msgbuf);
+
 	/*
 	 * If the whole message buffer is equal to the sob, pretend that we
 	 * found a conforming footer with a matching sob
@@ -2369,13 +2384,6 @@ void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
 			/*
 			 * The buffer is completely empty.  Leave foom for
 			 * the title and body to be filled in by the user.
-			 */
-			append_newlines = "\n\n";
-		} else if (msgbuf->buf[len - 1] != '\n') {
-			/*
-			 * Incomplete line.  Complete the line and add a
-			 * blank one so that there is an empty line between
-			 * the message body and the sob.
 			 */
 			append_newlines = "\n\n";
 		} else if (len == 1) {
@@ -2408,7 +2416,7 @@ void append_signoff(struct strbuf *msgbuf, int ignore_footer, unsigned flag)
 int sequencer_make_script(int keep_empty, FILE *out,
 		int argc, const char **argv)
 {
-	char *format = "%s";
+	char *format = NULL;
 	struct pretty_print_context pp = {0};
 	struct strbuf buf = STRBUF_INIT;
 	struct rev_info revs;
@@ -2426,7 +2434,12 @@ int sequencer_make_script(int keep_empty, FILE *out,
 
 	revs.pretty_given = 1;
 	git_config_get_string("rebase.instructionFormat", &format);
+	if (!format || !*format) {
+		free(format);
+		format = xstrdup("%s");
+	}
 	get_commit_format(format, &revs);
+	free(format);
 	pp.fmt = revs.commit_format;
 	pp.output_encoding = get_log_output_encoding();
 
@@ -2489,18 +2502,16 @@ int transform_todo_ids(int shorten_sha1s)
 		if (item->command >= TODO_EXEC && item->command != TODO_DROP)
 			fwrite(p, eol - bol, 1, out);
 		else {
-			int eoc = strcspn(p, " \t");
 			const char *sha1 = shorten_sha1s ?
 				short_commit_name(item->commit) :
 				oid_to_hex(&item->commit->object.oid);
+			int len;
 
-			if (!eoc) {
-				p += strspn(p, " \t");
-				eoc = strcspn(p, " \t");
-			}
+			p += strspn(p, " \t"); /* left-trim command */
+			len = strcspn(p, " \t"); /* length of command */
 
 			fprintf(out, "%.*s %s %.*s\n",
-				eoc, p, sha1, item->arg_len, item->arg);
+				len, p, sha1, item->arg_len, item->arg);
 		}
 	}
 	fclose(out);
@@ -2539,8 +2550,8 @@ int check_todo_list(void)
 	enum check_level check_level = get_missing_commit_check_level();
 	struct strbuf todo_file = STRBUF_INIT;
 	struct todo_list todo_list = TODO_LIST_INIT;
-	struct commit_list *missing = NULL;
-	int raise_error = 0, res = 0, fd, i;
+	struct strbuf missing = STRBUF_INIT;
+	int advise_to_edit_todo = 0, res = 0, fd, i;
 
 	strbuf_addstr(&todo_file, rebase_path_todo());
 	fd = open(todo_file.buf, O_RDONLY);
@@ -2554,17 +2565,17 @@ int check_todo_list(void)
 		goto leave_check;
 	}
 	close(fd);
-	raise_error = res =
+	advise_to_edit_todo = res =
 		parse_insn_buffer(todo_list.buf.buf, &todo_list);
 
-	if (check_level == CHECK_IGNORE)
+	if (res || check_level == CHECK_IGNORE)
 		goto leave_check;
 
-	/* Get the SHA-1 of the commits */
+	/* Mark the commits in git-rebase-todo as seen */
 	for (i = 0; i < todo_list.nr; i++) {
 		struct commit *commit = todo_list.items[i].commit;
 		if (commit)
-			commit->util = todo_list.items + i;
+			commit->util = (void *)1;
 	}
 
 	todo_list_release(&todo_list);
@@ -2583,35 +2594,32 @@ int check_todo_list(void)
 	strbuf_release(&todo_file);
 	res = !!parse_insn_buffer(todo_list.buf.buf, &todo_list);
 
-	/* Find commits that are missing after editing */
-	for (i = 0; i < todo_list.nr; i++) {
-		struct commit *commit = todo_list.items[i].commit;
+	/* Find commits in git-rebase-todo.backup yet unseen */
+	for (i = todo_list.nr - 1; i >= 0; i--) {
+		struct todo_item *item = todo_list.items + i;
+		struct commit *commit = item->commit;
 		if (commit && !commit->util) {
-			commit_list_insert(commit, &missing);
-			commit->util = todo_list.items + i;
+			strbuf_addf(&missing, " - %s %.*s\n",
+				    short_commit_name(commit),
+				    item->arg_len, item->arg);
+			commit->util = (void *)1;
 		}
 	}
 
 	/* Warn about missing commits */
-	if (!missing)
+	if (!missing.len)
 		goto leave_check;
 
 	if (check_level == CHECK_ERROR)
-		raise_error = res = 1;
+		advise_to_edit_todo = res = 1;
 
 	fprintf(stderr,
 		_("Warning: some commits may have been dropped accidentally.\n"
 		"Dropped commits (newer to older):\n"));
 
 	/* Make the list user-friendly and display */
-	while (missing) {
-		struct commit *commit = pop_commit(&missing);
-		struct todo_item *item = commit->util;
-
-		fprintf(stderr, " - %s %.*s\n", short_commit_name(commit),
-			item->arg_len, item->arg);
-	}
-	free_commit_list(missing);
+	fputs(missing.buf, stderr);
+	strbuf_release(&missing);
 
 	fprintf(stderr, _("To avoid this message, use \"drop\" to "
 		"explicitly remove a commit.\n\n"
@@ -2623,7 +2631,7 @@ leave_check:
 	strbuf_release(&todo_file);
 	todo_list_release(&todo_list);
 
-	if (raise_error)
+	if (advise_to_edit_todo)
 		fprintf(stderr,
 			_("You can fix this with 'git rebase --edit-todo' "
 			  "and then run 'git rebase --continue'.\n"
@@ -2691,24 +2699,41 @@ int skip_unnecessary_picks(void)
 		const char *done_path = rebase_path_done();
 
 		fd = open(done_path, O_CREAT | O_WRONLY | O_APPEND, 0666);
-		if (write_in_full(fd, todo_list.buf.buf, offset) < 0) {
+		if (fd < 0) {
+			error_errno(_("could not open '%s' for writing"),
+				    done_path);
 			todo_list_release(&todo_list);
-			return error_errno(_("could not write to '%s'"),
-				done_path);
+			return -1;
+		}
+		if (write_in_full(fd, todo_list.buf.buf, offset) < 0) {
+			error_errno(_("could not write to '%s'"), done_path);
+			todo_list_release(&todo_list);
+			close(fd);
+			return -1;
 		}
 		close(fd);
 
 		fd = open(rebase_path_todo(), O_WRONLY, 0666);
+		if (fd < 0) {
+			error_errno(_("could not open '%s' for writing"),
+				    rebase_path_todo());
+			todo_list_release(&todo_list);
+			return -1;
+		}
 		if (write_in_full(fd, todo_list.buf.buf + offset,
 				todo_list.buf.len - offset) < 0) {
+			error_errno(_("could not write to '%s'"),
+				    rebase_path_todo());
+			close(fd);
 			todo_list_release(&todo_list);
-			return error_errno(_("could not write to '%s'"),
-				rebase_path_todo());
+			return -1;
 		}
 		if (ftruncate(fd, todo_list.buf.len - offset) < 0) {
+			error_errno(_("could not truncate '%s'"),
+				    rebase_path_todo());
 			todo_list_release(&todo_list);
-			return error_errno(_("could not truncate '%s'"),
-				rebase_path_todo());
+			close(fd);
+			return -1;
 		}
 		close(fd);
 
@@ -2783,6 +2808,7 @@ int rearrange_squash(void)
 		struct strbuf buf = STRBUF_INIT;
 		struct todo_item *item = todo_list.items + i;
 		const char *commit_buffer, *subject, *p;
+		size_t subject_len;
 		int i2 = -1;
 		struct subject2item_entry *entry;
 
@@ -2803,7 +2829,7 @@ int rearrange_squash(void)
 		commit_buffer = get_commit_buffer(item->commit, NULL);
 		find_commit_subject(commit_buffer, &subject);
 		format_subject(&buf, subject, " ");
-		subject = subjects[i] = buf.buf;
+		subject = subjects[i] = strbuf_detach(&buf, &subject_len);
 		unuse_commit_buffer(item->commit, commit_buffer);
 		if ((skip_prefix(subject, "fixup! ", &p) ||
 		     skip_prefix(subject, "squash! ", &p))) {
@@ -2850,19 +2876,16 @@ int rearrange_squash(void)
 			tail[i2] = i;
 		} else if (!hashmap_get_from_hash(&subject2item,
 						strhash(subject), subject)) {
-			FLEX_ALLOC_MEM(entry, subject, buf.buf, buf.len);
+			FLEX_ALLOC_MEM(entry, subject, subject, subject_len);
 			entry->i = i;
 			hashmap_entry_init(entry, strhash(entry->subject));
 			hashmap_put(&subject2item, entry);
 		}
-		strbuf_detach(&buf, NULL);
 	}
 
 	if (rearranged) {
 		struct strbuf buf = STRBUF_INIT;
-		char *format = NULL;
 
-		git_config_get_string("rebase.instructionFormat", &format);
 		for (i = 0; i < todo_list.nr; i++) {
 			enum todo_command command = todo_list.items[i].command;
 			int cur = i;

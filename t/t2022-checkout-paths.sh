@@ -81,22 +81,21 @@ test_expect_success 'do not touch files that are already up-to-date' '
 test_expect_success 'working-tree-only option leaves checked out files unadded' '
 	git reset --hard &&
 	git checkout -b pu next &&
-	echo another >>file1 &&
+	echo another line >>file1 &&
 	echo exists >file3 &&
 	git add file3 &&
-	git commit -a -m another &&
+	git commit -a -m "another commit" &&
 	git checkout next &&
 
-	! grep another file1 &&
+	! grep "another line" file1 &&
 	git checkout --working-tree-only pu file1 file3 &&
-	grep another file1 &&
-	test_must_fail git grep --cached another file1 &&
+	grep "another line" file1 &&
+	test_must_fail git grep --cached "another line" file1 &&
 
 	grep exists file3 &&
 	git ls-files file3 >actual &&
 	>expect &&
 	test_cmp expect actual
-
 '
 
 test_done

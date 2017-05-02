@@ -28,7 +28,7 @@ static int write_tar_filter_archive(const struct archiver *ar,
 #if ULONG_MAX == 0xFFFFFFFF
 #define USTAR_MAX_SIZE ULONG_MAX
 #else
-#define USTAR_MAX_SIZE 077777777777UL
+#define USTAR_MAX_SIZE 077777777777ULL
 #endif
 #if TIME_MAX == 0xFFFFFFFF
 #define USTAR_MAX_MTIME TIME_MAX

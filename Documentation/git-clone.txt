@@ -222,10 +222,10 @@ objects from the source repository into a pack in the cloned repository.
 	any tags. Subsequent explicit tag fetches will still work,
 	(see linkgit:git-fetch[1]).
 +
-Can be used in conjunction with `--single-branch` to clone & maintain
-a branch with no references other than a single cloned branch. This is
-useful e.g. to maintain minimal clones of the default branch of some
-repository for search indexing.
+Can be used in conjunction with `--single-branch` to clone and
+maintain a branch with no references other than a single cloned
+branch. This is useful e.g. to maintain minimal clones of the default
+branch of some repository for search indexing.
 
 --recurse-submodules[=<pathspec]::
 	After the clone is created, initialize and clone submodules

@@ -781,7 +781,9 @@ static int checkout(int submodule_progress)
 
 static int write_one_config(const char *key, const char *value, void *data)
 {
-	return git_config_set_multivar_gently(key, value ? value : "true", "^$", 0);
+	return git_config_set_multivar_gently(key,
+					      value ? value : "true",
+					      CONFIG_REGEX_NONE, 0);
 }
 
 static void write_config(struct string_list *config)
@@ -1140,9 +1142,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 			}
 
 		if (!is_local && !complete_refs_before_fetch)
-			if (transport_fetch_refs(transport, mapped_refs))
-				die(_("could not fetch refs from %s"),
-				    transport->url);
+			transport_fetch_refs(transport, mapped_refs);
 
 		remote_head = find_ref_by_name(refs, "HEAD");
 		remote_head_points_at =

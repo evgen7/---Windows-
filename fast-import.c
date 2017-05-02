@@ -2821,10 +2821,12 @@ static void parse_new_commit(const char *arg)
 	strbuf_addf(&new_data, "tree %s\n",
 		oid_to_hex(&b->branch_tree.versions[1].oid));
 	if (!is_null_oid(&b->oid))
-		strbuf_addf(&new_data, "parent %s\n", oid_to_hex(&b->oid));
+		strbuf_addf(&new_data, "parent %s\n",
+			    oid_to_hex(&b->oid));
 	while (merge_list) {
 		struct hash_list *next = merge_list->next;
-		strbuf_addf(&new_data, "parent %s\n", oid_to_hex(&merge_list->oid));
+		strbuf_addf(&new_data, "parent %s\n",
+			    oid_to_hex(&merge_list->oid));
 		free(merge_list);
 		merge_list = next;
 	}
@@ -2997,7 +2999,6 @@ static void cat_blob(struct object_entry *oe, struct object_id *oid)
 
 static void parse_get_mark(const char *p)
 {
-	FAKE_INIT(struct object_entry *, oe, NULL);
 	struct object_entry *oe = oe;
 	char output[GIT_MAX_HEXSZ + 2];
 
@@ -3015,7 +3016,7 @@ static void parse_get_mark(const char *p)
 
 static void parse_cat_blob(const char *p)
 {
-	FAKE_INIT(struct object_entry *, oe, NULL);
+	struct object_entry *oe = oe;
 	struct object_id oid;
 
 	/* cat-blob SP <object> LF */

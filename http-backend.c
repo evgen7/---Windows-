@@ -681,10 +681,8 @@ int cmd_main(int argc, const char **argv)
 		if (!regexec(&re, dir, 1, out, 0)) {
 			size_t n;
 
-			if (strcmp(method, c->method)) {
-				free(dir);
+			if (strcmp(method, c->method))
 				return bad_request(&hdr, c);
-			}
 
 			cmd = c;
 			n = out[0].rm_eo - out[0].rm_so;
@@ -710,7 +708,5 @@ int cmd_main(int argc, const char **argv)
 					   max_request_buffer);
 
 	cmd->imp(&hdr, cmd_arg);
-	free(dir);
-	free(cmd_arg);
 	return 0;
 }

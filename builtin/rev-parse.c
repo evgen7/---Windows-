@@ -352,7 +352,7 @@ static int try_parent_shorthands(const char *arg)
 		if (symbolic)
 			name = xstrfmt("%s^%d", arg, parent_number);
 		show_rev(include_parents ? NORMAL : REVERSED,
-			& parents->item->object.oid, name);
+			 &parents->item->object.oid, name);
 		free(name);
 	}
 
