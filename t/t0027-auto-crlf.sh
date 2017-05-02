@@ -4,10 +4,12 @@ test_description='CRLF conversion all combinations'
 
 . ./test-lib.sh
 
-if ! test_have_prereq EXPENSIVE
+if ! test_have_prereq EXPENSIVE && ! test_have_prereq MINGW
 then
-	skip_all="EXPENSIVE not set"
-	test_done
+	say "# EXPENSIVE or MINGW not set, skipping ident and warning tests"
+else
+	EXPENSIVE0027=t
+	export EXPENSIVE0027
 fi
 
 compare_files () {
@@ -95,11 +97,14 @@ commit_check_warn () {
 		git -c core.autocrlf=$crlf add $fname 2>"${pfx}_$f.err"
 	done &&
 	git commit -m "core.autocrlf $crlf" &&
-	check_warning "$lfname" ${pfx}_LF.err &&
-	check_warning "$crlfname" ${pfx}_CRLF.err &&
-	check_warning "$lfmixcrlf" ${pfx}_CRLF_mix_LF.err &&
-	check_warning "$lfmixcr" ${pfx}_LF_mix_CR.err &&
-	check_warning "$crlfnul" ${pfx}_CRLF_nul.err
+	if test "$EXPENSIVE0027" = t
+	then
+		check_warning "$lfname" ${pfx}_LF.err &&
+		check_warning "$crlfname" ${pfx}_CRLF.err &&
+		check_warning "$lfmixcrlf" ${pfx}_CRLF_mix_LF.err &&
+		check_warning "$lfmixcr" ${pfx}_LF_mix_CR.err &&
+		check_warning "$crlfnul" ${pfx}_CRLF_nul.err
+	fi
 }
 
 commit_chk_wrnNNO () {
@@ -122,24 +127,27 @@ commit_chk_wrnNNO () {
 		git -c core.autocrlf=$crlf add $fname 2>"${pfx}_$f.err"
 	done
 
-	test_expect_success "commit NNO files crlf=$crlf attr=$attr LF" '
-		check_warning "$lfwarn" ${pfx}_LF.err
-	'
-	test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF" '
-		check_warning "$crlfwarn" ${pfx}_CRLF.err
-	'
+	if test "$EXPENSIVE0027" = t
+	then
+		test_expect_success "commit NNO files crlf=$crlf attr=$attr LF" '
+			check_warning "$lfwarn" ${pfx}_LF.err
+		'
+		test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF" '
+			check_warning "$crlfwarn" ${pfx}_CRLF.err
+		'
 
-	test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF_mix_LF" '
-		check_warning "$lfmixcrlf" ${pfx}_CRLF_mix_LF.err
-	'
+		test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF_mix_LF" '
+			check_warning "$lfmixcrlf" ${pfx}_CRLF_mix_LF.err
+		'
 
-	test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf LF_mix_cr" '
-		check_warning "$lfmixcr" ${pfx}_LF_mix_CR.err
-	'
+		test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf LF_mix_cr" '
+			check_warning "$lfmixcr" ${pfx}_LF_mix_CR.err
+		'
 
-	test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF_nul" '
-		check_warning "$crlfnul" ${pfx}_CRLF_nul.err
-	'
+		test_expect_success "commit NNO files attr=$attr aeol=$aeol crlf=$crlf CRLF_nul" '
+			check_warning "$crlfnul" ${pfx}_CRLF_nul.err
+		'
+	fi
 }
 
 stats_ascii () {
@@ -250,21 +258,24 @@ checkout_files () {
 		fi
 	done
 
-	test_expect_success "ls-files --eol attr=$attr $ident aeol=$aeol core.autocrlf=$crlf core.eol=$ceol" '
-		test_when_finished "rm expect actual" &&
-		sort <<-EOF >expect &&
-		i/crlf w/$(stats_ascii $crlfname) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF.txt
-		i/mixed w/$(stats_ascii $lfmixcrlf) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF_mix_LF.txt
-		i/lf w/$(stats_ascii $lfname) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF.txt
-		i/-text w/$(stats_ascii $lfmixcr) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF_mix_CR.txt
-		i/-text w/$(stats_ascii $crlfnul) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF_nul.txt
-		i/-text w/$(stats_ascii $crlfnul) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF_nul.txt
-		EOF
-		git ls-files --eol crlf_false_attr__* |
-		sed -e "s/	/ /g" -e "s/  */ /g" |
-		sort >actual &&
-		test_cmp expect actual
-	'
+	if test "$EXPENSIVE0027" = t
+	then
+		test_expect_success "ls-files --eol attr=$attr $ident aeol=$aeol core.autocrlf=$crlf core.eol=$ceol" '
+			test_when_finished "rm expect actual" &&
+			sort <<-EOF >expect &&
+			i/crlf w/$(stats_ascii $crlfname) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF.txt
+			i/mixed w/$(stats_ascii $lfmixcrlf) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF_mix_LF.txt
+			i/lf w/$(stats_ascii $lfname) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF.txt
+			i/-text w/$(stats_ascii $lfmixcr) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF_mix_CR.txt
+			i/-text w/$(stats_ascii $crlfnul) attr/$(attr_ascii $attr $aeol) crlf_false_attr__CRLF_nul.txt
+			i/-text w/$(stats_ascii $crlfnul) attr/$(attr_ascii $attr $aeol) crlf_false_attr__LF_nul.txt
+			EOF
+			git ls-files --eol crlf_false_attr__* |
+			sed -e "s/	/ /g" -e "s/  */ /g" |
+			sort >actual &&
+			test_cmp expect actual
+		'
+		fi
 	test_expect_success "checkout attr=$attr $ident aeol=$aeol core.autocrlf=$crlf core.eol=$ceol file=LF" "
 		compare_ws_file $pfx $lfname    crlf_false_attr__LF.txt
 	"
@@ -494,6 +505,13 @@ export CRLF_MIX_LF_CR MIX NL
 # Same handling with and without ident
 for id in "" ident
 do
+	if ! test "$EXPENSIVE0027" = t
+	then
+		if test "$id" = ident
+		then
+			continue
+		fi
+	fi
 	for ceol in lf crlf native
 	do
 		for crlf in true false input
