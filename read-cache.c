@@ -19,10 +19,6 @@
 #include "split-index.h"
 #include "utf8.h"
 
-#ifndef NO_PTHREADS
-#include <pthread.h>
-#endif
-
 /* Mask for the name length in ce_flags in the on-disk index */
 
 #define CE_NAMEMASK  (0x0fff)
@@ -1536,34 +1532,6 @@ static int verify_hdr(struct cache_header *hdr, unsigned long size)
 	return 0;
 }
 
-#ifndef NO_PTHREADS
-/*
- * Require index file to be larger than this threshold before
- * we bother using a thread to verify the SHA.
- * This value was arbitrarily chosen.
- */
-#define VERIFY_HDR_THRESHOLD	10*1024*1024
-
-struct verify_hdr_thread_data
-{
-	pthread_t thread_id;
-	struct cache_header *hdr;
-	size_t size;
-	int result;
-};
-
-/*
- * A thread proc to run the verify_hdr() computation
- * in a background thread.
- */
-static void *verify_hdr_thread(void *_data)
-{
-	struct verify_hdr_thread_data *p = _data;
-	p->result = verify_hdr(p->hdr, (unsigned long)p->size);
-	return NULL;
-}
-#endif
-
 static int read_index_extension(struct index_state *istate,
 				const char *ext, void *data, unsigned long sz)
 {
@@ -1765,9 +1733,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	void *mmap;
 	size_t mmap_size;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-#ifndef NO_PTHREADS
-	struct verify_hdr_thread_data verify_hdr_thread_data;
-#endif
 
 	if (istate->initialized)
 		return istate->cache_nr;
@@ -1794,23 +1759,8 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	close(fd);
 
 	hdr = mmap;
-#ifdef NO_PTHREADS
 	if (verify_hdr(hdr, mmap_size) < 0)
 		goto unmap;
-#else
-	if (mmap_size < VERIFY_HDR_THRESHOLD) {
-		if (verify_hdr(hdr, mmap_size) < 0)
-			goto unmap;
-	} else {
-		verify_hdr_thread_data.hdr = hdr;
-		verify_hdr_thread_data.size = mmap_size;
-		verify_hdr_thread_data.result = -1;
-		if (pthread_create(
-				&verify_hdr_thread_data.thread_id, NULL,
-				verify_hdr_thread, &verify_hdr_thread_data))
-			die_errno("unable to start verify_hdr_thread");
-	}
-#endif
 
 	hashcpy(istate->sha1, (const unsigned char *)hdr + mmap_size - 20);
 	istate->version = ntohl(hdr->hdr_version);
@@ -1858,16 +1808,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 		src_offset += 8;
 		src_offset += extsize;
 	}
-
-#ifndef NO_PTHREADS
-	if (mmap_size >= VERIFY_HDR_THRESHOLD) {
-		if (pthread_join(verify_hdr_thread_data.thread_id, NULL))
-			die_errno("unable to join verify_hdr_thread");
-		if (verify_hdr_thread_data.result < 0)
-			goto unmap;
-	}
-#endif
-
 	munmap(mmap, mmap_size);
 	return istate->cache_nr;
 
@@ -2129,7 +2069,7 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 {
 	int size;
 	struct ondisk_cache_entry *ondisk;
-	FAKE_INIT(int, saved_namelen, 0);
+	int saved_namelen = saved_namelen; /* compiler workaround */
 	char *name;
 	int result;
 
@@ -2247,10 +2187,9 @@ void update_index_if_able(struct index_state *istate, struct lock_file *lockfile
 		rollback_lock_file(lockfile);
 }
 
-static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
+static int do_write_index(struct index_state *istate, int newfd,
 			  int strip_extensions)
 {
-	int newfd = tempfile->fd;
 	git_SHA_CTX c;
 	struct cache_header hdr;
 	int i, err, removed, extended, hdr_version;
@@ -2258,7 +2197,6 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 	int entries = istate->cache_nr;
 	struct stat st;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-	int drop_cache_tree = 0;
 
 	for (i = removed = extended = 0; i < entries; i++) {
 		if (cache[i]->ce_flags & CE_REMOVE)
@@ -2309,8 +2247,6 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 				warning(msg, ce->name);
 			else
 				return error(msg, ce->name);
-
-			drop_cache_tree = 1;
 		}
 		if (ce_write_entry(&c, newfd, ce, previous_name) < 0)
 			return -1;
@@ -2329,7 +2265,7 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 		if (err)
 			return -1;
 	}
-	if (!strip_extensions && !drop_cache_tree && istate->cache_tree) {
+	if (!strip_extensions && istate->cache_tree) {
 		struct strbuf sb = STRBUF_INIT;
 
 		cache_tree_write(&sb, istate->cache_tree);
@@ -2362,11 +2298,7 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 			return -1;
 	}
 
-	if (ce_flush(&c, newfd, istate->sha1))
-		return -1;
-	if (close_tempfile(tempfile))
-		return error(_("could not close '%s'"), tempfile->filename.buf);
-	if (stat(tempfile->filename.buf, &st))
+	if (ce_flush(&c, newfd, istate->sha1) || fstat(newfd, &st))
 		return -1;
 	istate->timestamp.sec = (unsigned int)st.st_mtime;
 	istate->timestamp.nsec = ST_MTIME_NSEC(st);
@@ -2389,7 +2321,7 @@ static int commit_locked_index(struct lock_file *lk)
 static int do_write_locked_index(struct index_state *istate, struct lock_file *lock,
 				 unsigned flags)
 {
-	int ret = do_write_index(istate, &lock->tempfile, 0);
+	int ret = do_write_index(istate, get_lock_file_fd(lock), 0);
 	if (ret)
 		return ret;
 	assert((flags & (COMMIT_LOCK | CLOSE_LOCK)) !=
@@ -2486,7 +2418,7 @@ static int write_shared_index(struct index_state *istate,
 		return do_write_locked_index(istate, lock, flags);
 	}
 	move_cache_to_base_index(istate);
-	ret = do_write_index(si->base, &temporary_sharedindex, 1);
+	ret = do_write_index(si->base, fd, 1);
 	if (ret) {
 		delete_tempfile(&temporary_sharedindex);
 		return ret;

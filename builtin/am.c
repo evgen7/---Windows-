@@ -879,12 +879,12 @@ static int hg_patch_to_mail(FILE *out, FILE *in, int keep_cr)
 		if (skip_prefix(sb.buf, "# User ", &str))
 			fprintf(out, "From: %s\n", str);
 		else if (skip_prefix(sb.buf, "# Date ", &str)) {
-			timestamp_t timestamp;
+			unsigned long timestamp;
 			long tz, tz2;
 			char *end;
 
 			errno = 0;
-			timestamp = parse_timestamp(str, &end, 10);
+			timestamp = strtoul(str, &end, 10);
 			if (errno)
 				return error(_("invalid timestamp"));
 
@@ -1145,7 +1145,7 @@ static int index_has_changes(struct strbuf *sb)
 		DIFF_OPT_SET(&opt, EXIT_WITH_STATUS);
 		if (!sb)
 			DIFF_OPT_SET(&opt, QUICK);
-		do_diff_cache(&head, &opt);
+		do_diff_cache(head.hash, &opt);
 		diffcore_std(&opt);
 		for (i = 0; sb && i < diff_queued_diff.nr; i++) {
 			if (i)
@@ -1351,16 +1351,19 @@ static int get_mail_commit_oid(struct object_id *commit_id, const char *mail)
 	struct strbuf sb = STRBUF_INIT;
 	FILE *fp = xfopen(mail, "r");
 	const char *x;
-	int ret = 0;
 
-	if (strbuf_getline_lf(&sb, fp) ||
-	    !skip_prefix(sb.buf, "From ", &x) ||
-	    get_oid_hex(x, commit_id) < 0)
-		ret = -1;
+	if (strbuf_getline_lf(&sb, fp))
+		return -1;
+
+	if (!skip_prefix(sb.buf, "From ", &x))
+		return -1;
+
+	if (get_oid_hex(x, commit_id) < 0)
+		return -1;
 
 	strbuf_release(&sb);
 	fclose(fp);
-	return ret;
+	return 0;
 }
 
 /**
@@ -1369,33 +1372,40 @@ static int get_mail_commit_oid(struct object_id *commit_id, const char *mail)
  */
 static void get_commit_info(struct am_state *state, struct commit *commit)
 {
-	const char *buffer, *ident_line, *msg;
+	const char *buffer, *ident_line, *author_date, *msg;
 	size_t ident_len;
-	struct ident_split id;
+	struct ident_split ident_split;
+	struct strbuf sb = STRBUF_INIT;
 
 	buffer = logmsg_reencode(commit, NULL, get_commit_output_encoding());
 
 	ident_line = find_commit_header(buffer, "author", &ident_len);
 
-	if (split_ident_line(&id, ident_line, ident_len) < 0)
-		die(_("invalid ident line: %.*s"), (int)ident_len, ident_line);
+	if (split_ident_line(&ident_split, ident_line, ident_len) < 0) {
+		strbuf_add(&sb, ident_line, ident_len);
+		die(_("invalid ident line: %s"), sb.buf);
+	}
 
 	assert(!state->author_name);
-	if (id.name_begin)
-		state->author_name =
-			xmemdupz(id.name_begin, id.name_end - id.name_begin);
-	else
+	if (ident_split.name_begin) {
+		strbuf_add(&sb, ident_split.name_begin,
+			ident_split.name_end - ident_split.name_begin);
+		state->author_name = strbuf_detach(&sb, NULL);
+	} else
 		state->author_name = xstrdup("");
 
 	assert(!state->author_email);
-	if (id.mail_begin)
-		state->author_email =
-			xmemdupz(id.mail_begin, id.mail_end - id.mail_begin);
-	else
+	if (ident_split.mail_begin) {
+		strbuf_add(&sb, ident_split.mail_begin,
+			ident_split.mail_end - ident_split.mail_begin);
+		state->author_email = strbuf_detach(&sb, NULL);
+	} else
 		state->author_email = xstrdup("");
 
+	author_date = show_ident_date(&ident_split, DATE_MODE(NORMAL));
+	strbuf_addstr(&sb, author_date);
 	assert(!state->author_date);
-	state->author_date = xstrdup(show_ident_date(&id, DATE_MODE(NORMAL)));
+	state->author_date = strbuf_detach(&sb, NULL);
 
 	assert(!state->msg);
 	msg = strstr(buffer, "\n\n");
@@ -1403,7 +1413,6 @@ static void get_commit_info(struct am_state *state, struct commit *commit)
 		die(_("unable to parse commit %s"), oid_to_hex(&commit->object.oid));
 	state->msg = xstrdup(msg + 2);
 	state->msg_len = strlen(state->msg);
-	unuse_commit_buffer(commit, buffer);
 }
 
 /**
@@ -1444,9 +1453,9 @@ static void write_index_patch(const struct am_state *state)
 	FILE *fp;
 
 	if (!get_sha1_tree("HEAD", head.hash))
-		tree = lookup_tree(&head);
+		tree = lookup_tree(head.hash);
 	else
-		tree = lookup_tree(&empty_tree_oid);
+		tree = lookup_tree(EMPTY_TREE_SHA1_BIN);
 
 	fp = xfopen(am_path(state, "patch"), "w");
 	init_revisions(&rev_info, NULL);
@@ -1479,7 +1488,7 @@ static int parse_mail_rebase(struct am_state *state, const char *mail)
 	if (get_mail_commit_oid(&commit_oid, mail) < 0)
 		die(_("could not parse %s"), mail);
 
-	commit = lookup_commit_or_die(&commit_oid, mail);
+	commit = lookup_commit_or_die(commit_oid.hash, mail);
 
 	get_commit_info(state, commit);
 
@@ -1609,7 +1618,7 @@ static int fall_back_threeway(const struct am_state *state, const char *index_pa
 		init_revisions(&rev_info, NULL);
 		rev_info.diffopt.output_format = DIFF_FORMAT_NAME_STATUS;
 		diff_opt_parse(&rev_info.diffopt, &diff_filter_str, 1, rev_info.prefix);
-		add_pending_oid(&rev_info, "HEAD", &our_tree, 0);
+		add_pending_sha1(&rev_info, "HEAD", our_tree.hash, 0);
 		diff_setup_done(&rev_info.diffopt);
 		run_diff_index(&rev_info, 1);
 	}
@@ -1674,7 +1683,7 @@ static void do_commit(const struct am_state *state)
 
 	if (!get_sha1_commit("HEAD", parent.hash)) {
 		old_oid = &parent;
-		commit_list_insert(lookup_commit(&parent), &parents);
+		commit_list_insert(lookup_commit(parent.hash), &parents);
 	} else {
 		old_oid = NULL;
 		say(state, stderr, _("applying to an empty history"));
@@ -2036,11 +2045,11 @@ static int clean_index(const struct object_id *head, const struct object_id *rem
 	struct tree *head_tree, *remote_tree, *index_tree;
 	struct object_id index;
 
-	head_tree = parse_tree_indirect(head);
+	head_tree = parse_tree_indirect(head->hash);
 	if (!head_tree)
 		return error(_("Could not parse object '%s'."), oid_to_hex(head));
 
-	remote_tree = parse_tree_indirect(remote);
+	remote_tree = parse_tree_indirect(remote->hash);
 	if (!remote_tree)
 		return error(_("Could not parse object '%s'."), oid_to_hex(remote));
 
@@ -2052,7 +2061,7 @@ static int clean_index(const struct object_id *head, const struct object_id *rem
 	if (write_cache_as_tree(index.hash, 0, NULL))
 		return -1;
 
-	index_tree = parse_tree_indirect(&index);
+	index_tree = parse_tree_indirect(index.hash);
 	if (!index_tree)
 		return error(_("Could not parse object '%s'."), oid_to_hex(&index));
 

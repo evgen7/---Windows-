@@ -75,8 +75,7 @@ static CredDeleteWT CredDeleteW;
 static void load_cred_funcs(void)
 {
 	/* load DLLs */
-	advapi = LoadLibraryExA("advapi32.dll", NULL,
-				LOAD_LIBRARY_SEARCH_SYSTEM32);
+	advapi = LoadLibrary("advapi32.dll");
 	if (!advapi)
 		die("failed to load advapi32.dll");
 
@@ -95,12 +94,6 @@ static WCHAR *wusername, *password, *protocol, *host, *path, target[1024];
 static void write_item(const char *what, LPCWSTR wbuf, int wlen)
 {
 	char *buf;
-
-	if (!wbuf || !wlen) {
-		printf("%s=\n", what);
-		return;
-	}
-
 	int len = WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, NULL, 0, NULL,
 	    FALSE);
 	buf = xmalloc(len);
@@ -167,7 +160,7 @@ static int match_part_last(LPCWSTR *ptarget, LPCWSTR want, LPCWSTR delim)
 static int match_cred(const CREDENTIALW *cred)
 {
 	LPCWSTR target = cred->TargetName;
-	if (wusername && wcscmp(wusername, cred->UserName ? cred->UserName : L""))
+	if (wusername && wcscmp(wusername, cred->UserName))
 		return 0;
 
 	return match_part(&target, L"git", L":") &&
@@ -190,7 +183,7 @@ static void get_credential(void)
 	for (i = 0; i < num_creds; ++i)
 		if (match_cred(creds[i])) {
 			write_item("username", creds[i]->UserName,
-				creds[i]->UserName ? wcslen(creds[i]->UserName) : 0);
+				wcslen(creds[i]->UserName));
 			write_item("password",
 				(LPCWSTR)creds[i]->CredentialBlob,
 				creds[i]->CredentialBlobSize / sizeof(WCHAR));

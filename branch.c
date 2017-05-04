@@ -191,9 +191,9 @@ int validate_new_branchname(const char *name, struct strbuf *ref,
 
 	if (!attr_only) {
 		const char *head;
-		struct object_id oid;
+		unsigned char sha1[20];
 
-		head = resolve_ref_unsafe("HEAD", 0, oid.hash, NULL);
+		head = resolve_ref_unsafe("HEAD", 0, sha1, NULL);
 		if (!is_bare_repository() && head && !strcmp(head, ref->buf))
 			die(_("Cannot force update the current branch."));
 	}
@@ -233,7 +233,7 @@ void create_branch(const char *name, const char *start_name,
 		   int quiet, enum branch_track track)
 {
 	struct commit *commit;
-	struct object_id oid;
+	unsigned char sha1[20];
 	char *real_ref;
 	struct strbuf ref = STRBUF_INIT;
 	int forcing = 0;
@@ -253,7 +253,7 @@ void create_branch(const char *name, const char *start_name,
 	}
 
 	real_ref = NULL;
-	if (get_oid(start_name, &oid)) {
+	if (get_sha1(start_name, sha1)) {
 		if (explicit_tracking) {
 			if (advice_set_upstream_failure) {
 				error(_(upstream_missing), start_name);
@@ -265,7 +265,7 @@ void create_branch(const char *name, const char *start_name,
 		die(_("Not a valid object name: '%s'."), start_name);
 	}
 
-	switch (dwim_ref(start_name, strlen(start_name), oid.hash, &real_ref)) {
+	switch (dwim_ref(start_name, strlen(start_name), sha1, &real_ref)) {
 	case 0:
 		/* Not branching from any existing branch */
 		if (explicit_tracking)
@@ -286,9 +286,9 @@ void create_branch(const char *name, const char *start_name,
 		break;
 	}
 
-	if ((commit = lookup_commit_reference(&oid)) == NULL)
+	if ((commit = lookup_commit_reference(sha1)) == NULL)
 		die(_("Not a valid branch point: '%s'."), start_name);
-	oidcpy(&oid, &commit->object.oid);
+	hashcpy(sha1, commit->object.oid.hash);
 
 	if (reflog)
 		log_all_ref_updates = LOG_REFS_NORMAL;
@@ -306,7 +306,7 @@ void create_branch(const char *name, const char *start_name,
 		transaction = ref_transaction_begin(&err);
 		if (!transaction ||
 		    ref_transaction_update(transaction, ref.buf,
-					   oid.hash, forcing ? NULL : null_sha1,
+					   sha1, forcing ? NULL : null_sha1,
 					   0, msg, &err) ||
 		    ref_transaction_commit(transaction, &err))
 			die("%s", err.buf);
@@ -353,18 +353,17 @@ int replace_each_worktree_head_symref(const char *oldref, const char *newref,
 	int i;
 
 	for (i = 0; worktrees[i]; i++) {
-		struct ref_store *refs;
-
 		if (worktrees[i]->is_detached)
 			continue;
-		if (worktrees[i]->head_ref &&
-		    strcmp(oldref, worktrees[i]->head_ref))
+		if (strcmp(oldref, worktrees[i]->head_ref))
 			continue;
 
-		refs = get_worktree_ref_store(worktrees[i]);
-		if (refs_create_symref(refs, "HEAD", newref, logmsg))
-			ret = error(_("HEAD of working tree %s is not updated"),
-				    worktrees[i]->path);
+		if (set_worktree_head_symref(get_worktree_git_dir(worktrees[i]),
+					     newref, logmsg)) {
+			ret = -1;
+			error(_("HEAD of working tree %s is not updated"),
+			      worktrees[i]->path);
+		}
 	}
 
 	free_worktrees(worktrees);

@@ -275,7 +275,7 @@ do
 		test_cmp expected actual
 	'
 
-	test_expect_success PCRE "grep $L with grep.patterntype=perl" '
+	test_expect_success LIBPCRE "grep $L with grep.patterntype=perl" '
 		echo "${HC}ab:a+b*c" >expected &&
 		git -c grep.patterntype=perl grep "a\x{2b}b\x{2a}c" $H ab >actual &&
 		test_cmp expected actual
@@ -771,40 +771,6 @@ test_expect_success 'grep -W with userdiff' '
 	test_cmp expected actual
 '
 
-for threads in $(test_seq 0 10)
-do
-	test_expect_success "grep --threads=$threads & -c grep.threads=$threads" "
-		git grep --threads=$threads . >actual.$threads &&
-		if test $threads -ge 1
-		then
-			test_cmp actual.\$(($threads - 1)) actual.$threads
-		fi &&
-		git -c grep.threads=$threads grep . >actual.$threads &&
-		if test $threads -ge 1
-		then
-			test_cmp actual.\$(($threads - 1)) actual.$threads
-		fi
-	"
-done
-
-test_expect_success !PTHREADS,!GETTEXT_POISON 'grep --threads=N or pack.threads=N warns when no pthreads' '
-	git grep --threads=2 Hello hello_world 2>err &&
-	grep ^warning: err >warnings &&
-	test_line_count = 1 warnings &&
-	grep "no threads support, ignoring --threads" err &&
-	git -c grep.threads=2 grep Hello hello_world 2>err &&
-	grep ^warning: err >warnings &&
-	test_line_count = 1 warnings &&
-	grep "no threads support, ignoring grep\.threads" err &&
-	git -c grep.threads=2 grep --threads=4 Hello hello_world 2>err &&
-	grep ^warning: err >warnings &&
-	test_line_count = 2 warnings &&
-	grep "no threads support, ignoring --threads" err &&
-	grep "no threads support, ignoring grep\.threads" err &&
-	git -c grep.threads=0 grep --threads=0 Hello hello_world 2>err &&
-	test_line_count = 0 err
-'
-
 test_expect_success 'grep from a subdirectory to search wider area (1)' '
 	mkdir -p s &&
 	(
@@ -1087,12 +1053,12 @@ hello.c:int main(int argc, const char **argv)
 hello.c:	printf("Hello world.\n");
 EOF
 
-test_expect_success PCRE 'grep --perl-regexp pattern' '
+test_expect_success LIBPCRE 'grep --perl-regexp pattern' '
 	git grep --perl-regexp "\p{Ps}.*?\p{Pe}" hello.c >actual &&
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P pattern' '
+test_expect_success LIBPCRE 'grep -P pattern' '
 	git grep -P "\p{Ps}.*?\p{Pe}" hello.c >actual &&
 	test_cmp expected actual
 '
@@ -1104,13 +1070,13 @@ test_expect_success 'grep pattern with grep.extendedRegexp=true' '
 	test_cmp empty actual
 '
 
-test_expect_success PCRE 'grep -P pattern with grep.extendedRegexp=true' '
+test_expect_success LIBPCRE 'grep -P pattern with grep.extendedRegexp=true' '
 	git -c grep.extendedregexp=true \
 		grep -P "\p{Ps}.*?\p{Pe}" hello.c >actual &&
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P -v pattern' '
+test_expect_success LIBPCRE 'grep -P -v pattern' '
 	{
 		echo "ab:a+b*c"
 		echo "ab:a+bc"
@@ -1119,7 +1085,7 @@ test_expect_success PCRE 'grep -P -v pattern' '
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P -i pattern' '
+test_expect_success LIBPCRE 'grep -P -i pattern' '
 	cat >expected <<-EOF &&
 	hello.c:	printf("Hello world.\n");
 	EOF
@@ -1127,20 +1093,13 @@ test_expect_success PCRE 'grep -P -i pattern' '
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P -w pattern' '
+test_expect_success LIBPCRE 'grep -P -w pattern' '
 	{
 		echo "hello_world:Hello world"
 		echo "hello_world:HeLLo world"
 	} >expected &&
 	git grep -P -w "He((?i)ll)o" hello_world >actual &&
 	test_cmp expected actual
-'
-
-test_expect_success PCRE 'grep -P backreferences work (the PCRE NO_AUTO_CAPTURE flag is not set)' '
-	git grep -P -h "(?P<one>.)(?P=one)" hello_world >actual &&
-	test_cmp hello_world actual &&
-	git grep -P -h "(.)\1" hello_world >actual &&
-	test_cmp hello_world actual
 '
 
 test_expect_success 'grep -G invalidpattern properly dies ' '
@@ -1159,11 +1118,11 @@ test_expect_success 'grep invalidpattern properly dies with grep.patternType=ext
 	test_must_fail git -c grep.patterntype=extended grep "a["
 '
 
-test_expect_success PCRE 'grep -P invalidpattern properly dies ' '
+test_expect_success LIBPCRE 'grep -P invalidpattern properly dies ' '
 	test_must_fail git grep -P "a["
 '
 
-test_expect_success PCRE 'grep invalidpattern properly dies with grep.patternType=perl' '
+test_expect_success LIBPCRE 'grep invalidpattern properly dies with grep.patternType=perl' '
 	test_must_fail git -c grep.patterntype=perl grep "a["
 '
 
@@ -1232,13 +1191,13 @@ test_expect_success 'grep pattern with grep.patternType=fixed, =basic, =perl, =e
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -G -F -E -P pattern' '
+test_expect_success LIBPCRE 'grep -G -F -E -P pattern' '
 	echo "d0:0" >expected &&
 	git grep -G -F -E -P "[\d]" d0 >actual &&
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep pattern with grep.patternType=fixed, =basic, =extended, =perl' '
+test_expect_success LIBPCRE 'grep pattern with grep.patternType=fixed, =basic, =extended, =perl' '
 	echo "d0:0" >expected &&
 	git \
 		-c grep.patterntype=fixed \
@@ -1249,7 +1208,7 @@ test_expect_success PCRE 'grep pattern with grep.patternType=fixed, =basic, =ext
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P pattern with grep.patternType=fixed' '
+test_expect_success LIBPCRE 'grep -P pattern with grep.patternType=fixed' '
 	echo "ab:a+b*c" >expected &&
 	git \
 		-c grep.patterntype=fixed \
@@ -1384,12 +1343,12 @@ space: line with leading space2
 space: line with leading space3
 EOF
 
-test_expect_success PCRE 'grep -E "^ "' '
+test_expect_success LIBPCRE 'grep -E "^ "' '
 	git grep -E "^ " space >actual &&
 	test_cmp expected actual
 '
 
-test_expect_success PCRE 'grep -P "^ "' '
+test_expect_success LIBPCRE 'grep -P "^ "' '
 	git grep -P "^ " space >actual &&
 	test_cmp expected actual
 '
@@ -1543,38 +1502,6 @@ test_expect_success 'grep does not report i-t-a and assume unchanged with -L' '
 	git update-index --assume-unchanged intend-to-add-assume-unchanged &&
 	git ls-files | grep -v "^intend-to-add-assume-unchanged\$" >expected &&
 	git grep -L "nonexistent_string" >actual &&
-	test_cmp expected actual
-'
-
-cat >expected <<EOF
-HEAD:t/a/v:vvv
-HEAD:t/v:vvv
-EOF
-
-test_expect_success 'grep outputs valid <rev>:<path> for HEAD:t/' '
-	git grep vvv HEAD:t/ >actual &&
-	test_cmp expected actual
-'
-
-test_expect_success 'grep outputs valid <rev>:<path> for HEAD:t' '
-	git grep vvv HEAD:t >actual &&
-	test_cmp expected actual
-'
-
-cat >expected <<EOF
-HEAD:t/a/v:vvv
-HEAD:t/v:vvv
-HEAD:v:vvv
-EOF
-
-test_expect_success 'grep outputs valid <rev>:<path> for HEAD:' '
-	git grep vvv HEAD: >actual &&
-	test_cmp expected actual
-'
-
-test_expect_success PCRE "grep with grep.patternType synonyms perl" '
-	echo "#include <stdio.h>" >expected &&
-	git -c grep.patternType=perl  grep -h --no-line-number "st(?=dio)" >actual &&
 	test_cmp expected actual
 '
 

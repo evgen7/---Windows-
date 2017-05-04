@@ -1319,7 +1319,6 @@ _git_clone ()
 			--template=
 			--depth
 			--single-branch
-			--no-tags
 			--branch
 			--recurse-submodules
 			--no-single-branch
@@ -2388,9 +2387,7 @@ _git_config ()
 		color.status.added
 		color.status.changed
 		color.status.header
-		color.status.localBranch
 		color.status.nobranch
-		color.status.remoteBranch
 		color.status.unmerged
 		color.status.untracked
 		color.status.updated
@@ -3049,7 +3046,7 @@ _git_whatchanged ()
 
 _git_worktree ()
 {
-	local subcommands="add list lock move prune remove unlock"
+	local subcommands="add list lock prune unlock"
 	local subcommand="$(__git_find_on_cmdline "$subcommands")"
 	if [ -z "$subcommand" ]; then
 		__gitcomp "$subcommands"
@@ -3066,9 +3063,6 @@ _git_worktree ()
 			;;
 		prune,--*)
 			__gitcomp "--dry-run --expire --verbose"
-			;;
-		remove,--*)
-			__gitcomp "--force"
 			;;
 		*)
 			;;

@@ -3,8 +3,6 @@
 #include "dir.h"
 #include "streaming.h"
 #include "submodule.h"
-#include "iterator.h"
-#include "dir-iterator.h"
 
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
@@ -47,21 +45,33 @@ static void create_directories(const char *path, int path_len,
 	free(buf);
 }
 
-static void remove_subtree(const char *path)
+static void remove_subtree(struct strbuf *path)
 {
-	struct dir_iterator *diter = dir_iterator_begin(path,
-		DIR_ITERATOR_POST_ORDER_TRAVERSAL | DIR_ITERATOR_LIST_ROOT_DIR);
-	if (!diter) {
-		die_errno("cannot remove path '%s'", path);
-	}
+	DIR *dir = opendir(path->buf);
+	struct dirent *de;
+	int origlen = path->len;
 
-	while (dir_iterator_advance(diter) == ITER_OK) {
-		if (S_ISDIR(diter->st.st_mode)) {
-			if (rmdir(diter->path.buf))
-				die_errno("cannot rmdir '%s'", diter->path.buf);
-		} else if (unlink(diter->path.buf))
-			die_errno("cannot unlink '%s'", diter->path.buf);
+	if (!dir)
+		die_errno("cannot opendir '%s'", path->buf);
+	while ((de = readdir(dir)) != NULL) {
+		struct stat st;
+
+		if (is_dot_or_dotdot(de->d_name))
+			continue;
+
+		strbuf_addch(path, '/');
+		strbuf_addstr(path, de->d_name);
+		if (lstat(path->buf, &st))
+			die_errno("cannot lstat '%s'", path->buf);
+		if (S_ISDIR(st.st_mode))
+			remove_subtree(path);
+		else if (unlink(path->buf))
+			die_errno("cannot unlink '%s'", path->buf);
+		strbuf_setlen(path, origlen);
 	}
+	closedir(dir);
+	if (rmdir(path->buf))
+		die_errno("cannot rmdir '%s'", path->buf);
 }
 
 static int create_file(const char *path, unsigned int mode)
@@ -169,17 +179,11 @@ static int write_entry(struct cache_entry *ce,
 		/*
 		 * Convert from git internal format to working tree format
 		 */
-		if (ce_mode_s_ifmt == S_IFREG) {
-			ret = async_convert_to_working_tree(ce->name, new, size, &buf, ce);
-			if (ret == ASYNC_FILTER_SUCCESS) {
-				free(new);
-				new = strbuf_detach(&buf, &newsize);
-				size = newsize;
-			}
-			else if (ret == ASYNC_FILTER_DELAYED) {
-				free(new);
-				goto finish;
-			}
+		if (ce_mode_s_ifmt == S_IFREG &&
+		    convert_to_working_tree(ce->name, new, size, &buf)) {
+			free(new);
+			new = strbuf_detach(&buf, &newsize);
+			size = newsize;
 		}
 
 		fd = open_output_fd(path, ce, to_tempfile);
@@ -204,8 +208,7 @@ static int write_entry(struct cache_entry *ce,
 		sub = submodule_from_ce(ce);
 		if (sub)
 			return submodule_move_head(ce->name,
-				NULL, oid_to_hex(&ce->oid),
-				state->force ? SUBMODULE_MOVE_HEAD_FORCE : 0);
+				NULL, oid_to_hex(&ce->oid), SUBMODULE_MOVE_HEAD_FORCE);
 		break;
 	default:
 		return error("unknown file mode for %s in index", path);
@@ -279,11 +282,12 @@ int checkout_entry(struct cache_entry *ce,
 					unlink_or_warn(ce->name);
 
 				return submodule_move_head(ce->name,
-					NULL, oid_to_hex(&ce->oid), 0);
+					NULL, oid_to_hex(&ce->oid),
+					SUBMODULE_MOVE_HEAD_FORCE);
 			} else
 				return submodule_move_head(ce->name,
 					"HEAD", oid_to_hex(&ce->oid),
-					state->force ? SUBMODULE_MOVE_HEAD_FORCE : 0);
+					SUBMODULE_MOVE_HEAD_FORCE);
 		}
 
 		if (!changed)
@@ -308,7 +312,7 @@ int checkout_entry(struct cache_entry *ce,
 				return 0;
 			if (!state->force)
 				return error("%s is a directory", path.buf);
-			remove_subtree(path.buf);
+			remove_subtree(&path);
 		} else if (unlink(path.buf))
 			return error_errno("unable to unlink old '%s'", path.buf);
 	} else if (state->not_new)
@@ -316,17 +320,4 @@ int checkout_entry(struct cache_entry *ce,
 
 	create_directories(path.buf, path.len, state);
 	return write_entry(ce, path.buf, state, 0);
-}
-
-int checkout_delayed_entries(const struct checkout *state)
-{
-	struct cache_entry *ce;
-	int errs = 0;
-
-	while ((ce = async_filter_finish())) {
-		ce->ce_flags &= ~CE_UPDATE;
-		errs |= checkout_entry(ce, state, NULL);
-	}
-
-	return errs;
 }

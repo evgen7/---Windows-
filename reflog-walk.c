@@ -12,7 +12,7 @@ struct complete_reflogs {
 	struct reflog_info {
 		struct object_id ooid, noid;
 		char *email;
-		timestamp_t timestamp;
+		unsigned long timestamp;
 		int tz;
 		char *message;
 	} *items;
@@ -20,7 +20,7 @@ struct complete_reflogs {
 };
 
 static int read_one_reflog(struct object_id *ooid, struct object_id *noid,
-		const char *email, timestamp_t timestamp, int tz,
+		const char *email, unsigned long timestamp, int tz,
 		const char *message, void *cb_data)
 {
 	struct complete_reflogs *array = cb_data;
@@ -69,7 +69,7 @@ static struct complete_reflogs *read_complete_reflog(const char *ref)
 }
 
 static int get_reflog_recno_by_time(struct complete_reflogs *array,
-	timestamp_t timestamp)
+	unsigned long timestamp)
 {
 	int i;
 	for (i = array->nr - 1; i >= 0; i--)
@@ -141,7 +141,7 @@ void init_reflog_walk(struct reflog_walk_info **info)
 int add_reflog_for_walk(struct reflog_walk_info *info,
 		struct commit *commit, const char *name)
 {
-	timestamp_t timestamp = 0;
+	unsigned long timestamp = 0;
 	int recno = -1;
 	struct string_list_item *item;
 	struct complete_reflogs *reflogs;
@@ -183,11 +183,7 @@ int add_reflog_for_walk(struct reflog_walk_info *info,
 		if (!reflogs || reflogs->nr == 0) {
 			struct object_id oid;
 			char *b;
-			int ret = dwim_log(branch, strlen(branch),
-					   oid.hash, &b);
-			if (ret > 1)
-				free(b);
-			else if (ret == 1) {
+			if (dwim_log(branch, strlen(branch), oid.hash, &b) == 1) {
 				if (reflogs) {
 					free(reflogs->ref);
 					free(reflogs);
@@ -197,27 +193,17 @@ int add_reflog_for_walk(struct reflog_walk_info *info,
 				reflogs = read_complete_reflog(branch);
 			}
 		}
-		if (!reflogs || reflogs->nr == 0) {
-			if (reflogs) {
-				free(reflogs->ref);
-				free(reflogs);
-			}
-			free(branch);
+		if (!reflogs || reflogs->nr == 0)
 			return -1;
-		}
 		string_list_insert(&info->complete_reflogs, branch)->util
 			= reflogs;
 	}
-	free(branch);
 
 	commit_reflog = xcalloc(1, sizeof(struct commit_reflog));
 	if (recno < 0) {
 		commit_reflog->recno = get_reflog_recno_by_time(reflogs, timestamp);
 		if (commit_reflog->recno < 0) {
-			if (reflogs) {
-				free(reflogs->ref);
-				free(reflogs);
-			}
+			free(branch);
 			free(commit_reflog);
 			return -1;
 		}
@@ -252,13 +238,13 @@ void fake_reflog_parent(struct reflog_walk_info *info, struct commit *commit)
 	do {
 		reflog = &commit_reflog->reflogs->items[commit_reflog->recno];
 		commit_reflog->recno--;
-		logobj = parse_object(&reflog->ooid);
+		logobj = parse_object(reflog->ooid.hash);
 	} while (commit_reflog->recno && (logobj && logobj->type != OBJ_COMMIT));
 
-	if (!logobj && commit_reflog->recno >= 0 && is_null_oid(&reflog->ooid)) {
+	if (!logobj && commit_reflog->recno >= 0 && is_null_sha1(reflog->ooid.hash)) {
 		/* a root commit, but there are still more entries to show */
 		reflog = &commit_reflog->reflogs->items[commit_reflog->recno];
-		logobj = parse_object(&reflog->noid);
+		logobj = parse_object(reflog->noid.hash);
 	}
 
 	if (!logobj || logobj->type != OBJ_COMMIT) {

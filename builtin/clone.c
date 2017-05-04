@@ -40,7 +40,6 @@ static const char * const builtin_clone_usage[] = {
 
 static int option_no_checkout, option_bare, option_mirror, option_single_branch = -1;
 static int option_local = -1, option_no_hardlinks, option_shared;
-static int option_no_tags;
 static int option_shallow_submodules;
 static int deepen;
 static char *option_template, *option_depth, *option_since;
@@ -121,8 +120,6 @@ static struct option builtin_clone_options[] = {
 			N_("deepen history of shallow clone, excluding rev")),
 	OPT_BOOL(0, "single-branch", &option_single_branch,
 		    N_("clone only one branch, HEAD or --branch")),
-	OPT_BOOL(0, "no-tags", &option_no_tags,
-		 N_("don't clone any tags, and make later fetches not to follow them")),
 	OPT_BOOL(0, "shallow-submodules", &option_shallow_submodules,
 		    N_("any cloned submodules will be shallow")),
 	OPT_STRING(0, "separate-git-dir", &real_git_dir, N_("gitdir"),
@@ -360,7 +357,7 @@ static void copy_alternates(struct strbuf *src, struct strbuf *dst,
 	 * to turn entries with paths relative to the original
 	 * absolute, so that they can be used in the new repository.
 	 */
-	FILE *in = xfopen(src->buf, "r");
+	FILE *in = fopen(src->buf, "r");
 	struct strbuf line = STRBUF_INIT;
 
 	while (strbuf_getline(&line, in) != EOF) {
@@ -537,7 +534,7 @@ static struct ref *find_remote_branch(const struct ref *refs, const char *branch
 }
 
 static struct ref *wanted_peer_refs(const struct ref *refs,
-		struct refspec *refspec, unsigned int refspec_count)
+		struct refspec *refspec)
 {
 	struct ref *head = copy_ref(find_ref_by_name(refs, "HEAD"));
 	struct ref *local_refs = head;
@@ -558,20 +555,15 @@ static struct ref *wanted_peer_refs(const struct ref *refs,
 			warning(_("Could not find remote branch %s to clone."),
 				option_branch);
 		else {
-			unsigned int i;
-			for (i = 0; i < refspec_count; i++)
-				get_fetch_map(remote_head, &refspec[i], &tail, 0);
+			get_fetch_map(remote_head, refspec, &tail, 0);
 
 			/* if --branch=tag, pull the requested tag explicitly */
 			get_fetch_map(remote_head, tag_refspec, &tail, 0);
 		}
-	} else {
-		unsigned int i;
-		for (i = 0; i < refspec_count; i++)
-			get_fetch_map(refs, &refspec[i], &tail, 0);
-	}
+	} else
+		get_fetch_map(refs, refspec, &tail, 0);
 
-	if (!option_mirror && !option_single_branch && !option_no_tags)
+	if (!option_mirror && !option_single_branch)
 		get_fetch_map(refs, tag_refspec, &tail, 0);
 
 	return local_refs;
@@ -660,7 +652,7 @@ static void update_remote_refs(const struct ref *refs,
 
 	if (refs) {
 		write_remote_refs(mapped_refs);
-		if (option_single_branch && !option_no_tags)
+		if (option_single_branch)
 			write_followtags(refs, msg);
 	}
 
@@ -690,7 +682,7 @@ static void update_head(const struct ref *our, const struct ref *remote,
 			install_branch_config(0, head, option_origin, our->name);
 		}
 	} else if (our) {
-		struct commit *c = lookup_commit_reference(&our->old_oid);
+		struct commit *c = lookup_commit_reference(our->old_oid.hash);
 		/* --branch specifies a non-branch (i.e. tags), detach HEAD */
 		update_ref(msg, "HEAD", c->object.oid.hash,
 			   NULL, REF_NODEREF, UPDATE_REFS_DIE_ON_ERR);
@@ -747,7 +739,7 @@ static int checkout(int submodule_progress)
 	opts.src_index = &the_index;
 	opts.dst_index = &the_index;
 
-	tree = parse_tree_indirect(&oid);
+	tree = parse_tree_indirect(oid.hash);
 	parse_tree(tree);
 	init_tree_desc(&t, tree->buffer, tree->size);
 	if (unpack_trees(1, &t, &opts) < 0)
@@ -781,9 +773,7 @@ static int checkout(int submodule_progress)
 
 static int write_one_config(const char *key, const char *value, void *data)
 {
-	return git_config_set_multivar_gently(key,
-					      value ? value : "true",
-					      CONFIG_REGEX_NONE, 0);
+	return git_config_set_multivar_gently(key, value ? value : "true", "^$", 0);
 }
 
 static void write_config(struct string_list *config)
@@ -884,9 +874,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	int submodule_progress;
 
 	struct refspec *refspec;
-	unsigned int refspec_count = 1;
-	const char **fetch_patterns;
-	const struct string_list *config_fetch_patterns;
+	const char *fetch_pattern;
 
 	packet_trace_identity("clone");
 	argc = parse_options(argc, argv, prefix, builtin_clone_options,
@@ -1047,30 +1035,12 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	git_config_set(key.buf, repo);
 	strbuf_reset(&key);
 
-	if (option_no_tags) {
-		strbuf_addf(&key, "remote.%s.tagOpt", option_origin);
-		git_config_set(key.buf, "--no-tags");
-		strbuf_reset(&key);
-	}
-
 	if (option_required_reference.nr || option_optional_reference.nr)
 		setup_reference();
 
-	strbuf_addf(&key, "remote.%s.fetch", option_origin);
-	config_fetch_patterns = git_config_get_value_multi(key.buf);
-	if (config_fetch_patterns)
-		refspec_count = 1 + config_fetch_patterns->nr;
-	fetch_patterns = xcalloc(refspec_count, sizeof(*fetch_patterns));
-	fetch_patterns[0] = value.buf;
-	if (config_fetch_patterns) {
-		struct string_list_item *fp;
-		unsigned int i = 1;
-		for_each_string_list_item(fp, config_fetch_patterns)
-			fetch_patterns[i++] = fp->string;
-	}
-	refspec = parse_fetch_refspec(refspec_count, fetch_patterns);
+	fetch_pattern = value.buf;
+	refspec = parse_fetch_refspec(1, &fetch_pattern);
 
-	strbuf_reset(&key);
 	strbuf_reset(&value);
 
 	remote = remote_get(option_origin);
@@ -1124,7 +1094,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	refs = transport_get_remote_refs(transport);
 
 	if (refs) {
-		mapped_refs = wanted_peer_refs(refs, refspec, refspec_count);
+		mapped_refs = wanted_peer_refs(refs, refspec);
 		/*
 		 * transport_get_remote_refs() may return refs with null sha-1
 		 * in mapped_refs (see struct transport->get_refs_list
@@ -1142,9 +1112,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 			}
 
 		if (!is_local && !complete_refs_before_fetch)
-			if (transport_fetch_refs(transport, mapped_refs))
-				die(_("could not fetch refs from %s"),
-				    transport->url);
+			transport_fetch_refs(transport, mapped_refs);
 
 		remote_head = find_ref_by_name(refs, "HEAD");
 		remote_head_points_at =
@@ -1215,7 +1183,6 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	strbuf_release(&value);
 	junk_mode = JUNK_LEAVE_ALL;
 
-	free(fetch_patterns);
 	free(refspec);
 	return err;
 }

@@ -58,7 +58,7 @@ static int read_tree_1(struct tree *tree, struct strbuf *base,
 {
 	struct tree_desc desc;
 	struct name_entry entry;
-	struct object_id oid;
+	unsigned char sha1[20];
 	int len, oldlen = base->len;
 	enum interesting retval = entry_not_interesting;
 
@@ -87,11 +87,11 @@ static int read_tree_1(struct tree *tree, struct strbuf *base,
 		}
 
 		if (S_ISDIR(entry.mode))
-			oidcpy(&oid, entry.oid);
+			hashcpy(sha1, entry.oid->hash);
 		else if (S_ISGITLINK(entry.mode)) {
 			struct commit *commit;
 
-			commit = lookup_commit(entry.oid);
+			commit = lookup_commit(entry.oid->hash);
 			if (!commit)
 				die("Commit %s in submodule path %s%s not found",
 				    oid_to_hex(entry.oid),
@@ -102,7 +102,7 @@ static int read_tree_1(struct tree *tree, struct strbuf *base,
 				    oid_to_hex(entry.oid),
 				    base->buf, entry.path);
 
-			oidcpy(&oid, &commit->tree->object.oid);
+			hashcpy(sha1, commit->tree->object.oid.hash);
 		}
 		else
 			continue;
@@ -110,7 +110,7 @@ static int read_tree_1(struct tree *tree, struct strbuf *base,
 		len = tree_entry_len(&entry);
 		strbuf_add(base, entry.path, len);
 		strbuf_addch(base, '/');
-		retval = read_tree_1(lookup_tree(&oid),
+		retval = read_tree_1(lookup_tree(sha1),
 				     base, stage, pathspec,
 				     fn, context);
 		strbuf_setlen(base, oldlen);
@@ -184,11 +184,11 @@ int read_tree(struct tree *tree, int stage, struct pathspec *match)
 	return 0;
 }
 
-struct tree *lookup_tree(const struct object_id *oid)
+struct tree *lookup_tree(const unsigned char *sha1)
 {
-	struct object *obj = lookup_object(oid->hash);
+	struct object *obj = lookup_object(sha1);
 	if (!obj)
-		return create_object(oid->hash, alloc_tree_node());
+		return create_object(sha1, alloc_tree_node());
 	return object_as_type(obj, OBJ_TREE, 0);
 }
 
@@ -232,9 +232,9 @@ void free_tree_buffer(struct tree *tree)
 	tree->object.parsed = 0;
 }
 
-struct tree *parse_tree_indirect(const struct object_id *oid)
+struct tree *parse_tree_indirect(const unsigned char *sha1)
 {
-	struct object *obj = parse_object(oid);
+	struct object *obj = parse_object(sha1);
 	do {
 		if (!obj)
 			return NULL;
@@ -247,6 +247,6 @@ struct tree *parse_tree_indirect(const struct object_id *oid)
 		else
 			return NULL;
 		if (!obj->parsed)
-			parse_object(&obj->oid);
+			parse_object(obj->oid.hash);
 	} while (1);
 }

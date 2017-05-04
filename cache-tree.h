@@ -1,7 +1,6 @@
 #ifndef CACHE_TREE_H
 #define CACHE_TREE_H
 
-#include "cache.h"
 #include "tree.h"
 #include "tree-walk.h"
 
@@ -16,7 +15,7 @@ struct cache_tree_sub {
 
 struct cache_tree {
 	int entry_count; /* negative means "invalid" */
-	struct object_id oid;
+	unsigned char sha1[20];
 	int subtree_nr;
 	int subtree_alloc;
 	struct cache_tree_sub **down;

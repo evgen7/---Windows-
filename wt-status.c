@@ -1002,7 +1002,7 @@ static void wt_longstatus_print_tracking(struct wt_status *s)
 		color_fprintf_ln(s->fp, color(WT_STATUS_HEADER, s), "%c",
 				 comment_line_char);
 	else
-		fputs("\n", s->fp);
+		fputs("", s->fp);
 }
 
 static int has_unmerged(struct wt_status *s)
@@ -1067,8 +1067,6 @@ static char *read_line_from_git_path(const char *filename)
 	struct strbuf buf = STRBUF_INIT;
 	FILE *fp = fopen(git_path("%s", filename), "r");
 	if (!fp) {
-		if (errno != ENOENT)
-			warn_on_inaccessible(git_path("%s", filename));
 		strbuf_release(&buf);
 		return NULL;
 	}
@@ -1090,13 +1088,8 @@ static int split_commit_in_progress(struct wt_status *s)
 	char *rebase_orig_head = read_line_from_git_path("rebase-merge/orig-head");
 
 	if (!head || !orig_head || !rebase_amend || !rebase_orig_head ||
-	    !s->branch || strcmp(s->branch, "HEAD")) {
-		free(head);
-		free(orig_head);
-		free(rebase_amend);
-		free(rebase_orig_head);
+	    !s->branch || strcmp(s->branch, "HEAD"))
 		return split_in_progress;
-	}
 
 	if (!strcmp(rebase_amend, rebase_orig_head)) {
 		if (strcmp(head, rebase_amend))
@@ -1175,7 +1168,6 @@ static int read_rebase_todolist(const char *fname, struct string_list *lines)
 		abbrev_sha1_in_line(&line);
 		string_list_append(lines, line.buf);
 	}
-	fclose(f);
 	return 0;
 }
 
@@ -1395,7 +1387,7 @@ struct grab_1st_switch_cbdata {
 };
 
 static int grab_1st_switch(struct object_id *ooid, struct object_id *noid,
-			   const char *email, timestamp_t timestamp, int tz,
+			   const char *email, unsigned long timestamp, int tz,
 			   const char *message, void *cb_data)
 {
 	struct grab_1st_switch_cbdata *cb = cb_data;
@@ -1436,7 +1428,7 @@ static void wt_status_get_detached_from(struct wt_status_state *state)
 	    /* sha1 is a commit? match without further lookup */
 	    (!oidcmp(&cb.noid, &oid) ||
 	     /* perhaps sha1 is a tag, try to dereference to a commit */
-	     ((commit = lookup_commit_reference_gently(&oid, 1)) != NULL &&
+	     ((commit = lookup_commit_reference_gently(oid.hash, 1)) != NULL &&
 	      !oidcmp(&cb.noid, &commit->object.oid)))) {
 		const char *from = ref;
 		if (!skip_prefix(from, "refs/tags/", &from))
@@ -1736,7 +1728,6 @@ static void wt_shortstatus_other(struct string_list_item *it,
 static void wt_shortstatus_print_tracking(struct wt_status *s)
 {
 	struct branch *branch;
-	struct wt_status_state state;
 	const char *header_color = color(WT_STATUS_HEADER, s);
 	const char *branch_color_local = color(WT_STATUS_LOCAL_BRANCH, s);
 	const char *branch_color_remote = color(WT_STATUS_REMOTE_BRANCH, s);
@@ -1760,7 +1751,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	if (!strcmp(s->branch, "HEAD")) {
 		color_fprintf(s->fp, color(WT_STATUS_NOBRANCH, s), "%s",
 			      LABEL(N_("HEAD (no branch)")));
-		goto inprogress;
+		goto conclude;
 	}
 
 	skip_prefix(branch_name, "refs/heads/", &branch_name);
@@ -1771,7 +1762,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 
 	if (stat_tracking_info(branch, &num_ours, &num_theirs, &base) < 0) {
 		if (!base)
-			goto inprogress;
+			goto conclude;
 
 		upstream_is_gone = 1;
 	}
@@ -1782,7 +1773,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	free((char *)base);
 
 	if (!upstream_is_gone && !num_ours && !num_theirs)
-		goto inprogress;
+		goto conclude;
 
 	color_fprintf(s->fp, header_color, " [");
 	if (upstream_is_gone) {
@@ -1801,31 +1792,6 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	}
 
 	color_fprintf(s->fp, header_color, "]");
-
- inprogress:
-	if (!s->show_inprogress)
-		goto conclude;
-	memset(&state, 0, sizeof(state));
-	wt_status_get_state(&state,
-			    s->branch && !strcmp(s->branch, "HEAD"));
-	if (state.merge_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("MERGING")));
-	else if (state.am_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("AM")));
-	else if (state.rebase_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REBASE-m")));
-	else if (state.rebase_interactive_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REBASE-i")));
-	else if (state.cherry_pick_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("CHERRY-PICKING")));
-	else if (state.revert_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REVERTING")));
-	if (state.bisect_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("BISECTING")));
-	free(state.branch);
-	free(state.onto);
-	free(state.detached_from);
-
  conclude:
 	fputc(s->null_termination ? '\0' : '\n', s->fp);
 }

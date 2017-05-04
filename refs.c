@@ -11,7 +11,6 @@
 #include "object.h"
 #include "tag.h"
 #include "submodule.h"
-#include "worktree.h"
 
 /*
  * List of all available backends
@@ -317,6 +316,12 @@ int for_each_tag_ref(each_ref_fn fn, void *cb_data)
 	return refs_for_each_tag_ref(get_main_ref_store(), fn, cb_data);
 }
 
+int for_each_tag_ref_submodule(const char *submodule, each_ref_fn fn, void *cb_data)
+{
+	return refs_for_each_tag_ref(get_submodule_ref_store(submodule),
+				     fn, cb_data);
+}
+
 int refs_for_each_branch_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
 {
 	return refs_for_each_ref_in(refs, "refs/heads/", fn, cb_data);
@@ -325,6 +330,12 @@ int refs_for_each_branch_ref(struct ref_store *refs, each_ref_fn fn, void *cb_da
 int for_each_branch_ref(each_ref_fn fn, void *cb_data)
 {
 	return refs_for_each_branch_ref(get_main_ref_store(), fn, cb_data);
+}
+
+int for_each_branch_ref_submodule(const char *submodule, each_ref_fn fn, void *cb_data)
+{
+	return refs_for_each_branch_ref(get_submodule_ref_store(submodule),
+					fn, cb_data);
 }
 
 int refs_for_each_remote_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
@@ -702,7 +713,7 @@ int is_branch(const char *refname)
 
 struct read_ref_at_cb {
 	const char *refname;
-	timestamp_t at_time;
+	unsigned long at_time;
 	int cnt;
 	int reccnt;
 	unsigned char *sha1;
@@ -711,15 +722,15 @@ struct read_ref_at_cb {
 	unsigned char osha1[20];
 	unsigned char nsha1[20];
 	int tz;
-	timestamp_t date;
+	unsigned long date;
 	char **msg;
-	timestamp_t *cutoff_time;
+	unsigned long *cutoff_time;
 	int *cutoff_tz;
 	int *cutoff_cnt;
 };
 
 static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
-		const char *email, timestamp_t timestamp, int tz,
+		const char *email, unsigned long timestamp, int tz,
 		const char *message, void *cb_data)
 {
 	struct read_ref_at_cb *cb = cb_data;
@@ -766,7 +777,7 @@ static int read_ref_at_ent(struct object_id *ooid, struct object_id *noid,
 }
 
 static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid,
-				  const char *email, timestamp_t timestamp,
+				  const char *email, unsigned long timestamp,
 				  int tz, const char *message, void *cb_data)
 {
 	struct read_ref_at_cb *cb = cb_data;
@@ -786,9 +797,9 @@ static int read_ref_at_ent_oldest(struct object_id *ooid, struct object_id *noid
 	return 1;
 }
 
-int read_ref_at(const char *refname, unsigned int flags, timestamp_t at_time, int cnt,
+int read_ref_at(const char *refname, unsigned int flags, unsigned long at_time, int cnt,
 		unsigned char *sha1, char **msg,
-		timestamp_t *cutoff_time, int *cutoff_tz, int *cutoff_cnt)
+		unsigned long *cutoff_time, int *cutoff_tz, int *cutoff_cnt)
 {
 	struct read_ref_at_cb cb;
 
@@ -871,9 +882,9 @@ struct ref_update *ref_transaction_add_update(
 	update->flags = flags;
 
 	if (flags & REF_HAVE_NEW)
-		hashcpy(update->new_oid.hash, new_sha1);
+		hashcpy(update->new_sha1, new_sha1);
 	if (flags & REF_HAVE_OLD)
-		hashcpy(update->old_oid.hash, old_sha1);
+		hashcpy(update->old_sha1, old_sha1);
 	update->msg = xstrdup_or_null(msg);
 	return update;
 }
@@ -1205,13 +1216,19 @@ int refs_rename_ref_available(struct ref_store *refs,
 	return ok;
 }
 
-int refs_head_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
+int head_ref_submodule(const char *submodule, each_ref_fn fn, void *cb_data)
 {
 	struct object_id oid;
 	int flag;
 
-	if (!refs_read_ref_full(refs, "HEAD", RESOLVE_REF_READING,
-				oid.hash, &flag))
+	if (submodule) {
+		if (resolve_gitlink_ref(submodule, "HEAD", oid.hash) == 0)
+			return fn("HEAD", &oid, 0, cb_data);
+
+		return 0;
+	}
+
+	if (!read_ref_full("HEAD", RESOLVE_REF_READING, oid.hash, &flag))
 		return fn("HEAD", &oid, flag, cb_data);
 
 	return 0;
@@ -1219,7 +1236,7 @@ int refs_head_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
 
 int head_ref(each_ref_fn fn, void *cb_data)
 {
-	return refs_head_ref(get_main_ref_store(), fn, cb_data);
+	return head_ref_submodule(NULL, fn, cb_data);
 }
 
 struct ref_iterator *refs_ref_iterator_begin(
@@ -1266,6 +1283,11 @@ int for_each_ref(each_ref_fn fn, void *cb_data)
 	return refs_for_each_ref(get_main_ref_store(), fn, cb_data);
 }
 
+int for_each_ref_submodule(const char *submodule, each_ref_fn fn, void *cb_data)
+{
+	return refs_for_each_ref(get_submodule_ref_store(submodule), fn, cb_data);
+}
+
 int refs_for_each_ref_in(struct ref_store *refs, const char *prefix,
 			 each_ref_fn fn, void *cb_data)
 {
@@ -1285,6 +1307,13 @@ int for_each_fullref_in(const char *prefix, each_ref_fn fn, void *cb_data, unsig
 		flag = DO_FOR_EACH_INCLUDE_BROKEN;
 	return do_for_each_ref(get_main_ref_store(),
 			       prefix, fn, 0, flag, cb_data);
+}
+
+int for_each_ref_in_submodule(const char *submodule, const char *prefix,
+			      each_ref_fn fn, void *cb_data)
+{
+	return refs_for_each_ref_in(get_submodule_ref_store(submodule),
+				    prefix, fn, cb_data);
 }
 
 int for_each_replace_ref(each_ref_fn fn, void *cb_data)
@@ -1419,10 +1448,25 @@ const char *resolve_ref_unsafe(const char *refname, int resolve_flags,
 int resolve_gitlink_ref(const char *submodule, const char *refname,
 			unsigned char *sha1)
 {
+	size_t len = strlen(submodule);
 	struct ref_store *refs;
 	int flags;
 
-	refs = get_submodule_ref_store(submodule);
+	while (len && submodule[len - 1] == '/')
+		len--;
+
+	if (!len)
+		return -1;
+
+	if (submodule[len]) {
+		/* We need to strip off one or more trailing slashes */
+		char *stripped = xmemdupz(submodule, len);
+
+		refs = get_submodule_ref_store(stripped);
+		free(stripped);
+	} else {
+		refs = get_submodule_ref_store(submodule);
+	}
 
 	if (!refs)
 		return -1;
@@ -1433,32 +1477,32 @@ int resolve_gitlink_ref(const char *submodule, const char *refname,
 	return 0;
 }
 
-struct ref_store_hash_entry
+struct submodule_hash_entry
 {
 	struct hashmap_entry ent; /* must be the first member! */
 
 	struct ref_store *refs;
 
-	/* NUL-terminated identifier of the ref store: */
-	char name[FLEX_ARRAY];
+	/* NUL-terminated name of submodule: */
+	char submodule[FLEX_ARRAY];
 };
 
-static int ref_store_hash_cmp(const void *entry, const void *entry_or_key,
+static int submodule_hash_cmp(const void *entry, const void *entry_or_key,
 			      const void *keydata)
 {
-	const struct ref_store_hash_entry *e1 = entry, *e2 = entry_or_key;
-	const char *name = keydata ? keydata : e2->name;
+	const struct submodule_hash_entry *e1 = entry, *e2 = entry_or_key;
+	const char *submodule = keydata ? keydata : e2->submodule;
 
-	return strcmp(e1->name, name);
+	return strcmp(e1->submodule, submodule);
 }
 
-static struct ref_store_hash_entry *alloc_ref_store_hash_entry(
-		const char *name, struct ref_store *refs)
+static struct submodule_hash_entry *alloc_submodule_hash_entry(
+		const char *submodule, struct ref_store *refs)
 {
-	struct ref_store_hash_entry *entry;
+	struct submodule_hash_entry *entry;
 
-	FLEX_ALLOC_STR(entry, name, name);
-	hashmap_entry_init(entry, strhash(name));
+	FLEX_ALLOC_STR(entry, submodule, submodule);
+	hashmap_entry_init(entry, strhash(submodule));
 	entry->refs = refs;
 	return entry;
 }
@@ -1469,23 +1513,20 @@ static struct ref_store *main_ref_store;
 /* A hashmap of ref_stores, stored by submodule name: */
 static struct hashmap submodule_ref_stores;
 
-/* A hashmap of ref_stores, stored by worktree id: */
-static struct hashmap worktree_ref_stores;
-
 /*
- * Look up a ref store by name. If that ref_store hasn't been
- * registered yet, return NULL.
+ * Return the ref_store instance for the specified submodule. If that
+ * ref_store hasn't been initialized yet, return NULL.
  */
-static struct ref_store *lookup_ref_store_map(struct hashmap *map,
-					      const char *name)
+static struct ref_store *lookup_submodule_ref_store(const char *submodule)
 {
-	struct ref_store_hash_entry *entry;
+	struct submodule_hash_entry *entry;
 
-	if (!map->tablesize)
+	if (!submodule_ref_stores.tablesize)
 		/* It's initialized on demand in register_ref_store(). */
 		return NULL;
 
-	entry = hashmap_get_from_hash(map, strhash(name), name);
+	entry = hashmap_get_from_hash(&submodule_ref_stores,
+				      strhash(submodule), submodule);
 	return entry ? entry->refs : NULL;
 }
 
@@ -1512,41 +1553,36 @@ struct ref_store *get_main_ref_store(void)
 	if (main_ref_store)
 		return main_ref_store;
 
-	main_ref_store = ref_store_init(get_git_dir(), REF_STORE_ALL_CAPS);
+	main_ref_store = ref_store_init(get_git_dir(),
+					(REF_STORE_READ |
+					 REF_STORE_WRITE |
+					 REF_STORE_ODB |
+					 REF_STORE_MAIN));
 	return main_ref_store;
 }
 
 /*
- * Associate a ref store with a name. It is a fatal error to call this
- * function twice for the same name.
+ * Register the specified ref_store to be the one that should be used
+ * for submodule. It is a fatal error to call this function twice for
+ * the same submodule.
  */
-static void register_ref_store_map(struct hashmap *map,
-				   const char *type,
-				   struct ref_store *refs,
-				   const char *name)
+static void register_submodule_ref_store(struct ref_store *refs,
+					 const char *submodule)
 {
-	if (!map->tablesize)
-		hashmap_init(map, ref_store_hash_cmp, 0);
+	if (!submodule_ref_stores.tablesize)
+		hashmap_init(&submodule_ref_stores, submodule_hash_cmp, 0);
 
-	if (hashmap_put(map, alloc_ref_store_hash_entry(name, refs)))
-		die("BUG: %s ref_store '%s' initialized twice", type, name);
+	if (hashmap_put(&submodule_ref_stores,
+			alloc_submodule_hash_entry(submodule, refs)))
+		die("BUG: ref_store for submodule '%s' initialized twice",
+		    submodule);
 }
 
 struct ref_store *get_submodule_ref_store(const char *submodule)
 {
 	struct strbuf submodule_sb = STRBUF_INIT;
 	struct ref_store *refs;
-	char *to_free = NULL;
 	int ret;
-	size_t len;
-
-	if (submodule) {
-		len = strlen(submodule);
-		while (len && submodule[len - 1] == '/')
-			len--;
-		if (!len)
-			submodule = NULL;
-	}
 
 	if (!submodule || !*submodule) {
 		/*
@@ -1556,59 +1592,28 @@ struct ref_store *get_submodule_ref_store(const char *submodule)
 		return get_main_ref_store();
 	}
 
-	if (submodule[len])
-		/* We need to strip off one or more trailing slashes */
-		submodule = to_free = xmemdupz(submodule, len);
-
-	refs = lookup_ref_store_map(&submodule_ref_stores, submodule);
+	refs = lookup_submodule_ref_store(submodule);
 	if (refs)
-		goto done;
+		return refs;
 
 	strbuf_addstr(&submodule_sb, submodule);
 	ret = is_nonbare_repository_dir(&submodule_sb);
+	strbuf_release(&submodule_sb);
 	if (!ret)
-		goto done;
+		return NULL;
 
 	ret = submodule_to_gitdir(&submodule_sb, submodule);
-	if (ret)
-		goto done;
+	if (ret) {
+		strbuf_release(&submodule_sb);
+		return NULL;
+	}
 
 	/* assume that add_submodule_odb() has been called */
 	refs = ref_store_init(submodule_sb.buf,
 			      REF_STORE_READ | REF_STORE_ODB);
-	register_ref_store_map(&submodule_ref_stores, "submodule",
-			       refs, submodule);
+	register_submodule_ref_store(refs, submodule);
 
-done:
 	strbuf_release(&submodule_sb);
-	free(to_free);
-
-	return refs;
-}
-
-struct ref_store *get_worktree_ref_store(const struct worktree *wt)
-{
-	struct ref_store *refs;
-	const char *id;
-
-	if (wt->is_current)
-		return get_main_ref_store();
-
-	id = wt->id ? wt->id : "/";
-	refs = lookup_ref_store_map(&worktree_ref_stores, id);
-	if (refs)
-		return refs;
-
-	if (wt->id)
-		refs = ref_store_init(git_common_path("worktrees/%s", wt->id),
-				      REF_STORE_ALL_CAPS);
-	else
-		refs = ref_store_init(get_git_common_dir(),
-				      REF_STORE_ALL_CAPS);
-
-	if (refs)
-		register_ref_store_map(&worktree_ref_stores, "worktree",
-				       refs, id);
 	return refs;
 }
 
@@ -1885,26 +1890,4 @@ int refs_rename_ref(struct ref_store *refs, const char *oldref,
 int rename_ref(const char *oldref, const char *newref, const char *logmsg)
 {
 	return refs_rename_ref(get_main_ref_store(), oldref, newref, logmsg);
-}
-
-int other_head_refs(each_ref_fn fn, void *cb_data)
-{
-	struct worktree **worktrees, **p;
-	int ret = 0;
-
-	worktrees = get_worktrees(0);
-	for (p = worktrees; *p; p++) {
-		struct worktree *wt = *p;
-		struct ref_store *refs;
-
-		if (wt->is_current)
-			continue;
-
-		refs = get_worktree_ref_store(wt);
-		ret = refs_head_ref(refs, fn, cb_data);
-		if (ret)
-			break;
-	}
-	free_worktrees(worktrees);
-	return ret;
 }

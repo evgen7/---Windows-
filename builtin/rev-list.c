@@ -80,7 +80,7 @@ static void show_commit(struct commit *commit, void *data)
 	}
 
 	if (info->show_timestamp)
-		printf("%"PRItime" ", commit->date);
+		printf("%lu ", commit->date);
 	if (info->header_prefix)
 		fputs(info->header_prefix, stdout);
 
@@ -181,7 +181,7 @@ static void finish_object(struct object *obj, const char *name, void *cb_data)
 	if (obj->type == OBJ_BLOB && !has_object_file(&obj->oid))
 		die("missing blob object '%s'", oid_to_hex(&obj->oid));
 	if (info->revs->verify_objects && !obj->parsed && obj->type != OBJ_COMMIT)
-		parse_object(&obj->oid);
+		parse_object(obj->oid.hash);
 }
 
 static void show_object(struct object *obj, const char *name, void *cb_data)
@@ -388,8 +388,7 @@ int cmd_rev_list(int argc, const char **argv, const char *prefix)
 		mark_edges_uninteresting(&revs, show_edge);
 
 	if (bisect_list) {
-		FAKE_INIT(int, reaches, 0);
-		FAKE_INIT(int, all, 0);
+		int reaches = reaches, all = all;
 
 		revs.commits = find_bisection(revs.commits, &reaches, &all,
 					      bisect_find_all);

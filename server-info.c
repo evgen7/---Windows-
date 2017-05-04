@@ -53,7 +53,7 @@ static int add_info_ref(const char *path, const struct object_id *oid,
 			int flag, void *cb_data)
 {
 	FILE *fp = cb_data;
-	struct object *o = parse_object(oid);
+	struct object *o = parse_object(oid->hash);
 	if (!o)
 		return -1;
 
@@ -134,11 +134,8 @@ static int read_pack_info_file(const char *infofile)
 	int old_cnt = 0;
 
 	fp = fopen(infofile, "r");
-	if (!fp) {
-		if (errno != ENOENT)
-			warn_on_inaccessible(infofile);
+	if (!fp)
 		return 1; /* nonexistent is not an error. */
-	}
 
 	while (fgets(line, sizeof(line), fp)) {
 		int len = strlen(line);

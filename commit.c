@@ -18,38 +18,38 @@ int save_commit_buffer = 1;
 
 const char *commit_type = "commit";
 
-struct commit *lookup_commit_reference_gently(const struct object_id *oid,
+struct commit *lookup_commit_reference_gently(const unsigned char *sha1,
 					      int quiet)
 {
-	struct object *obj = deref_tag(parse_object(oid), NULL, 0);
+	struct object *obj = deref_tag(parse_object(sha1), NULL, 0);
 
 	if (!obj)
 		return NULL;
 	return object_as_type(obj, OBJ_COMMIT, quiet);
 }
 
-struct commit *lookup_commit_reference(const struct object_id *oid)
+struct commit *lookup_commit_reference(const unsigned char *sha1)
 {
-	return lookup_commit_reference_gently(oid, 0);
+	return lookup_commit_reference_gently(sha1, 0);
 }
 
-struct commit *lookup_commit_or_die(const struct object_id *oid, const char *ref_name)
+struct commit *lookup_commit_or_die(const unsigned char *sha1, const char *ref_name)
 {
-	struct commit *c = lookup_commit_reference(oid);
+	struct commit *c = lookup_commit_reference(sha1);
 	if (!c)
 		die(_("could not parse %s"), ref_name);
-	if (oidcmp(oid, &c->object.oid)) {
+	if (hashcmp(sha1, c->object.oid.hash)) {
 		warning(_("%s %s is not a commit!"),
-			ref_name, oid_to_hex(oid));
+			ref_name, sha1_to_hex(sha1));
 	}
 	return c;
 }
 
-struct commit *lookup_commit(const struct object_id *oid)
+struct commit *lookup_commit(const unsigned char *sha1)
 {
-	struct object *obj = lookup_object(oid->hash);
+	struct object *obj = lookup_object(sha1);
 	if (!obj)
-		return create_object(oid->hash, alloc_commit_node());
+		return create_object(sha1, alloc_commit_node());
 	return object_as_type(obj, OBJ_COMMIT, 0);
 }
 
@@ -60,13 +60,13 @@ struct commit *lookup_commit_reference_by_name(const char *name)
 
 	if (get_sha1_committish(name, oid.hash))
 		return NULL;
-	commit = lookup_commit_reference(&oid);
+	commit = lookup_commit_reference(oid.hash);
 	if (parse_commit(commit))
 		return NULL;
 	return commit;
 }
 
-static timestamp_t parse_commit_date(const char *buf, const char *tail)
+static unsigned long parse_commit_date(const char *buf, const char *tail)
 {
 	const char *dateptr;
 
@@ -89,8 +89,8 @@ static timestamp_t parse_commit_date(const char *buf, const char *tail)
 		/* nada */;
 	if (buf >= tail)
 		return 0;
-	/* dateptr < buf && buf[-1] == '\n', so parsing will stop at buf-1 */
-	return parse_timestamp(dateptr, NULL, 10);
+	/* dateptr < buf && buf[-1] == '\n', so strtoul will stop at buf-1 */
+	return strtoul(dateptr, NULL, 10);
 }
 
 static struct commit_graft **commit_graft;
@@ -169,11 +169,8 @@ static int read_graft_file(const char *graft_file)
 {
 	FILE *fp = fopen(graft_file, "r");
 	struct strbuf buf = STRBUF_INIT;
-	if (!fp) {
-		if (errno != ENOENT)
-			warn_on_inaccessible(graft_file);
+	if (!fp)
 		return -1;
-	}
 	while (!strbuf_getwholeline(&buf, fp, '\n')) {
 		/* The format is just "Commit Parent1 Parent2 ...\n" */
 		struct commit_graft *graft = read_graft_line(buf.buf, buf.len);
@@ -219,9 +216,9 @@ int for_each_commit_graft(each_commit_graft_fn fn, void *cb_data)
 	return ret;
 }
 
-int unregister_shallow(const struct object_id *oid)
+int unregister_shallow(const unsigned char *sha1)
 {
-	int pos = commit_graft_pos(oid->hash);
+	int pos = commit_graft_pos(sha1);
 	if (pos < 0)
 		return -1;
 	if (pos + 1 < commit_graft_nr)
@@ -334,7 +331,7 @@ int parse_commit_buffer(struct commit *item, const void *buffer, unsigned long s
 	if (get_sha1_hex(bufptr + 5, parent.hash) < 0)
 		return error("bad tree pointer in commit %s",
 			     oid_to_hex(&item->object.oid));
-	item->tree = lookup_tree(&parent);
+	item->tree = lookup_tree(parent.hash);
 	bufptr += tree_entry_len + 1; /* "tree " + "hex sha1" + "\n" */
 	pptr = &item->parents;
 
@@ -353,7 +350,7 @@ int parse_commit_buffer(struct commit *item, const void *buffer, unsigned long s
 		 */
 		if (graft && (graft->nr_parent < 0 || grafts_replace_parents))
 			continue;
-		new_parent = lookup_commit(&parent);
+		new_parent = lookup_commit(parent.hash);
 		if (new_parent)
 			pptr = &commit_list_insert(new_parent, pptr)->next;
 	}
@@ -361,7 +358,7 @@ int parse_commit_buffer(struct commit *item, const void *buffer, unsigned long s
 		int i;
 		struct commit *new_parent;
 		for (i = 0; i < graft->nr_parent; i++) {
-			new_parent = lookup_commit(&graft->parent[i]);
+			new_parent = lookup_commit(graft->parent[i].hash);
 			if (!new_parent)
 				continue;
 			pptr = &commit_list_insert(new_parent, pptr)->next;
@@ -476,8 +473,8 @@ struct commit_list * commit_list_insert_by_date(struct commit *item, struct comm
 
 static int commit_list_compare_by_date(const void *a, const void *b)
 {
-	timestamp_t a_date = ((const struct commit_list *)a)->item->date;
-	timestamp_t b_date = ((const struct commit_list *)b)->item->date;
+	unsigned long a_date = ((const struct commit_list *)a)->item->date;
+	unsigned long b_date = ((const struct commit_list *)b)->item->date;
 	if (a_date < b_date)
 		return 1;
 	if (a_date > b_date)
@@ -565,7 +562,7 @@ void clear_commit_marks_for_object_array(struct object_array *a, unsigned mark)
 
 	for (i = 0; i < a->nr; i++) {
 		object = a->objects[i].item;
-		commit = lookup_commit_reference_gently(&object->oid, 1);
+		commit = lookup_commit_reference_gently(object->oid.hash, 1);
 		if (commit)
 			clear_commit_marks(commit, mark);
 	}
@@ -601,7 +598,7 @@ static void record_author_date(struct author_date_slab *author_date,
 	const char *ident_line;
 	size_t ident_len;
 	char *date_end;
-	timestamp_t date;
+	unsigned long date;
 
 	ident_line = find_commit_header(buffer, "author", &ident_len);
 	if (!ident_line)
@@ -610,7 +607,7 @@ static void record_author_date(struct author_date_slab *author_date,
 	    !ident.date_begin || !ident.date_end)
 		goto fail_exit; /* malformed "author" line */
 
-	date = parse_timestamp(ident.date_begin, &date_end, 10);
+	date = strtoul(ident.date_begin, &date_end, 10);
 	if (date_end != ident.date_end)
 		goto fail_exit; /* malformed date */
 	*(author_date_slab_at(author_date, commit)) = date;
@@ -624,8 +621,8 @@ static int compare_commits_by_author_date(const void *a_, const void *b_,
 {
 	const struct commit *a = a_, *b = b_;
 	struct author_date_slab *author_date = cb_data;
-	timestamp_t a_date = *(author_date_slab_at(author_date, a));
-	timestamp_t b_date = *(author_date_slab_at(author_date, b));
+	unsigned long a_date = *(author_date_slab_at(author_date, a));
+	unsigned long b_date = *(author_date_slab_at(author_date, b));
 
 	/* newer commits with larger date first */
 	if (a_date < b_date)
@@ -1592,7 +1589,7 @@ struct commit *get_merge_parent(const char *name)
 	struct object_id oid;
 	if (get_sha1(name, oid.hash))
 		return NULL;
-	obj = parse_object(&oid);
+	obj = parse_object(oid.hash);
 	commit = (struct commit *)peel_to_type(name, 0, obj, OBJ_COMMIT);
 	if (commit && !commit->util)
 		set_merge_remote_desc(commit, name, obj);

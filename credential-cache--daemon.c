@@ -8,7 +8,7 @@ static struct tempfile socket_file;
 
 struct credential_cache_entry {
 	struct credential item;
-	timestamp_t expiration;
+	unsigned long expiration;
 };
 static struct credential_cache_entry *entries;
 static int entries_nr;
@@ -47,12 +47,12 @@ static void remove_credential(const struct credential *c)
 		e->expiration = 0;
 }
 
-static timestamp_t check_expirations(void)
+static int check_expirations(void)
 {
-	static timestamp_t wait_for_entry_until;
+	static unsigned long wait_for_entry_until;
 	int i = 0;
-	timestamp_t now = time(NULL);
-	timestamp_t next = TIME_MAX;
+	unsigned long now = time(NULL);
+	unsigned long next = (unsigned long)-1;
 
 	/*
 	 * Initially give the client 30 seconds to actually contact us
@@ -159,7 +159,7 @@ static void serve_one_client(FILE *in, FILE *out)
 static int serve_cache_loop(int fd)
 {
 	struct pollfd pfd;
-	timestamp_t wakeup;
+	unsigned long wakeup;
 
 	wakeup = check_expirations();
 	if (!wakeup)

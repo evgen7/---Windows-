@@ -15,8 +15,6 @@ COMMIT=$2
 gfwci () {
 	local CURL_ERROR_CODE HTTP_CODE
 	exec 3>&1
-	while test -z $HTTP_CODE
-	do
 	HTTP_CODE=$(curl \
 		-H "Authentication: Bearer $GFW_CI_TOKEN" \
 		--silent --retry 5 --write-out '%{HTTP_CODE}' \
@@ -24,16 +22,6 @@ gfwci () {
 		"https://git-for-windows-ci.azurewebsites.net/api/TestNow?$1" \
 	)
 	CURL_ERROR_CODE=$?
-		# The GfW CI web app sometimes returns HTTP errors of
-		# "502 bad gateway" or "503 service unavailable".
-		# Wait a little and retry if it happens. More info:
-		# https://docs.microsoft.com/en-in/azure/app-service-web/app-service-web-troubleshoot-http-502-http-503
-		if test $HTTP_CODE -eq 502 || test $HTTP_CODE -eq 503
-		then
-			sleep 10
-			HTTP_CODE=
-		fi
-	done
 	if test $CURL_ERROR_CODE -ne 0
 	then
 		return $CURL_ERROR_CODE
@@ -73,8 +61,7 @@ do
 	case "$STATUS" in
 	inProgress|postponed|notStarted) sleep 10               ;; # continue
 		 "completed: succeeded") RESULT="success"; break;; # success
-		    "completed: failed")                   break;; # failure
-	*) echo "Unhandled status: $STATUS";               break;; # unknown
+	*) echo "Unhandled status: $STATUS";               break;; # failure
 	esac
 done
 

@@ -14,7 +14,7 @@ static uint32_t locate_object_entry_hash(struct packing_data *pdata,
 	while (pdata->index[i] > 0) {
 		uint32_t pos = pdata->index[i] - 1;
 
-		if (!hashcmp(sha1, pdata->objects[pos].idx.oid.hash)) {
+		if (!hashcmp(sha1, pdata->objects[pos].idx.sha1)) {
 			*found = 1;
 			return i;
 		}
@@ -53,9 +53,7 @@ static void rehash_objects(struct packing_data *pdata)
 
 	for (i = 0; i < pdata->nr_objects; i++) {
 		int found;
-		uint32_t ix = locate_object_entry_hash(pdata,
-						       entry->idx.oid.hash,
-						       &found);
+		uint32_t ix = locate_object_entry_hash(pdata, entry->idx.sha1, &found);
 
 		if (found)
 			die("BUG: Duplicate object in hash");
@@ -100,7 +98,7 @@ struct object_entry *packlist_alloc(struct packing_data *pdata,
 	new_entry = pdata->objects + pdata->nr_objects++;
 
 	memset(new_entry, 0, sizeof(*new_entry));
-	hashcpy(new_entry->idx.oid.hash, sha1);
+	hashcpy(new_entry->idx.sha1, sha1);
 
 	if (pdata->index_size * 3 <= pdata->nr_objects * 4)
 		rehash_objects(pdata);

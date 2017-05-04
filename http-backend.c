@@ -90,7 +90,7 @@ static void hdr_int(struct strbuf *hdr, const char *name, uintmax_t value)
 	strbuf_addf(hdr, "%s: %" PRIuMAX "\r\n", name, value);
 }
 
-static void hdr_date(struct strbuf *hdr, const char *name, timestamp_t when)
+static void hdr_date(struct strbuf *hdr, const char *name, unsigned long when)
 {
 	const char *value = show_date(when, 0, DATE_MODE(RFC2822));
 	hdr_str(hdr, name, value);
@@ -105,7 +105,7 @@ static void hdr_nocache(struct strbuf *hdr)
 
 static void hdr_cache_forever(struct strbuf *hdr)
 {
-	timestamp_t now = time(NULL);
+	unsigned long now = time(NULL);
 	hdr_date(hdr, "Date", now);
 	hdr_date(hdr, "Expires", now + 31536000);
 	hdr_str(hdr, "Cache-Control", "public, max-age=31536000");
@@ -431,7 +431,7 @@ static int show_text_ref(const char *name, const struct object_id *oid,
 {
 	const char *name_nons = strip_namespace(name);
 	struct strbuf *buf = cb_data;
-	struct object *o = parse_object(oid);
+	struct object *o = parse_object(oid->hash);
 	if (!o)
 		return 0;
 
@@ -681,10 +681,8 @@ int cmd_main(int argc, const char **argv)
 		if (!regexec(&re, dir, 1, out, 0)) {
 			size_t n;
 
-			if (strcmp(method, c->method)) {
-				free(dir);
+			if (strcmp(method, c->method))
 				return bad_request(&hdr, c);
-			}
 
 			cmd = c;
 			n = out[0].rm_eo - out[0].rm_so;
@@ -710,7 +708,5 @@ int cmd_main(int argc, const char **argv)
 					   max_request_buffer);
 
 	cmd->imp(&hdr, cmd_arg);
-	free(dir);
-	free(cmd_arg);
 	return 0;
 }

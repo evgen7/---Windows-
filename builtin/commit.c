@@ -313,7 +313,7 @@ static void create_base_index(const struct commit *current_head)
 	opts.dst_index = &the_index;
 
 	opts.fn = oneway_merge;
-	tree = parse_tree_indirect(&current_head->object.oid);
+	tree = parse_tree_indirect(current_head->object.oid.hash);
 	if (!tree)
 		die(_("failed to unpack HEAD tree object"));
 	parse_tree(tree);
@@ -1105,10 +1105,8 @@ static const char *read_commit_message(const char *name)
 static struct status_deferred_config {
 	enum wt_status_format status_format;
 	int show_branch;
-	int show_inprogress;
 } status_deferred_config = {
 	STATUS_FORMAT_UNSPECIFIED,
-	-1, /* unspecified */
 	-1 /* unspecified */
 };
 
@@ -1135,10 +1133,6 @@ static void finalize_deferred_config(struct wt_status *s)
 		s->show_branch = status_deferred_config.show_branch;
 	if (s->show_branch < 0)
 		s->show_branch = 0;
-	if (use_deferred_config && s->show_inprogress < 0)
-		s->show_inprogress = status_deferred_config.show_inprogress;
-	if (s->show_inprogress < 0)
-		s->show_inprogress = 0;
 }
 
 static int parse_and_validate_options(int argc, const char *argv[],
@@ -1269,10 +1263,6 @@ static int parse_status_slot(const char *slot)
 		return WT_STATUS_NOBRANCH;
 	if (!strcasecmp(slot, "unmerged"))
 		return WT_STATUS_UNMERGED;
-	if (!strcasecmp(slot, "localBranch"))
-		return WT_STATUS_LOCAL_BRANCH;
-	if (!strcasecmp(slot, "remoteBranch"))
-		return WT_STATUS_REMOTE_BRANCH;
 	return -1;
 }
 
@@ -1299,10 +1289,6 @@ static int git_status_config(const char *k, const char *v, void *cb)
 	}
 	if (!strcmp(k, "status.branch")) {
 		status_deferred_config.show_branch = git_config_bool(k, v);
-		return 0;
-	}
-	if (!strcmp(k, "status.inprogress")) {
-		status_deferred_config.show_inprogress = git_config_bool(k, v);
 		return 0;
 	}
 	if (!strcmp(k, "status.color") || !strcmp(k, "color.status")) {
@@ -1344,7 +1330,6 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
-	static int no_lock_index = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1354,8 +1339,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 			    N_("show status concisely"), STATUS_FORMAT_SHORT),
 		OPT_BOOL('b', "branch", &s.show_branch,
 			 N_("show branch information")),
-		OPT_BOOL('p', "inprogress", &s.show_inprogress,
-			 N_("show in-progress information")),
 		{ OPTION_CALLBACK, 0, "porcelain", &status_format,
 		  N_("version"), N_("machine-readable output"),
 		  PARSE_OPT_OPTARG, opt_parse_porcelain },
@@ -1374,8 +1357,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
-		OPT_BOOL(0, "no-lock-index", &no_lock_index,
-			 N_("do not lock the index")),
 		OPT_END(),
 	};
 
@@ -1389,11 +1370,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
 
-	if (no_lock_index)
-		setenv("GIT_LOCK_INDEX", "false", 1);
-	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
-		no_lock_index = 1;
-
 	handle_untracked_files_arg(&s);
 	if (show_ignored_in_status)
 		s.show_ignored_files = 1;
@@ -1401,11 +1377,10 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
-	enable_fscache(1);
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
-	fd = no_lock_index ? -1 : hold_locked_index(&index_lock, 0);
+	fd = hold_locked_index(&index_lock, 0);
 
 	s.is_initial = get_sha1(s.reference, oid.hash) ? 1 : 0;
 	if (!s.is_initial)
@@ -1455,7 +1430,7 @@ static void print_summary(const char *prefix, const struct object_id *oid,
 	struct strbuf author_ident = STRBUF_INIT;
 	struct strbuf committer_ident = STRBUF_INIT;
 
-	commit = lookup_commit(oid);
+	commit = lookup_commit(oid->hash);
 	if (!commit)
 		die(_("couldn't look up newly created commit"));
 	if (parse_commit(commit))
@@ -1637,7 +1612,6 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		OPT_SET_INT(0, "short", &status_format, N_("show status concisely"),
 			    STATUS_FORMAT_SHORT),
 		OPT_BOOL(0, "branch", &s.show_branch, N_("show branch information")),
-		OPT_BOOL(0, "inprogress", &s.show_inprogress, N_("show in-progress information")),
 		OPT_SET_INT(0, "porcelain", &status_format,
 			    N_("machine-readable output"), STATUS_FORMAT_PORCELAIN),
 		OPT_SET_INT(0, "long", &status_format,
@@ -1680,7 +1654,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	if (get_sha1("HEAD", oid.hash))
 		current_head = NULL;
 	else {
-		current_head = lookup_commit_or_die(&oid, "HEAD");
+		current_head = lookup_commit_or_die(oid.hash, "HEAD");
 		if (parse_commit(current_head))
 			die(_("could not parse HEAD commit"));
 	}
@@ -1784,7 +1758,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		append_merge_tag_headers(parents, &tail);
 	}
 
-	if (commit_tree_extended(sb.buf, sb.len, active_cache_tree->oid.hash,
+	if (commit_tree_extended(sb.buf, sb.len, active_cache_tree->sha1,
 			 parents, oid.hash, author_ident.buf, sign_commit, extra)) {
 		rollback_index_files();
 		die(_("failed to write commit object"));

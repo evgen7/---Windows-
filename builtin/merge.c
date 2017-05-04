@@ -605,13 +605,13 @@ static int read_tree_trivial(struct object_id *common, struct object_id *head,
 	opts.verbose_update = 1;
 	opts.trivial_merges_only = 1;
 	opts.merge = 1;
-	trees[nr_trees] = parse_tree_indirect(common);
+	trees[nr_trees] = parse_tree_indirect(common->hash);
 	if (!trees[nr_trees++])
 		return -1;
-	trees[nr_trees] = parse_tree_indirect(head);
+	trees[nr_trees] = parse_tree_indirect(head->hash);
 	if (!trees[nr_trees++])
 		return -1;
-	trees[nr_trees] = parse_tree_indirect(one);
+	trees[nr_trees] = parse_tree_indirect(one->hash);
 	if (!trees[nr_trees++])
 		return -1;
 	opts.fn = threeway_merge;
@@ -1123,7 +1123,7 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 	if (!branch || is_null_oid(&head_oid))
 		head_commit = NULL;
 	else
-		head_commit = lookup_commit_or_die(&head_oid, "HEAD");
+		head_commit = lookup_commit_or_die(head_oid.hash, "HEAD");
 
 	init_diff_ui_defaults();
 	git_config(git_merge_config, NULL);
@@ -1372,8 +1372,8 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 			goto done;
 		}
 
-		if (checkout_fast_forward(&head_commit->object.oid,
-					  &commit->object.oid,
+		if (checkout_fast_forward(head_commit->object.oid.hash,
+					  commit->object.oid.hash,
 					  overwrite_ignore)) {
 			ret = 1;
 			goto done;

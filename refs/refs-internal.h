@@ -130,13 +130,13 @@ struct ref_update {
 	/*
 	 * If (flags & REF_HAVE_NEW), set the reference to this value:
 	 */
-	struct object_id new_oid;
+	unsigned char new_sha1[20];
 
 	/*
 	 * If (flags & REF_HAVE_OLD), check that the reference
 	 * previously had this value:
 	 */
-	struct object_id old_oid;
+	unsigned char old_sha1[20];
 
 	/*
 	 * One or more of REF_HAVE_NEW, REF_HAVE_OLD, REF_NODEREF,
@@ -482,10 +482,6 @@ struct ref_store;
 #define REF_STORE_WRITE		(1 << 1) /* can perform update operations */
 #define REF_STORE_ODB		(1 << 2) /* has access to object database */
 #define REF_STORE_MAIN		(1 << 3)
-#define REF_STORE_ALL_CAPS	(REF_STORE_READ | \
-				 REF_STORE_WRITE | \
-				 REF_STORE_ODB | \
-				 REF_STORE_MAIN)
 
 /*
  * Initialize the ref_store for the specified gitdir. These functions

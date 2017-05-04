@@ -535,7 +535,7 @@ int notes_merge(struct notes_merge_options *o,
 		struct notes_tree *local_tree,
 		unsigned char *result_sha1)
 {
-	struct object_id local_oid, remote_oid;
+	unsigned char local_sha1[20], remote_sha1[20];
 	struct commit *local, *remote;
 	struct commit_list *bases = NULL;
 	const unsigned char *base_sha1, *base_tree_sha1;
@@ -549,46 +549,46 @@ int notes_merge(struct notes_merge_options *o,
 	       o->local_ref, o->remote_ref);
 
 	/* Dereference o->local_ref into local_sha1 */
-	if (read_ref_full(o->local_ref, 0, local_oid.hash, NULL))
+	if (read_ref_full(o->local_ref, 0, local_sha1, NULL))
 		die("Failed to resolve local notes ref '%s'", o->local_ref);
 	else if (!check_refname_format(o->local_ref, 0) &&
-		is_null_oid(&local_oid))
+		is_null_sha1(local_sha1))
 		local = NULL; /* local_sha1 == null_sha1 indicates unborn ref */
-	else if (!(local = lookup_commit_reference(&local_oid)))
+	else if (!(local = lookup_commit_reference(local_sha1)))
 		die("Could not parse local commit %s (%s)",
-		    oid_to_hex(&local_oid), o->local_ref);
-	trace_printf("\tlocal commit: %.7s\n", oid_to_hex(&local_oid));
+		    sha1_to_hex(local_sha1), o->local_ref);
+	trace_printf("\tlocal commit: %.7s\n", sha1_to_hex(local_sha1));
 
 	/* Dereference o->remote_ref into remote_sha1 */
-	if (get_oid(o->remote_ref, &remote_oid)) {
+	if (get_sha1(o->remote_ref, remote_sha1)) {
 		/*
 		 * Failed to get remote_sha1. If o->remote_ref looks like an
 		 * unborn ref, perform the merge using an empty notes tree.
 		 */
 		if (!check_refname_format(o->remote_ref, 0)) {
-			oidclr(&remote_oid);
+			hashclr(remote_sha1);
 			remote = NULL;
 		} else {
 			die("Failed to resolve remote notes ref '%s'",
 			    o->remote_ref);
 		}
-	} else if (!(remote = lookup_commit_reference(&remote_oid))) {
+	} else if (!(remote = lookup_commit_reference(remote_sha1))) {
 		die("Could not parse remote commit %s (%s)",
-		    oid_to_hex(&remote_oid), o->remote_ref);
+		    sha1_to_hex(remote_sha1), o->remote_ref);
 	}
-	trace_printf("\tremote commit: %.7s\n", oid_to_hex(&remote_oid));
+	trace_printf("\tremote commit: %.7s\n", sha1_to_hex(remote_sha1));
 
 	if (!local && !remote)
 		die("Cannot merge empty notes ref (%s) into empty notes ref "
 		    "(%s)", o->remote_ref, o->local_ref);
 	if (!local) {
 		/* result == remote commit */
-		hashcpy(result_sha1, remote_oid.hash);
+		hashcpy(result_sha1, remote_sha1);
 		goto found_result;
 	}
 	if (!remote) {
 		/* result == local commit */
-		hashcpy(result_sha1, local_oid.hash);
+		hashcpy(result_sha1, local_sha1);
 		goto found_result;
 	}
 	assert(local && remote);

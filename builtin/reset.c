@@ -21,34 +21,10 @@
 #include "parse-options.h"
 #include "unpack-trees.h"
 #include "cache-tree.h"
-#include "submodule.h"
-#include "submodule-config.h"
-#include "strbuf.h"
-#include "quote.h"
-
-static int recurse_submodules = RECURSE_SUBMODULES_DEFAULT;
-
-static int option_parse_recurse_submodules(const struct option *opt,
-					   const char *arg, int unset)
-{
-	if (unset) {
-		recurse_submodules = RECURSE_SUBMODULES_OFF;
-		return 0;
-	}
-	if (arg)
-		recurse_submodules =
-			parse_update_recurse_submodules_arg(opt->long_name,
-							    arg);
-	else
-		recurse_submodules = RECURSE_SUBMODULES_ON;
-
-	return 0;
-}
 
 static const char * const git_reset_usage[] = {
 	N_("git reset [--mixed | --soft | --hard | --merge | --keep] [-q] [<commit>]"),
 	N_("git reset [-q] [<tree-ish>] [--] <paths>..."),
-	N_("EXPERIMENTAL: git reset [-q] [--stdin [-z]] [<tree-ish>]"),
 	N_("git reset --patch [<tree-ish>] [--] [<paths>...]"),
 	NULL
 };
@@ -108,7 +84,7 @@ static int reset_index(const struct object_id *oid, int reset_type, int quiet)
 		return -1;
 
 	if (reset_type == MIXED || reset_type == HARD) {
-		tree = parse_tree_indirect(oid);
+		tree = parse_tree_indirect(oid->hash);
 		prime_cache_tree(&the_index, tree);
 	}
 
@@ -178,7 +154,7 @@ static int read_from_tree(const struct pathspec *pathspec,
 	opt.format_callback = update_index_from_diff;
 	opt.format_callback_data = &intent_to_add;
 
-	if (do_diff_cache(tree_oid, &opt))
+	if (do_diff_cache(tree_oid->hash, &opt))
 		return 1;
 	diffcore_std(&opt);
 	diff_flush(&opt);
@@ -291,9 +267,7 @@ static int reset_refs(const char *rev, const struct object_id *oid)
 int cmd_reset(int argc, const char **argv, const char *prefix)
 {
 	int reset_type = NONE, update_ref_status = 0, quiet = 0;
-	int patch_mode = 0, nul_term_line = 0, read_from_stdin = 0, unborn;
-	char **stdin_paths = NULL;
-	int stdin_nr = 0, stdin_alloc = 0;
+	int patch_mode = 0, unborn;
 	const char *rev;
 	struct object_id oid;
 	struct pathspec pathspec;
@@ -309,16 +283,9 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 				N_("reset HEAD, index and working tree"), MERGE),
 		OPT_SET_INT(0, "keep", &reset_type,
 				N_("reset HEAD but keep local changes"), KEEP),
-		{ OPTION_CALLBACK, 0, "recurse-submodules", &recurse_submodules,
-			    "reset", "control recursive updating of submodules",
-			    PARSE_OPT_OPTARG, option_parse_recurse_submodules },
 		OPT_BOOL('p', "patch", &patch_mode, N_("select hunks interactively")),
 		OPT_BOOL('N', "intent-to-add", &intent_to_add,
 				N_("record only the fact that removed paths will be added later")),
-		OPT_BOOL('z', NULL, &nul_term_line,
-			N_("EXPERIMENTAL: paths are separated with NUL character")),
-		OPT_BOOL(0, "stdin", &read_from_stdin,
-				N_("EXPERIMENTAL: read paths from <stdin>")),
 		OPT_END()
 	};
 
@@ -328,49 +295,6 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 						PARSE_OPT_KEEP_DASHDASH);
 	parse_args(&pathspec, argv, prefix, patch_mode, &rev);
 
-	if (recurse_submodules != RECURSE_SUBMODULES_DEFAULT) {
-		gitmodules_config();
-		git_config(submodule_config, NULL);
-		set_config_update_recurse_submodules(RECURSE_SUBMODULES_ON);
-	}
-
-	if (read_from_stdin) {
-		strbuf_getline_fn getline_fn = nul_term_line ?
-			strbuf_getline_nul : strbuf_getline_lf;
-		int flags = PATHSPEC_PREFER_FULL |
-			PATHSPEC_STRIP_SUBMODULE_SLASH_CHEAP;
-		struct strbuf buf = STRBUF_INIT;
-		struct strbuf unquoted = STRBUF_INIT;
-
-		if (patch_mode)
-			die(_("--stdin is incompatible with --patch"));
-
-		if (pathspec.nr)
-			die(_("--stdin is incompatible with path arguments"));
-
-		while (getline_fn(&buf, stdin) != EOF) {
-			if (!nul_term_line && buf.buf[0] == '"') {
-				strbuf_reset(&unquoted);
-				if (unquote_c_style(&unquoted, buf.buf, NULL))
-					die(_("line is badly quoted"));
-				strbuf_swap(&buf, &unquoted);
-			}
-			ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
-			stdin_paths[stdin_nr++] = xstrdup(buf.buf);
-			strbuf_reset(&buf);
-		}
-		strbuf_release(&unquoted);
-		strbuf_release(&buf);
-
-		ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
-		stdin_paths[stdin_nr++] = NULL;
-		flags |= PATHSPEC_LITERAL_PATH;
-		parse_pathspec(&pathspec, 0, flags, prefix,
-			       (const char **)stdin_paths);
-
-	} else if (nul_term_line)
-		die(_("-z requires --stdin"));
-
 	unborn = !strcmp(rev, "HEAD") && get_sha1("HEAD", oid.hash);
 	if (unborn) {
 		/* reset on unborn branch: treat as reset to empty tree */
@@ -379,7 +303,7 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		struct commit *commit;
 		if (get_sha1_committish(rev, oid.hash))
 			die(_("Failed to resolve '%s' as a valid revision."), rev);
-		commit = lookup_commit_reference(&oid);
+		commit = lookup_commit_reference(oid.hash);
 		if (!commit)
 			die(_("Could not parse object '%s'."), rev);
 		oidcpy(&oid, &commit->object.oid);
@@ -387,7 +311,7 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		struct tree *tree;
 		if (get_sha1_treeish(rev, oid.hash))
 			die(_("Failed to resolve '%s' as a valid tree."), rev);
-		tree = parse_tree_indirect(&oid);
+		tree = parse_tree_indirect(oid.hash);
 		if (!tree)
 			die(_("Could not parse object '%s'."), rev);
 		oidcpy(&oid, &tree->object.oid);
@@ -456,16 +380,10 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		update_ref_status = reset_refs(rev, &oid);
 
 		if (reset_type == HARD && !update_ref_status && !quiet)
-			print_new_head_line(lookup_commit_reference(&oid));
+			print_new_head_line(lookup_commit_reference(oid.hash));
 	}
 	if (!pathspec.nr)
 		remove_branch_state();
-
-	if (stdin_paths) {
-		while (stdin_nr)
-			free(stdin_paths[--stdin_nr]);
-		free(stdin_paths);
-	}
 
 	return update_ref_status;
 }

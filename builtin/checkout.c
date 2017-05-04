@@ -56,7 +56,6 @@ struct checkout_opts {
 	int overwrite_ignore;
 	int ignore_skipworktree;
 	int ignore_other_worktrees;
-	int no_index;
 	int show_progress;
 
 	const char *new_branch;
@@ -236,14 +235,14 @@ static int checkout_merged(int pos, const struct checkout *state)
 	/*
 	 * NEEDSWORK:
 	 * There is absolutely no reason to write this as a blob object
-	 * and create a phony cache entry.  This hack is primarily to get
-	 * to the write_entry() machinery that massages the contents to
-	 * work-tree format and writes out which only allows it for a
-	 * cache entry.  The code in write_entry() needs to be refactored
-	 * to allow us to feed a <buffer, size, mode> instead of a cache
-	 * entry.  Such a refactoring would help merge_recursive as well
-	 * (it also writes the merge result to the object database even
-	 * when it may contain conflicts).
+	 * and create a phony cache entry just to leak.  This hack is
+	 * primarily to get to the write_entry() machinery that massages
+	 * the contents to work-tree format and writes out which only
+	 * allows it for a cache entry.  The code in write_entry() needs
+	 * to be refactored to allow us to feed a <buffer, size, mode>
+	 * instead of a cache entry.  Such a refactoring would help
+	 * merge_recursive as well (it also writes the merge result to the
+	 * object database even when it may contain conflicts).
 	 */
 	if (write_sha1_file(result_buf.ptr, result_buf.size,
 			    blob_type, oid.hash))
@@ -252,7 +251,6 @@ static int checkout_merged(int pos, const struct checkout *state)
 	if (!ce)
 		die(_("make_cache_entry failed for path '%s'"), path);
 	status = checkout_entry(ce, state, NULL);
-	free(ce);
 	return status;
 }
 
@@ -288,9 +286,6 @@ static int checkout_paths(const struct checkout_opts *opts,
 	if (opts->new_branch)
 		die(_("Cannot update paths and switch to branch '%s' at the same time."),
 		    opts->new_branch);
-
-	if (opts->no_index && !opts->source_tree)
-		die(_("'--working-tree-only' requires a tree-ish"));
 
 	if (opts->patch_mode)
 		return run_add_interactive(revision, "--patch=checkout",
@@ -393,15 +388,12 @@ static int checkout_paths(const struct checkout_opts *opts,
 			pos = skip_same_name(ce, pos) - 1;
 		}
 	}
-	errs |= checkout_delayed_entries(&state);
 
-	if (opts->no_index)
-		; /* discard the in-core index */
-	else if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
+	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));
 
 	read_ref_full("HEAD", 0, rev.hash, NULL);
-	head = lookup_commit_reference_gently(&rev, 1);
+	head = lookup_commit_reference_gently(rev.hash, 1);
 
 	errs |= post_checkout_hook(head, head, 0);
 	return errs;
@@ -535,10 +527,10 @@ static int merge_working_tree(const struct checkout_opts *opts,
 			setup_standard_excludes(topts.dir);
 		}
 		tree = parse_tree_indirect(old->commit ?
-					   &old->commit->object.oid :
-					   &empty_tree_oid);
+					   old->commit->object.oid.hash :
+					   EMPTY_TREE_SHA1_BIN);
 		init_tree_desc(&trees[0], tree->buffer, tree->size);
-		tree = parse_tree_indirect(&new->commit->object.oid);
+		tree = parse_tree_indirect(new->commit->object.oid.hash);
 		init_tree_desc(&trees[1], tree->buffer, tree->size);
 
 		ret = unpack_trees(2, trees, &topts);
@@ -729,7 +721,7 @@ static int add_pending_uninteresting_ref(const char *refname,
 					 const struct object_id *oid,
 					 int flags, void *cb_data)
 {
-	add_pending_oid(cb_data, refname, oid, UNINTERESTING);
+	add_pending_sha1(cb_data, refname, oid->hash, UNINTERESTING);
 	return 0;
 }
 
@@ -815,7 +807,7 @@ static void orphaned_commit_warning(struct commit *old, struct commit *new)
 	add_pending_object(&revs, object, oid_to_hex(&object->oid));
 
 	for_each_ref(add_pending_uninteresting_ref, &revs);
-	add_pending_oid(&revs, "HEAD", &new->object.oid, UNINTERESTING);
+	add_pending_sha1(&revs, "HEAD", new->object.oid.hash, UNINTERESTING);
 
 	refs = revs.pending;
 	revs.leak_pending = 1;
@@ -841,7 +833,7 @@ static int switch_branches(const struct checkout_opts *opts,
 	int flag, writeout_error = 0;
 	memset(&old, 0, sizeof(old));
 	old.path = path_to_free = resolve_refdup("HEAD", 0, rev.hash, &flag);
-	old.commit = lookup_commit_reference_gently(&rev, 1);
+	old.commit = lookup_commit_reference_gently(rev.hash, 1);
 	if (!(flag & REF_ISSYMREF))
 		old.path = NULL;
 
@@ -1055,10 +1047,10 @@ static int parse_branchname_arg(int argc, const char **argv,
 	else
 		new->path = NULL; /* not an existing branch */
 
-	new->commit = lookup_commit_reference_gently(rev, 1);
+	new->commit = lookup_commit_reference_gently(rev->hash, 1);
 	if (!new->commit) {
 		/* not a commit */
-		*source_tree = parse_tree_indirect(rev);
+		*source_tree = parse_tree_indirect(rev->hash);
 	} else {
 		parse_commit_or_die(new->commit);
 		*source_tree = new->commit->tree;
@@ -1193,7 +1185,6 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 			    "checkout", "control recursive updating of submodules",
 			    PARSE_OPT_OPTARG, option_parse_recurse_submodules },
 		OPT_BOOL(0, "progress", &opts.show_progress, N_("force progress reporting")),
-		OPT_BOOL(0, "working-tree-only", &opts.no_index, N_("checkout to working tree only without touching the index")),
 		OPT_END(),
 	};
 

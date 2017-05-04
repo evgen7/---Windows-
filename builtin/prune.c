@@ -13,7 +13,7 @@ static const char * const prune_usage[] = {
 };
 static int show_only;
 static int verbose;
-static timestamp_t expire;
+static unsigned long expire;
 static int show_progress = -1;
 
 static int prune_tmp_file(const char *fullpath)
@@ -111,7 +111,7 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 	};
 	char *s;
 
-	expire = TIME_MAX;
+	expire = ULONG_MAX;
 	save_commit_buffer = 0;
 	check_replace_refs = 0;
 	ref_paranoia = 1;
@@ -123,12 +123,11 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 		die(_("cannot prune in a precious-objects repo"));
 
 	while (argc--) {
-		struct object_id oid;
+		unsigned char sha1[20];
 		const char *name = *argv++;
 
-		if (!get_oid(name, &oid)) {
-			struct object *object = parse_object_or_die(&oid,
-								    name);
+		if (!get_sha1(name, sha1)) {
+			struct object *object = parse_object_or_die(sha1, name);
 			add_pending_object(&revs, object, "");
 		}
 		else

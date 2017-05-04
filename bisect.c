@@ -670,11 +670,8 @@ static int is_expected_rev(const struct object_id *oid)
 		return 0;
 
 	fp = fopen(filename, "r");
-	if (!fp) {
-		if (errno != ENOENT)
-			warn_on_inaccessible(filename);
+	if (!fp)
 		return 0;
-	}
 
 	if (strbuf_getline_lf(&str, fp) != EOF)
 		res = !strcmp(str.buf, oid_to_hex(oid));
@@ -708,7 +705,7 @@ static int bisect_checkout(const unsigned char *bisect_rev, int no_checkout)
 
 static struct commit *get_commit_reference(const struct object_id *oid)
 {
-	struct commit *r = lookup_commit_reference(oid);
+	struct commit *r = lookup_commit_reference(oid->hash);
 	if (!r)
 		die(_("Not a valid commit name %s"), oid_to_hex(oid));
 	return r;

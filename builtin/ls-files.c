@@ -414,14 +414,14 @@ static void prune_cache(const char *prefix, size_t prefixlen)
 void overlay_tree_on_cache(const char *tree_name, const char *prefix)
 {
 	struct tree *tree;
-	struct object_id oid;
+	unsigned char sha1[20];
 	struct pathspec pathspec;
 	struct cache_entry *last_stage0 = NULL;
 	int i;
 
-	if (get_oid(tree_name, &oid))
+	if (get_sha1(tree_name, sha1))
 		die("tree-ish %s not found.", tree_name);
-	tree = parse_tree_indirect(&oid);
+	tree = parse_tree_indirect(sha1);
 	if (!tree)
 		die("bad tree-ish %s", tree_name);
 

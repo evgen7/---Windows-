@@ -10,90 +10,38 @@
 #include "refs.h"
 #include "argv-array.h"
 
-static const char bundle_signature_v2[] = "# v2 git bundle\n";
-static const char bundle_signature_v3[] = "# v3 git bundle\n";
+static const char bundle_signature[] = "# v2 git bundle\n";
 
-static void add_to_ref_list(const struct object_id *oid, const char *name,
+static void add_to_ref_list(const unsigned char *sha1, const char *name,
 		struct ref_list *list)
 {
 	ALLOC_GROW(list->list, list->nr + 1, list->alloc);
-	oidcpy(&list->list[list->nr].oid, oid);
+	hashcpy(list->list[list->nr].sha1, sha1);
 	list->list[list->nr].name = xstrdup(name);
 	list->nr++;
 }
 
-void init_bundle_header(struct bundle_header *header, const char *name)
-{
-	memset(header, '\0', sizeof(*header));
-	header->filename = xstrdup(name);
-}
-
-static int parse_bundle_header(int fd, struct bundle_header *header, int quiet)
+static int parse_bundle_header(int fd, struct bundle_header *header,
+			       const char *report_path)
 {
 	struct strbuf buf = STRBUF_INIT;
 	int status = 0;
 
 	/* The bundle header begins with the signature */
-	if (strbuf_getwholeline_fd(&buf, fd, '\n')) {
-	bad_bundle:
-		if (!quiet)
-			error(_("'%s' does not look like a supported bundle file"),
-			      header->filename);
+	if (strbuf_getwholeline_fd(&buf, fd, '\n') ||
+	    strcmp(buf.buf, bundle_signature)) {
+		if (report_path)
+			error(_("'%s' does not look like a v2 bundle file"),
+			      report_path);
 		status = -1;
 		goto abort;
 	}
 
-	if (!strcmp(buf.buf, bundle_signature_v2))
-		header->version = 2;
-	else if (!strcmp(buf.buf, bundle_signature_v3))
-		header->version = 3;
-	else
-		goto bad_bundle;
-
-	if (header->version == 3) {
-		/*
-		 * bundle version v3 has extended headers before the
-		 * list of prerequisites and references.  The extended
-		 * headers end with an empty line.
-		 */
-		while (!strbuf_getwholeline_fd(&buf, fd, '\n')) {
-			const char *cp;
-			if (buf.len && buf.buf[buf.len - 1] == '\n')
-				buf.buf[--buf.len] = '\0';
-			if (!buf.len)
-				break;
-			if (skip_prefix(buf.buf, "data: ", &cp)) {
-				header->datafile = xstrdup(cp);
-				continue;
-			}
-			if (skip_prefix(buf.buf, "sha1: ", &cp)) {
-				unsigned char sha1[GIT_SHA1_RAWSZ];
-				if (get_sha1_hex(cp, sha1) ||
-				    cp[GIT_SHA1_HEXSZ])
-					goto bad_bundle;
-				hashcpy(header->csum, sha1);
-				continue;
-			}
-			if (skip_prefix(buf.buf, "size: ", &cp)) {
-				char *ep;
-				uintmax_t sz = strtoumax(cp, &ep, 10);
-				if (!*ep && sz < UINTMAX_MAX)
-					header->size = sz;
-				continue;
-			}
-			goto bad_bundle;
-		}
-	}
-
-	/*
-	 * The bundle header lists prerequisites and
-	 * references, and the list ends with an empty line.
-	 */
+	/* The bundle header ends with an empty line */
 	while (!strbuf_getwholeline_fd(&buf, fd, '\n') &&
 	       buf.len && buf.buf[0] != '\n') {
-		struct object_id oid;
+		unsigned char sha1[20];
 		int is_prereq = 0;
-		const char *p;
 
 		if (*buf.buf == '-') {
 			is_prereq = 1;
@@ -106,39 +54,38 @@ static int parse_bundle_header(int fd, struct bundle_header *header, int quiet)
 		 * Prerequisites have object name that is optionally
 		 * followed by SP and subject line.
 		 */
-		if (parse_oid_hex(buf.buf, &oid, &p) ||
-		    (*p && !isspace(*p)) ||
-		    (!is_prereq && !*p)) {
-			if (!quiet)
+		if (get_sha1_hex(buf.buf, sha1) ||
+		    (buf.len > 40 && !isspace(buf.buf[40])) ||
+		    (!is_prereq && buf.len <= 40)) {
+			if (report_path)
 				error(_("unrecognized header: %s%s (%d)"),
 				      (is_prereq ? "-" : ""), buf.buf, (int)buf.len);
 			status = -1;
 			break;
 		} else {
 			if (is_prereq)
-				add_to_ref_list(&oid, "", &header->prerequisites);
+				add_to_ref_list(sha1, "", &header->prerequisites);
 			else
-				add_to_ref_list(&oid, p + 1, &header->references);
+				add_to_ref_list(sha1, buf.buf + 41, &header->references);
 		}
 	}
 
  abort:
 	if (status) {
-		if (0 <= fd)
-			close(fd);
+		close(fd);
 		fd = -1;
 	}
 	strbuf_release(&buf);
 	return fd;
 }
 
-int read_bundle_header(struct bundle_header *header)
+int read_bundle_header(const char *path, struct bundle_header *header)
 {
-	int fd = open(header->filename, O_RDONLY);
+	int fd = open(path, O_RDONLY);
 
 	if (fd < 0)
-		return error(_("could not open '%s'"), header->filename);
-	return parse_bundle_header(fd, header, 0);
+		return error(_("could not open '%s'"), path);
+	return parse_bundle_header(fd, header, path);
 }
 
 int is_bundle(const char *path, int quiet)
@@ -149,25 +96,10 @@ int is_bundle(const char *path, int quiet)
 	if (fd < 0)
 		return 0;
 	memset(&header, 0, sizeof(header));
-	fd = parse_bundle_header(fd, &header, quiet);
+	fd = parse_bundle_header(fd, &header, quiet ? NULL : path);
 	if (fd >= 0)
 		close(fd);
 	return (fd >= 0);
-}
-
-void release_bundle_header(struct bundle_header *header)
-{
-	int i;
-
-	for (i = 0; i < header->prerequisites.nr; i++)
-		free(header->prerequisites.list[i].name);
-	free(header->prerequisites.list);
-	for (i = 0; i < header->references.nr; i++)
-		free(header->references.list[i].name);
-	free(header->references.list);
-
-	free(header->filename);
-	free(header->datafile);
 }
 
 static int list_refs(struct ref_list *r, int argc, const char **argv)
@@ -183,7 +115,7 @@ static int list_refs(struct ref_list *r, int argc, const char **argv)
 			if (j == argc)
 				continue;
 		}
-		printf("%s %s\n", oid_to_hex(&r->list[i].oid),
+		printf("%s %s\n", sha1_to_hex(r->list[i].sha1),
 				r->list[i].name);
 	}
 	return 0;
@@ -209,7 +141,7 @@ int verify_bundle(struct bundle_header *header, int verbose)
 	init_revisions(&revs, NULL);
 	for (i = 0; i < p->nr; i++) {
 		struct ref_list_entry *e = p->list + i;
-		struct object *o = parse_object(&e->oid);
+		struct object *o = parse_object(e->sha1);
 		if (o) {
 			o->flags |= PREREQ_MARK;
 			add_pending_object(&revs, o, e->name);
@@ -217,7 +149,7 @@ int verify_bundle(struct bundle_header *header, int verbose)
 		}
 		if (++ret == 1)
 			error("%s", message);
-		error("%s %s", oid_to_hex(&e->oid), e->name);
+		error("%s %s", sha1_to_hex(e->sha1), e->name);
 	}
 	if (revs.pending.nr != p->nr)
 		return ret;
@@ -279,7 +211,7 @@ static int is_tag_in_date_range(struct object *tag, struct rev_info *revs)
 	unsigned long size;
 	enum object_type type;
 	char *buf = NULL, *line, *lineend;
-	timestamp_t date;
+	unsigned long date;
 	int result = 1;
 
 	if (revs->max_age == -1 && revs->min_age == -1)
@@ -295,7 +227,7 @@ static int is_tag_in_date_range(struct object *tag, struct rev_info *revs)
 	line = memchr(line, '>', lineend ? lineend - line : buf + size - line);
 	if (!line++)
 		goto out;
-	date = parse_timestamp(line, NULL, 10);
+	date = strtoul(line, NULL, 10);
 	result = (revs->max_age == -1 || revs->max_age < date) &&
 		(revs->min_age == -1 || revs->min_age > date);
 out:
@@ -353,18 +285,16 @@ static int compute_and_write_prerequisites(int bundle_fd,
 		return -1;
 	rls_fout = xfdopen(rls.out, "r");
 	while (strbuf_getwholeline(&buf, rls_fout, '\n') != EOF) {
-		struct object_id oid;
+		unsigned char sha1[20];
 		if (buf.len > 0 && buf.buf[0] == '-') {
 			write_or_die(bundle_fd, buf.buf, buf.len);
-			if (!get_oid_hex(buf.buf + 1, &oid)) {
-				struct object *object = parse_object_or_die(&oid,
-									    buf.buf);
+			if (!get_sha1_hex(buf.buf + 1, sha1)) {
+				struct object *object = parse_object_or_die(sha1, buf.buf);
 				object->flags |= UNINTERESTING;
 				add_pending_object(revs, object, buf.buf);
 			}
-		} else if (!get_oid_hex(buf.buf, &oid)) {
-			struct object *object = parse_object_or_die(&oid,
-								    buf.buf);
+		} else if (!get_sha1_hex(buf.buf, sha1)) {
+			struct object *object = parse_object_or_die(sha1, buf.buf);
 			object->flags |= SHOWN;
 		}
 	}
@@ -436,7 +366,7 @@ static int write_bundle_refs(int bundle_fd, struct rev_info *revs)
 			 * in terms of a tag (e.g. v2.0 from the range
 			 * "v1.0..v2.0")?
 			 */
-			struct commit *one = lookup_commit_reference(&oid);
+			struct commit *one = lookup_commit_reference(oid.hash);
 			struct object *obj;
 
 			if (e->item == &(one->object)) {
@@ -448,7 +378,7 @@ static int write_bundle_refs(int bundle_fd, struct rev_info *revs)
 				 * end up triggering "empty bundle"
 				 * error.
 				 */
-				obj = parse_object_or_die(&oid, e->name);
+				obj = parse_object_or_die(oid.hash, e->name);
 				obj->flags |= SHOWN;
 				add_pending_object(revs, obj, e->name);
 			}
@@ -477,7 +407,6 @@ int create_bundle(struct bundle_header *header, const char *path,
 	int bundle_to_stdout;
 	int ref_count = 0;
 	struct rev_info revs;
-	const char *bundle_signature = bundle_signature_v2;
 
 	bundle_to_stdout = !strcmp(path, "-");
 	if (bundle_to_stdout)
@@ -518,11 +447,10 @@ int create_bundle(struct bundle_header *header, const char *path,
 	object_array_remove_duplicates(&revs.pending);
 
 	ref_count = write_bundle_refs(bundle_fd, &revs);
-	if (ref_count <= 0)  {
-		if (!ref_count)
-			error(_("Refusing to create empty bundle."));
+	if (!ref_count)
+		die(_("Refusing to create empty bundle."));
+	else if (ref_count < 0)
 		goto err;
-	}
 
 	/* write pack */
 	if (write_pack_data(bundle_fd, &revs)) {
@@ -544,65 +472,22 @@ err:
 	return -1;
 }
 
-/*
- * v3 "split bundle" allows a separate packfile to be named
- * as "data: $URL/$name_of_the_packfile".  This file is expected
- * to be downloaded next to the bundle header file when the
- * bundle is used.  Hence we find the path to the directory
- * that contains the bundle header file, and append the basename
- * part of the bundle_data_file to it, to form the name of the
- * file that holds the pack data stream.
- */
-static int open_bundle_data(struct bundle_header *header)
-{
-	const char *cp;
-	struct strbuf filename = STRBUF_INIT;
-	int fd;
-
-	assert(header->datafile);
-
-	cp = find_last_dir_sep(header->filename);
-	if (cp)
-		strbuf_add(&filename, header->filename,
-			   (cp - header->filename) + 1);
-	cp = find_last_dir_sep(header->datafile);
-	if (!cp)
-		cp = header->datafile;
-	strbuf_addstr(&filename, cp);
-
-	fd = open(filename.buf, O_RDONLY);
-	strbuf_release(&filename);
-	return fd;
-}
-
 int unbundle(struct bundle_header *header, int bundle_fd, int flags)
 {
 	const char *argv_index_pack[] = {"index-pack",
 					 "--fix-thin", "--stdin", NULL, NULL};
 	struct child_process ip = CHILD_PROCESS_INIT;
-	int status = 0, data_fd = -1;
 
 	if (flags & BUNDLE_VERBOSE)
 		argv_index_pack[3] = "-v";
 
 	if (verify_bundle(header, 0))
 		return -1;
-
-	if (header->datafile) {
-		data_fd = open_bundle_data(header);
-		if (data_fd < 0)
-			return error(_("bundle data not found"));
-		ip.in = data_fd;
-	} else {
-		ip.in = bundle_fd;
-	}
-
 	ip.argv = argv_index_pack;
+	ip.in = bundle_fd;
 	ip.no_stdout = 1;
 	ip.git_cmd = 1;
 	if (run_command(&ip))
-		status = error(_("index-pack died"));
-	if (0 <= data_fd)
-		close(data_fd);
-	return status;
+		return error(_("index-pack died"));
+	return 0;
 }

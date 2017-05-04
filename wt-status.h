@@ -77,7 +77,6 @@ struct wt_status {
 	unsigned colopts;
 	int null_termination;
 	int show_branch;
-	int show_inprogress;
 	int hints;
 
 	enum wt_status_format status_format;

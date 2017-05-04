@@ -73,14 +73,14 @@ static pthread_mutex_t grep_mutex;
 
 static inline void grep_lock(void)
 {
-	assert(num_threads);
-	pthread_mutex_lock(&grep_mutex);
+	if (num_threads)
+		pthread_mutex_lock(&grep_mutex);
 }
 
 static inline void grep_unlock(void)
 {
-	assert(num_threads);
-	pthread_mutex_unlock(&grep_mutex);
+	if (num_threads)
+		pthread_mutex_unlock(&grep_mutex);
 }
 
 /* Signalled when a new work_item is added to todo. */
@@ -224,8 +224,7 @@ static void start_threads(struct grep_opt *opt)
 		int err;
 		struct grep_opt *o = grep_opt_dup(opt);
 		o->output = strbuf_out;
-		if (i)
-			o->debug = 0;
+		o->debug = 0;
 		compile_grep_patterns(o);
 		err = pthread_create(&threads[i], NULL, run, o);
 
@@ -290,12 +289,6 @@ static int grep_cmd_config(const char *var, const char *value, void *cb)
 		if (num_threads < 0)
 			die(_("invalid number of threads specified (%d) for %s"),
 			    num_threads, var);
-#ifdef NO_PTHREADS
-		else if (num_threads && num_threads != 1) {
-			warning(_("no threads support, ignoring %s"), var);
-			num_threads = 0;
-		}
-#endif
 	}
 
 	return st;
@@ -502,8 +495,6 @@ static void compile_submodule_options(const struct grep_opt *opt,
 		break;
 	case GREP_PATTERN_TYPE_UNSPECIFIED:
 		break;
-	default:
-		die("BUG: Added a new grep pattern type without updating switch statement");
 	}
 
 	for (pattern = opt->pattern_list; pattern != NULL;
@@ -524,8 +515,6 @@ static void compile_submodule_options(const struct grep_opt *opt,
 		case GREP_PATTERN_BODY:
 		case GREP_PATTERN_HEAD:
 			break;
-		default:
-			die("BUG: Added a new grep token type without updating case statement");
 		}
 	}
 
@@ -828,13 +817,7 @@ static int grep_object(struct grep_opt *opt, const struct pathspec *pathspec,
 		strbuf_init(&base, PATH_MAX + len + 1);
 		if (len) {
 			strbuf_add(&base, name, len);
-
-			/* Add a delimiter if there isn't one already */
-			if (name[len - 1] != '/' && name[len - 1] != ':') {
-				/* rev: or rev:path/ */
-				char delim = obj->type == OBJ_COMMIT ? ':' : '/';
-				strbuf_addch(&base, delim);
-			}
+			strbuf_addch(&base, ':');
 		}
 		init_tree_desc(&tree, data, size);
 		hit = grep_tree(opt, pathspec, &tree, &base, base.len,
@@ -1171,6 +1154,8 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	if (!opt.fixed && opt.ignore_case)
 		opt.regflags |= REG_ICASE;
 
+	compile_grep_patterns(&opt);
+
 	/*
 	 * We have to find "--" in a separate pass, because its presence
 	 * influences how we will parse arguments that come before it.
@@ -1211,7 +1196,7 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 			break;
 		}
 
-		object = parse_object_or_die(&oid, arg);
+		object = parse_object_or_die(oid.hash, arg);
 		if (!seen_dashdash)
 			verify_non_filename(prefix, arg);
 		add_object_array_with_path(object, arg, &list, oc.mode, oc.path);
@@ -1241,22 +1226,9 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		num_threads = GREP_NUM_THREADS_DEFAULT;
 	else if (num_threads < 0)
 		die(_("invalid number of threads specified (%d)"), num_threads);
-	if (num_threads == 1)
-		num_threads = 0;
 #else
-	if (num_threads)
-		warning(_("no threads support, ignoring --threads"));
 	num_threads = 0;
 #endif
-
-	if (!num_threads)
-		/*
-		 * The compiled patterns on the main path are only
-		 * used when not using threading. Otherwise
-		 * start_threads() below calls compile_grep_patterns()
-		 * for each thread.
-		 */
-		compile_grep_patterns(&opt);
 
 #ifndef NO_PTHREADS
 	if (num_threads) {

@@ -31,14 +31,14 @@ int parse_opt_abbrev_cb(const struct option *opt, const char *arg, int unset)
 int parse_opt_approxidate_cb(const struct option *opt, const char *arg,
 			     int unset)
 {
-	*(timestamp_t *)(opt->value) = approxidate(arg);
+	*(unsigned long *)(opt->value) = approxidate(arg);
 	return 0;
 }
 
 int parse_opt_expiry_date_cb(const struct option *opt, const char *arg,
 			     int unset)
 {
-	return parse_expiry_date(arg, (timestamp_t *)opt->value);
+	return parse_expiry_date(arg, (unsigned long *)opt->value);
 }
 
 int parse_opt_color_flag_cb(const struct option *opt, const char *arg,
@@ -80,14 +80,14 @@ int parse_opt_verbosity_cb(const struct option *opt, const char *arg,
 
 int parse_opt_commits(const struct option *opt, const char *arg, int unset)
 {
-	struct object_id oid;
+	unsigned char sha1[20];
 	struct commit *commit;
 
 	if (!arg)
 		return -1;
-	if (get_oid(arg, &oid))
+	if (get_sha1(arg, sha1))
 		return error("malformed object name %s", arg);
-	commit = lookup_commit_reference(&oid);
+	commit = lookup_commit_reference(sha1);
 	if (!commit)
 		return error("no such commit %s", arg);
 	commit_list_insert(commit, opt->value);

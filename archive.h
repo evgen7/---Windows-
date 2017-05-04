@@ -9,7 +9,7 @@ struct archiver_args {
 	struct tree *tree;
 	const unsigned char *commit_sha1;
 	const struct commit *commit;
-	timestamp_t time;
+	time_t time;
 	struct pathspec pathspec;
 	unsigned int verbose : 1;
 	unsigned int worktree_attributes : 1;

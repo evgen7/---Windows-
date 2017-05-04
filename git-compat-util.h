@@ -1,15 +1,6 @@
 #ifndef GIT_COMPAT_UTIL_H
 #define GIT_COMPAT_UTIL_H
 
-#ifdef USE_MSVC_CRTDBG
-/*
- * For these to work they must appear very early in each
- * file -- before most of the standard header files.
- */
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
 #define _FILE_OFFSET_BITS 64
 
 
@@ -51,23 +42,6 @@
 #endif
 #endif
 
-/*
- * Under certain circumstances Git's source code is cleverer than the C
- * compiler when the latter warns about some "uninitialized value", e.g. when
- * a value is both initialized and used under the same condition.
- *
- * GCC can be fooled to not spit out this warning by using the construct:
- * "int value = value;". Other C compilers are not that easily fooled and would
- * require a #pragma (which is not portable, and would litter the source code).
- *
- * To keep things simple, we only fool GCC, and initialize such values instead
- * when compiling with other C compilers.
- */
-#ifdef __GNUC__
-#define FAKE_INIT(a, b, c) a b = b
-#else
-#define FAKE_INIT(a, b, c) a b = c
-#endif
 
 /*
  * BUILD_ASSERT_OR_ZERO - assert a build-time dependency, as an expression.
@@ -218,10 +192,8 @@
 #if defined(__MINGW32__)
 /* pull in Windows compatibility stuff */
 #include "compat/mingw.h"
-#include "compat/win32/fscache.h"
 #elif defined(_MSC_VER)
 #include "compat/msvc.h"
-#include "compat/win32/fscache.h"
 #else
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -295,33 +267,6 @@ extern char *gitdirname(char *);
 
 #ifndef NO_ICONV
 #include <iconv.h>
-#ifdef _MSC_VER
-/*
- * At least version 1.14.0.11 of the libiconv NuPkg at
- * https://www.nuget.org/packages/libiconv/ does not set errno at all.
- *
- * Let's simulate it by testing whether we might have possibly run out of
- * space.
- */
-static inline size_t msvc_iconv(iconv_t conv,
-	const char **inpos, size_t *insize,
-	char **outpos, size_t *outsize)
-{
-	int saved_errno = errno;
-	size_t res;
-
-	errno = ENOENT;
-	res = iconv(conv, inpos, insize, outpos, outsize);
-	if (!res)
-		errno = saved_errno;
-	else if (errno == ENOENT)
-		errno = *outsize < 16 ? E2BIG : 0;
-
-	return res;
-}
-#undef iconv
-#define iconv msvc_iconv
-#endif
 #endif
 
 #ifndef NO_OPENSSL
@@ -374,11 +319,6 @@ static inline size_t msvc_iconv(iconv_t conv,
 #define PRIo32 "o"
 #endif
 
-typedef uintmax_t timestamp_t;
-#define PRItime PRIuMAX
-#define parse_timestamp strtoumax
-#define TIME_MAX UINTMAX_MAX
-
 #ifndef PATH_SEP
 #define PATH_SEP ':'
 #endif
@@ -388,14 +328,6 @@ typedef uintmax_t timestamp_t;
 #endif
 #ifndef _PATH_DEFPATH
 #define _PATH_DEFPATH "/usr/local/bin:/usr/bin:/bin"
-#endif
-
-#ifndef platform_core_config
-static inline int noop_core_config(const char *var, const char *value)
-{
-	return 0;
-}
-#define platform_core_config noop_core_config
 #endif
 
 #ifndef has_dos_drive_prefix
@@ -436,14 +368,6 @@ static inline char *git_find_last_dir_sep(const char *path)
 	return strrchr(path, '/');
 }
 #define find_last_dir_sep git_find_last_dir_sep
-#endif
-
-#ifndef query_user_email
-#define query_user_email() NULL
-#endif
-
-#ifndef git_program_data_config
-#define git_program_data_config() NULL
 #endif
 
 #if defined(__HP_cc) && (__HP_cc >= 61000)
@@ -692,7 +616,7 @@ extern int git_lstat(const char *, struct stat *);
 #endif
 
 #define DEFAULT_PACKED_GIT_LIMIT \
-	((1024L * 1024L) * (size_t)(sizeof(void*) >= 8 ? (32 * 1024L * 1024L) : 256))
+	((1024L * 1024L) * (size_t)(sizeof(void*) >= 8 ? 8192 : 256))
 
 #ifdef NO_PREAD
 #define pread git_pread
@@ -765,12 +689,10 @@ char *gitstrdup(const char *s);
 #endif
 
 #ifdef FREAD_READS_DIRECTORIES
-# if !defined(SUPPRESS_FOPEN_REDEFINITION)
-#  ifdef fopen
-#   undef fopen
-#  endif
-#  define fopen(a,b) git_fopen(a,b)
-# endif
+#ifdef fopen
+#undef fopen
+#endif
+#define fopen(a,b) git_fopen(a,b)
 extern FILE *git_fopen(const char*, const char*);
 #endif
 
@@ -1178,9 +1100,6 @@ int access_or_die(const char *path, int mode, unsigned flag);
 /* Warn on an inaccessible file that ought to be accessible */
 void warn_on_inaccessible(const char *path);
 
-/* Call the above after fopen/open fails for optional input */
-void warn_failure_to_read_open_optional_path(const char *);
-
 #ifdef GMTIME_UNRELIABLE_ERRORS
 struct tm *git_gmtime(const time_t *);
 struct tm *git_gmtime_r(const time_t *, struct tm *);
@@ -1200,21 +1119,6 @@ struct tm *git_gmtime_r(const time_t *, struct tm *);
 #define flockfile(fh)
 #define funlockfile(fh)
 #define getc_unlocked(fh) getc(fh)
-#endif
-
-/*
- * Enable/disable a read-only cache for file system data on platforms that
- * support it.
- *
- * Implementing a live-cache is complicated and requires special platform
- * support (inotify, ReadDirectoryChangesW...). enable_fscache shall be used
- * to mark sections of git code that extensively read from the file system
- * without modifying anything. Implementations can use this to cache e.g. stat
- * data or even file content without the need to synchronize with the file
- * system.
- */
-#ifndef enable_fscache
-#define enable_fscache(x) /* noop */
 #endif
 
 extern int cmd_main(int, const char **);

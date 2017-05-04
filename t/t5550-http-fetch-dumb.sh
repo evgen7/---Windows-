@@ -20,9 +20,8 @@ test_expect_success 'create http-accessible bare repository with loose objects' 
 	(cd "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
 	 git config core.bare true &&
 	 mkdir -p hooks &&
-	 write_script "hooks/post-update" <<-\EOF &&
-	 exec git update-server-info
-	EOF
+	 echo "exec git update-server-info" >hooks/post-update &&
+	 chmod +x hooks/post-update &&
 	 hooks/post-update
 	) &&
 	git remote add public "$HTTPD_DOCUMENT_ROOT_PATH/repo.git" &&
