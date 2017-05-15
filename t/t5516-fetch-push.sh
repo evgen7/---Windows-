@@ -862,60 +862,6 @@ test_expect_success 'allow push to HEAD of non-bare repository (config)' '
 	! grep "warning: updating the current branch" stderr
 '
 
-test_expect_success 'fetch with branches' '
-	mk_empty testrepo &&
-	git branch second $the_first_commit &&
-	git checkout second &&
-	echo ".." > testrepo/.git/branches/branch1 &&
-	(
-		cd testrepo &&
-		git fetch branch1 &&
-		echo "$the_commit commit	refs/heads/branch1" >expect &&
-		git for-each-ref refs/heads >actual &&
-		test_cmp expect actual
-	) &&
-	git checkout master
-'
-
-test_expect_success 'fetch with branches containing #' '
-	mk_empty testrepo &&
-	echo "..#second" > testrepo/.git/branches/branch2 &&
-	(
-		cd testrepo &&
-		git fetch branch2 &&
-		echo "$the_first_commit commit	refs/heads/branch2" >expect &&
-		git for-each-ref refs/heads >actual &&
-		test_cmp expect actual
-	) &&
-	git checkout master
-'
-
-test_expect_success 'push with branches' '
-	mk_empty testrepo &&
-	git checkout second &&
-	echo "testrepo" > .git/branches/branch1 &&
-	git push branch1 &&
-	(
-		cd testrepo &&
-		echo "$the_first_commit commit	refs/heads/master" >expect &&
-		git for-each-ref refs/heads >actual &&
-		test_cmp expect actual
-	)
-'
-
-test_expect_success 'push with branches containing #' '
-	mk_empty testrepo &&
-	echo "testrepo#branch3" > .git/branches/branch2 &&
-	git push branch2 &&
-	(
-		cd testrepo &&
-		echo "$the_first_commit commit	refs/heads/branch3" >expect &&
-		git for-each-ref refs/heads >actual &&
-		test_cmp expect actual
-	) &&
-	git checkout master
-'
-
 test_expect_success 'push into aliased refs (consistent)' '
 	mk_test testrepo heads/master &&
 	mk_child testrepo child1 &&
@@ -1038,6 +984,7 @@ test_expect_success 'push --porcelain --dry-run rejected' '
 
 test_expect_success 'push --prune' '
 	mk_test testrepo heads/master heads/second heads/foo heads/bar &&
+	git branch second $the_first_commit &&
 	git push --prune testrepo : &&
 	check_push_result testrepo $the_commit heads/master &&
 	check_push_result testrepo $the_first_commit heads/second &&
