@@ -1,6 +1,15 @@
 #ifndef GIT_COMPAT_UTIL_H
 #define GIT_COMPAT_UTIL_H
 
+#ifdef USE_MSVC_CRTDBG
+/*
+ * For these to work they must appear very early in each
+ * file -- before most of the standard header files.
+ */
+#include <stdlib.h>
+#include <crtdbg.h>
+#endif
+
 #define _FILE_OFFSET_BITS 64
 
 
@@ -42,6 +51,23 @@
 #endif
 #endif
 
+/*
+ * Under certain circumstances Git's source code is cleverer than the C
+ * compiler when the latter warns about some "uninitialized value", e.g. when
+ * a value is both initialized and used under the same condition.
+ *
+ * GCC can be fooled to not spit out this warning by using the construct:
+ * "int value = value;". Other C compilers are not that easily fooled and would
+ * require a #pragma (which is not portable, and would litter the source code).
+ *
+ * To keep things simple, we only fool GCC, and initialize such values instead
+ * when compiling with other C compilers.
+ */
+#ifdef __GNUC__
+#define FAKE_INIT(a, b, c) a b = b
+#else
+#define FAKE_INIT(a, b, c) a b = c
+#endif
 
 /*
  * BUILD_ASSERT_OR_ZERO - assert a build-time dependency, as an expression.
@@ -269,6 +295,33 @@ extern char *gitdirname(char *);
 
 #ifndef NO_ICONV
 #include <iconv.h>
+#ifdef _MSC_VER
+/*
+ * At least version 1.14.0.11 of the libiconv NuPkg at
+ * https://www.nuget.org/packages/libiconv/ does not set errno at all.
+ *
+ * Let's simulate it by testing whether we might have possibly run out of
+ * space.
+ */
+static inline size_t msvc_iconv(iconv_t conv,
+	const char **inpos, size_t *insize,
+	char **outpos, size_t *outsize)
+{
+	int saved_errno = errno;
+	size_t res;
+
+	errno = ENOENT;
+	res = iconv(conv, inpos, insize, outpos, outsize);
+	if (!res)
+		errno = saved_errno;
+	else if (errno == ENOENT)
+		errno = *outsize < 16 ? E2BIG : 0;
+
+	return res;
+}
+#undef iconv
+#define iconv msvc_iconv
+#endif
 #endif
 
 #ifndef NO_OPENSSL
@@ -383,6 +436,10 @@ static inline char *git_find_last_dir_sep(const char *path)
 	return strrchr(path, '/');
 }
 #define find_last_dir_sep git_find_last_dir_sep
+#endif
+
+#ifndef query_user_email
+#define query_user_email() NULL
 #endif
 
 #if defined(__HP_cc) && (__HP_cc >= 61000)
