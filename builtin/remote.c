@@ -574,30 +574,6 @@ static int read_remote_branches(const char *refname,
 	return 0;
 }
 
-static int migrate_file(struct remote *remote)
-{
-	struct strbuf buf = STRBUF_INIT;
-	int i;
-
-	strbuf_addf(&buf, "remote.%s.url", remote->name);
-	for (i = 0; i < remote->url_nr; i++)
-		git_config_set_multivar(buf.buf, remote->url[i], "^$", 0);
-	strbuf_reset(&buf);
-	strbuf_addf(&buf, "remote.%s.push", remote->name);
-	for (i = 0; i < remote->push_refspec_nr; i++)
-		git_config_set_multivar(buf.buf, remote->push_refspec[i], "^$", 0);
-	strbuf_reset(&buf);
-	strbuf_addf(&buf, "remote.%s.fetch", remote->name);
-	for (i = 0; i < remote->fetch_refspec_nr; i++)
-		git_config_set_multivar(buf.buf, remote->fetch_refspec[i], "^$", 0);
-	if (remote->origin == REMOTE_REMOTES)
-		unlink_or_warn(git_path("remotes/%s", remote->name));
-	else if (remote->origin == REMOTE_BRANCHES)
-		unlink_or_warn(git_path("branches/%s", remote->name));
-
-	return 0;
-}
-
 static int mv(int argc, const char **argv)
 {
 	struct option options[] = {
@@ -620,9 +596,6 @@ static int mv(int argc, const char **argv)
 	oldremote = remote_get(rename.old);
 	if (!remote_is_configured(oldremote, 1))
 		die(_("No such remote: %s"), rename.old);
-
-	if (!strcmp(rename.old, rename.new) && oldremote->origin != REMOTE_CONFIG)
-		return migrate_file(oldremote);
 
 	newremote = remote_get(rename.new);
 	if (remote_is_configured(newremote, 1))

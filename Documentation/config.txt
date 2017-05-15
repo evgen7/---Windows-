@@ -79,14 +79,20 @@ escape sequences) are invalid.
 Includes
 ~~~~~~~~
 
-You can include a config file from another by setting the special
-`include.path` variable to the name of the file to be included. The
-variable takes a pathname as its value, and is subject to tilde
-expansion. `include.path` can be given multiple times.
+The `include` and `includeIf` sections allow you to include config
+directives from another source. These sections behave identically to
+each other with the exception that `includeIf` sections may be ignored
+if their condition does not evaluate to true; see "Conditional includes"
+below.
 
-The included file is expanded immediately, as if its contents had been
-found at the location of the include directive. If the value of the
-`include.path` variable is a relative path, the path is considered to
+You can include a config file from another by setting the special
+`include.path` (or `includeIf.*.path`) variable to the name of the file
+to be included. The variable takes a pathname as its value, and is
+subject to tilde expansion. These variables can be given multiple times.
+
+The contents of the included file are inserted immediately, as if they
+had been found at the location of the include directive. If the value of the
+variable is a relative path, the path is considered to
 be relative to the configuration file in which the include directive
 was found.  See below for examples.
 
@@ -95,8 +101,7 @@ Conditional includes
 
 You can include a config file from another conditionally by setting a
 `includeIf.<condition>.path` variable to the name of the file to be
-included. The variable's value is treated the same way as
-`include.path`. `includeIf.<condition>.path` can be given multiple times.
+included.
 
 The condition starts with a keyword followed by a colon and some data
 whose format and meaning depends on the keyword. Supported keywords
@@ -167,8 +172,8 @@ Example
 
 	[include]
 		path = /path/to/foo.inc ; include by absolute path
-		path = foo ; expand "foo" relative to the current file
-		path = ~/foo ; expand "foo" in your `$HOME` directory
+		path = foo.inc ; find "foo.inc" relative to the current file
+		path = ~/foo.inc ; find "foo.inc" in your `$HOME` directory
 
 	; include if $GIT_DIR is /path/to/foo/.git
 	[includeIf "gitdir:/path/to/foo/.git"]
@@ -181,6 +186,12 @@ Example
 	; include for all repositories inside $HOME/to/group
 	[includeIf "gitdir:~/to/group/"]
 		path = /path/to/foo.inc
+
+	; relative paths are always relative to the including
+	; file (if the condition is true); their location is not
+	; affected by the condition
+	[includeIf "gitdir:/path/to/group/"]
+		path = foo.inc
 
 Values
 ~~~~~~
@@ -834,6 +845,25 @@ relatively high IO latencies.  When enabled, Git will do the
 index comparison to the filesystem data in parallel, allowing
 overlapping IO's.  Defaults to true.
 
+core.fscache::
+	Enable additional caching of file system data for some operations.
++
+Git for Windows uses this to bulk-read and cache lstat data of entire
+directories (instead of doing lstat file by file).
+
+core.longpaths::
+	Enable long path (> 260) support for builtin commands in Git for
+	Windows. This is disabled by default, as long paths are not supported
+	by Windows Explorer, cmd.exe and the Git for Windows tool chain
+	(msys, bash, tcl, perl...). Only enable this if you know what you're
+	doing and are prepared to live with a few quirks.
+
+core.unsetenvvars::
+	EXPERIMENTAL, Windows-only: comma-separated list of environment
+	variables' names that need to be unset before spawning any other
+	process. Defaults to `PERL5LIB` to account for the fact that Git
+	for Windows insists on using its own Perl interpreter.
+
 core.createObject::
 	You can set this to 'link', in which case a hardlink followed by
 	a delete of the source are used to make sure that object creation
@@ -1137,7 +1167,10 @@ color.status.<slot>::
 	`untracked` (files which are not tracked by Git),
 	`branch` (the current branch),
 	`nobranch` (the color the 'no branch' warning is shown in, defaulting
-	to red), or
+	to red),
+	`localBranch` or `remoteBranch` (the local and remote branch names,
+	respectively, when branch and tracking information is displayed in the
+	status short-format), or
 	`unmerged` (files which have unmerged changes).
 
 color.ui::
@@ -2620,9 +2653,8 @@ receive.advertiseAtomic::
 	capability, set this variable to false.
 
 receive.advertisePushOptions::
-	By default, git-receive-pack will advertise the push options
-	capability to its clients. If you don't want to advertise this
-	capability, set this variable to false.
+	When set to true, git-receive-pack will advertise the push options
+	capability to its clients. False by default.
 
 receive.autogc::
 	By default, git-receive-pack will run "git-gc --auto" after
@@ -2956,6 +2988,10 @@ status.short::
 status.branch::
 	Set to true to enable --branch by default in linkgit:git-status[1].
 	The option --no-branch takes precedence over this variable.
+
+status.inProgress::
+	Set to true to enable --in-progress by default in linkgit:git-status[1].
+	The option --no-in-progress takes precedence over this variable.
 
 status.displayCommentPrefix::
 	If set to true, linkgit:git-status[1] will insert a comment

@@ -17,6 +17,7 @@
 #include "revision.h"
 #include "bulk-checkin.h"
 #include "argv-array.h"
+#include "submodule.h"
 
 static const char * const builtin_add_usage[] = {
 	N_("git add [<options>] [--] <pathspec>..."),
@@ -135,7 +136,7 @@ static char *prune_directory(struct dir_struct *dir, struct pathspec *pathspec, 
 			*dst++ = entry;
 	}
 	dir->nr = dst - dir->entries;
-	add_pathspec_matches_against_index(pathspec, seen);
+	add_pathspec_matches_against_index(pathspec, &the_index, seen);
 	return seen;
 }
 
@@ -379,15 +380,18 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
 
+	die_in_unpopulated_submodule(&the_index, prefix);
+
 	/*
 	 * Check the "pathspec '%s' did not match any files" block
 	 * below before enabling new magic.
 	 */
 	parse_pathspec(&pathspec, 0,
 		       PATHSPEC_PREFER_FULL |
-		       PATHSPEC_SYMLINK_LEADING_PATH |
-		       PATHSPEC_STRIP_SUBMODULE_SLASH_EXPENSIVE,
+		       PATHSPEC_SYMLINK_LEADING_PATH,
 		       prefix, argv);
+
+	die_path_inside_submodule(&the_index, &pathspec);
 
 	if (add_new_files) {
 		int baselen;
@@ -400,7 +404,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 		}
 
 		/* This picks up the paths that are not tracked */
-		baselen = fill_directory(&dir, &pathspec);
+		baselen = fill_directory(&dir, &the_index, &pathspec);
 		if (pathspec.nr)
 			seen = prune_directory(&dir, &pathspec, baselen);
 	}
@@ -414,7 +418,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 		int i;
 
 		if (!seen)
-			seen = find_pathspecs_matching_against_index(&pathspec);
+			seen = find_pathspecs_matching_against_index(&pathspec, &the_index);
 
 		/*
 		 * file_exists() assumes exact match
@@ -436,8 +440,9 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 			     !file_exists(path))) {
 				if (ignore_missing) {
 					int dtype = DT_UNKNOWN;
-					if (is_excluded(&dir, path, &dtype))
-						dir_add_ignored(&dir, path, pathspec.items[i].len);
+					if (is_excluded(&dir, &the_index, path, &dtype))
+						dir_add_ignored(&dir, &the_index,
+								path, pathspec.items[i].len);
 				} else
 					die(_("pathspec '%s' did not match any files"),
 					    pathspec.items[i].original);

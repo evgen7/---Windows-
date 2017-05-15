@@ -49,6 +49,10 @@ extern int is_submodule_initialized(const char *path);
  * Otherwise the return error code is the same as of resolve_gitdir_gently.
  */
 extern int is_submodule_populated_gently(const char *path, int *return_error_code);
+extern void die_in_unpopulated_submodule(const struct index_state *istate,
+					 const char *prefix);
+extern void die_path_inside_submodule(const struct index_state *istate,
+				      const struct pathspec *ps);
 extern int parse_submodule_update_strategy(const char *value,
 		struct submodule_update_strategy *dst);
 extern const char *submodule_strategy_to_string(const struct submodule_update_strategy *s);
@@ -84,10 +88,10 @@ extern int submodule_uses_gitfile(const char *path);
 #define SUBMODULE_REMOVAL_IGNORE_UNTRACKED (1<<1)
 #define SUBMODULE_REMOVAL_IGNORE_IGNORED_UNTRACKED (1<<2)
 extern int bad_to_remove_submodule(const char *path, unsigned flags);
-extern int merge_submodule(unsigned char result[20], const char *path,
-			   const unsigned char base[20],
-			   const unsigned char a[20],
-			   const unsigned char b[20], int search);
+extern int merge_submodule(struct object_id *result, const char *path,
+			   const struct object_id *base,
+			   const struct object_id *a,
+			   const struct object_id *b, int search);
 extern int find_unpushed_submodules(struct oid_array *commits,
 				    const char *remotes_name,
 				    struct string_list *needs_pushing);

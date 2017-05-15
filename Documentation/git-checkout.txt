@@ -14,6 +14,7 @@ SYNOPSIS
 'git checkout' [-q] [-f] [-m] [[-b|-B|--orphan] <new_branch>] [<start_point>]
 'git checkout' [-f|--ours|--theirs|-m|--conflict=<style>] [<tree-ish>] [--] <paths>...
 'git checkout' [-p|--patch] [<tree-ish>] [--] [<paths>...]
+'git checkout' --working-tree-only <tree-ish> [--] [<paths>...]
 
 DESCRIPTION
 -----------
@@ -81,13 +82,14 @@ Omitting <branch> detaches HEAD at the tip of the current branch.
 'git checkout' [-p|--patch] [<tree-ish>] [--] <pathspec>...::
 
 	When <paths> or `--patch` are given, 'git checkout' does *not*
-	switch branches.  It updates the named paths in the working tree
-	from the index file or from a named <tree-ish> (most often a
-	commit).  In this case, the `-b` and `--track` options are
-	meaningless and giving either of them results in an error.  The
-	<tree-ish> argument can be used to specify a specific tree-ish
-	(i.e.  commit, tag or tree) to update the index for the given
-	paths before updating the working tree.
+	switch branches.  In this case, the `-b` and `--track` options
+	are meaningless and giving either of them results in an error.
++
+The command checks out blobs for paths that match the given
+<pathspec> from the index to the working tree.  When an optional
+<tree-ish> is given, the blobs for paths that match the given
+<pathspec> are copied from the <tree-ish> to the index before
+they are checked out of the index.
 +
 'git checkout' with <paths> or `--patch` is used to restore modified or
 deleted paths to their original contents from the index or replace paths
@@ -100,6 +102,12 @@ Using `-f` will ignore these unmerged entries.  The contents from a
 specific side of the merge can be checked out of the index by
 using `--ours` or `--theirs`.  With `-m`, changes made to the working tree
 file can be discarded to re-create the original conflicted merge result.
+
+'git checkout' --working-tree-only <tree-ish> [--] <pathspec>...::
+	Similar to `git checkout <tree-ish> [--] <pathspec>`, but
+	the index file is left in the same state as it was before
+	running this command.
+
 
 OPTIONS
 -------

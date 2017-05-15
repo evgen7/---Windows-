@@ -1,0 +1,21 @@
+This is the Git project's copy of the GNU awk (Gawk) regex
+engine. It's used when Git is build with e.g. NO_REGEX=NeedsStartEnd,
+or when the C library's regular expression functions are otherwise
+deficient.
+
+This is not a fork, but a source code copy. Upstream is the Gawk
+project, and the sources should be periodically updated from their
+copy, which can be done with:
+
+    for f in $(find . -name '*.[ch]' -printf "%f\n"); do wget http://git.savannah.gnu.org/cgit/gawk.git/plain/support/$f -O $f; done
+
+For ease of maintenance, and to intentionally make it inconvenient to
+diverge from upstream (since it makes it harder to re-merge) any local
+changes should be stored in the patches/ directory, which after doing
+the above can be applied as:
+
+    for p in patches/*; do patch -p3 < $p; done
+
+For any changes that aren't specific to the git.git copy please submit
+a patch to the Gawk project and/or to the GNU C library (the Gawk
+regex engine is a periodically & forked copy from glibc.git).

@@ -27,7 +27,7 @@
 #endif
 
 static int diff_detect_rename_default;
-static int diff_indent_heuristic; /* experimental */
+static int diff_indent_heuristic = 1;
 static int diff_rename_limit_default = 400;
 static int diff_suppress_blank_empty;
 static int diff_use_color_default = -1;
@@ -290,9 +290,6 @@ int git_diff_ui_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 
-	if (git_diff_heuristic_config(var, value, cb) < 0)
-		return -1;
-
 	if (!strcmp(var, "diff.wserrorhighlight")) {
 		int val = parse_ws_error_highlight(value);
 		if (val < 0)
@@ -350,6 +347,9 @@ int git_diff_basic_config(const char *var, const char *value, void *cb)
 
 	if (starts_with(var, "submodule."))
 		return parse_submodule_config_option(var, value);
+
+	if (git_diff_heuristic_config(var, value, cb) < 0)
+		return -1;
 
 	return git_default_config(var, value, cb);
 }
@@ -4071,9 +4071,7 @@ int diff_opt_parse(struct diff_options *options,
 		DIFF_OPT_CLR(options, FUNCCONTEXT);
 	else if ((argcount = parse_long_opt("output", av, &optarg))) {
 		char *path = prefix_filename(prefix, optarg);
-		options->file = fopen(path, "w");
-		if (!options->file)
-			die_errno("Could not open '%s'", path);
+		options->file = xfopen(path, "w");
 		options->close_file = 1;
 		if (options->use_color != GIT_COLOR_ALWAYS)
 			options->use_color = GIT_COLOR_NEVER;
@@ -4807,9 +4805,7 @@ void diff_flush(struct diff_options *options)
 		 */
 		if (options->close_file)
 			fclose(options->file);
-		options->file = fopen("/dev/null", "w");
-		if (!options->file)
-			die_errno("Could not open /dev/null");
+		options->file = xfopen("/dev/null", "w");
 		options->close_file = 1;
 		for (i = 0; i < q->nr; i++) {
 			struct diff_filepair *p = q->queue[i];
@@ -5244,7 +5240,7 @@ size_t fill_textconv(struct userdiff_driver *driver,
 
 	if (driver->textconv_cache && df->oid_valid) {
 		*outbuf = notes_cache_get(driver->textconv_cache,
-					  df->oid.hash,
+					  &df->oid,
 					  &size);
 		if (*outbuf)
 			return size;
@@ -5256,7 +5252,7 @@ size_t fill_textconv(struct userdiff_driver *driver,
 
 	if (driver->textconv_cache && df->oid_valid) {
 		/* ignore errors, as we might be in a readonly repository */
-		notes_cache_put(driver->textconv_cache, df->oid.hash, *outbuf,
+		notes_cache_put(driver->textconv_cache, &df->oid, *outbuf,
 				size);
 		/*
 		 * we could save up changes and flush them all at the end,

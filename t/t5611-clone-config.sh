@@ -19,6 +19,14 @@ test_expect_success 'clone -c can set multi-keys' '
 	test_cmp expect actual
 '
 
+test_expect_success 'clone -c can set multi-keys, including some empty' '
+	rm -rf child &&
+	git clone -c credential.helper= -c credential.helper=hi . child &&
+	printf "%s\n" "" hi >expect &&
+	git --git-dir=child/.git config --get-all credential.helper >actual &&
+	test_cmp expect actual
+'
+
 test_expect_success 'clone -c without a value is boolean true' '
 	rm -rf child &&
 	git clone -c core.foo . child &&
@@ -35,6 +43,30 @@ test_expect_success 'clone -c config is available during clone' '
 	git clone -c core.autocrlf . child &&
 	printf "content\\r\\n" >expect &&
 	test_cmp expect child/file
+'
+
+test_expect_success 'clone -c remote.origin.fetch=<refspec> works' '
+	rm -rf child &&
+	git update-ref refs/grab/it refs/heads/master &&
+	git update-ref refs/keep/out refs/heads/master &&
+	git clone -c "remote.origin.fetch=+refs/grab/*:refs/grab/*" . child &&
+	(
+		cd child &&
+		git for-each-ref --format="%(refname)" refs/grab/ >../actual
+	) &&
+	echo refs/grab/it >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'git -c remote.origin.fetch=<refspec> clone works' '
+	rm -rf child &&
+	git -c "remote.origin.fetch=+refs/grab/*:refs/grab/*" clone . child &&
+	(
+		cd child &&
+		git for-each-ref --format="%(refname)" refs/grab/ >../actual
+	) &&
+	echo refs/grab/it >expect &&
+	test_cmp expect actual
 '
 
 # Tests for the hidden file attribute on windows

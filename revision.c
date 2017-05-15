@@ -19,6 +19,7 @@
 #include "dir.h"
 #include "cache-tree.h"
 #include "bisect.h"
+#include "worktree.h"
 
 volatile show_early_output_fn_t show_early_output;
 
@@ -59,10 +60,10 @@ static void mark_tree_contents_uninteresting(struct tree *tree)
 	while (tree_entry(&desc, &entry)) {
 		switch (object_type(entry.mode)) {
 		case OBJ_TREE:
-			mark_tree_uninteresting(lookup_tree(entry.oid->hash));
+			mark_tree_uninteresting(lookup_tree(entry.oid));
 			break;
 		case OBJ_BLOB:
-			mark_blob_uninteresting(lookup_blob(entry.oid->hash));
+			mark_blob_uninteresting(lookup_blob(entry.oid));
 			break;
 		default:
 			/* Subproject commit - not in this repository */
@@ -177,23 +178,23 @@ void add_pending_object(struct rev_info *revs,
 
 void add_head_to_pending(struct rev_info *revs)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 	struct object *obj;
-	if (get_sha1("HEAD", sha1))
+	if (get_oid("HEAD", &oid))
 		return;
-	obj = parse_object(sha1);
+	obj = parse_object(&oid);
 	if (!obj)
 		return;
 	add_pending_object(revs, obj, "HEAD");
 }
 
 static struct object *get_reference(struct rev_info *revs, const char *name,
-				    const unsigned char *sha1,
+				    const struct object_id *oid,
 				    unsigned int flags)
 {
 	struct object *object;
 
-	object = parse_object(sha1);
+	object = parse_object(oid);
 	if (!object) {
 		if (revs->ignore_missing)
 			return object;
@@ -203,10 +204,10 @@ static struct object *get_reference(struct rev_info *revs, const char *name,
 	return object;
 }
 
-void add_pending_sha1(struct rev_info *revs, const char *name,
-		      const unsigned char *sha1, unsigned int flags)
+void add_pending_oid(struct rev_info *revs, const char *name,
+		      const struct object_id *oid, unsigned int flags)
 {
-	struct object *object = get_reference(revs, name, sha1, flags);
+	struct object *object = get_reference(revs, name, oid, flags);
 	add_pending_object(revs, object, name);
 }
 
@@ -228,7 +229,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 			add_pending_object(revs, object, tag->tag);
 		if (!tag->tagged)
 			die("bad tag");
-		object = parse_object(tag->tagged->oid.hash);
+		object = parse_object(&tag->tagged->oid);
 		if (!object) {
 			if (flags & UNINTERESTING)
 				return NULL;
@@ -884,7 +885,7 @@ static void cherry_pick_list(struct commit_list *list, struct rev_info *revs)
 /* How many extra uninteresting commits we want to see.. */
 #define SLOP 5
 
-static int still_interesting(struct commit_list *src, unsigned long date, int slop,
+static int still_interesting(struct commit_list *src, timestamp_t date, int slop,
 			     struct commit **interesting_cache)
 {
 	/*
@@ -1018,7 +1019,7 @@ static void limit_left_right(struct commit_list *list, struct rev_info *revs)
 static int limit_list(struct rev_info *revs)
 {
 	int slop = SLOP;
-	unsigned long date = ~0ul;
+	timestamp_t date = TIME_MAX;
 	struct commit_list *list = revs->commits;
 	struct commit_list *newlist = NULL;
 	struct commit_list **p = &newlist;
@@ -1133,6 +1134,7 @@ struct all_refs_cb {
 	int warned_bad_reflog;
 	struct rev_info *all_revs;
 	const char *name_for_errormsg;
+	struct ref_store *refs;
 };
 
 int ref_excluded(struct string_list *ref_excludes, const char *path)
@@ -1157,9 +1159,9 @@ static int handle_one_ref(const char *path, const struct object_id *oid,
 	if (ref_excluded(cb->all_revs->ref_excludes, path))
 	    return 0;
 
-	object = get_reference(cb->all_revs, path, oid->hash, cb->all_flags);
+	object = get_reference(cb->all_revs, path, oid, cb->all_flags);
 	add_rev_cmdline(cb->all_revs, object, path, REV_CMD_REF, cb->all_flags);
-	add_pending_sha1(cb->all_revs, path, oid->hash, cb->all_flags);
+	add_pending_oid(cb->all_revs, path, oid, cb->all_flags);
 	return 0;
 }
 
@@ -1168,6 +1170,7 @@ static void init_all_refs_cb(struct all_refs_cb *cb, struct rev_info *revs,
 {
 	cb->all_revs = revs;
 	cb->all_flags = flags;
+	cb->refs = NULL;
 }
 
 void clear_ref_exclusion(struct string_list **ref_excludes_p)
@@ -1188,19 +1191,26 @@ void add_ref_exclusion(struct string_list **ref_excludes_p, const char *exclude)
 	string_list_append(*ref_excludes_p, exclude);
 }
 
-static void handle_refs(const char *submodule, struct rev_info *revs, unsigned flags,
-		int (*for_each)(const char *, each_ref_fn, void *))
+static void handle_refs(struct ref_store *refs,
+			struct rev_info *revs, unsigned flags,
+			int (*for_each)(struct ref_store *, each_ref_fn, void *))
 {
 	struct all_refs_cb cb;
+
+	if (!refs) {
+		/* this could happen with uninitialized submodules */
+		return;
+	}
+
 	init_all_refs_cb(&cb, revs, flags);
-	for_each(submodule, handle_one_ref, &cb);
+	for_each(refs, handle_one_ref, &cb);
 }
 
 static void handle_one_reflog_commit(struct object_id *oid, void *cb_data)
 {
 	struct all_refs_cb *cb = cb_data;
 	if (!is_null_oid(oid)) {
-		struct object *o = parse_object(oid->hash);
+		struct object *o = parse_object(oid);
 		if (o) {
 			o->flags |= cb->all_flags;
 			/* ??? CMDLINEFLAGS ??? */
@@ -1215,7 +1225,7 @@ static void handle_one_reflog_commit(struct object_id *oid, void *cb_data)
 }
 
 static int handle_one_reflog_ent(struct object_id *ooid, struct object_id *noid,
-		const char *email, unsigned long timestamp, int tz,
+		const char *email, timestamp_t timestamp, int tz,
 		const char *message, void *cb_data)
 {
 	handle_one_reflog_commit(ooid, cb_data);
@@ -1229,8 +1239,28 @@ static int handle_one_reflog(const char *path, const struct object_id *oid,
 	struct all_refs_cb *cb = cb_data;
 	cb->warned_bad_reflog = 0;
 	cb->name_for_errormsg = path;
-	for_each_reflog_ent(path, handle_one_reflog_ent, cb_data);
+	refs_for_each_reflog_ent(cb->refs, path,
+				 handle_one_reflog_ent, cb_data);
 	return 0;
+}
+
+static void add_other_reflogs_to_pending(struct all_refs_cb *cb)
+{
+	struct worktree **worktrees, **p;
+
+	worktrees = get_worktrees(0);
+	for (p = worktrees; *p; p++) {
+		struct worktree *wt = *p;
+
+		if (wt->is_current)
+			continue;
+
+		cb->refs = get_worktree_ref_store(wt);
+		refs_for_each_reflog(cb->refs,
+				     handle_one_reflog,
+				     cb);
+	}
+	free_worktrees(worktrees);
 }
 
 void add_reflogs_to_pending(struct rev_info *revs, unsigned flags)
@@ -1239,7 +1269,11 @@ void add_reflogs_to_pending(struct rev_info *revs, unsigned flags)
 
 	cb.all_revs = revs;
 	cb.all_flags = flags;
+	cb.refs = get_main_ref_store();
 	for_each_reflog(handle_one_reflog, &cb);
+
+	if (!revs->single_worktree)
+		add_other_reflogs_to_pending(&cb);
 }
 
 static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
@@ -1249,7 +1283,7 @@ static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
 	int i;
 
 	if (it->entry_count >= 0) {
-		struct tree *tree = lookup_tree(it->sha1);
+		struct tree *tree = lookup_tree(&it->oid);
 		add_pending_object_with_path(revs, &tree->object, "",
 					     040000, path->buf);
 	}
@@ -1263,36 +1297,62 @@ static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
 
 }
 
-void add_index_objects_to_pending(struct rev_info *revs, unsigned flags)
+static void do_add_index_objects_to_pending(struct rev_info *revs,
+					    struct index_state *istate)
 {
 	int i;
 
-	read_cache();
-	for (i = 0; i < active_nr; i++) {
-		struct cache_entry *ce = active_cache[i];
+	for (i = 0; i < istate->cache_nr; i++) {
+		struct cache_entry *ce = istate->cache[i];
 		struct blob *blob;
 
 		if (S_ISGITLINK(ce->ce_mode))
 			continue;
 
-		blob = lookup_blob(ce->oid.hash);
+		blob = lookup_blob(&ce->oid);
 		if (!blob)
 			die("unable to add index blob to traversal");
 		add_pending_object_with_path(revs, &blob->object, "",
 					     ce->ce_mode, ce->name);
 	}
 
-	if (active_cache_tree) {
+	if (istate->cache_tree) {
 		struct strbuf path = STRBUF_INIT;
-		add_cache_tree(active_cache_tree, revs, &path);
+		add_cache_tree(istate->cache_tree, revs, &path);
 		strbuf_release(&path);
 	}
+}
+
+void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
+{
+	struct worktree **worktrees, **p;
+
+	read_cache();
+	do_add_index_objects_to_pending(revs, &the_index);
+
+	if (revs->single_worktree)
+		return;
+
+	worktrees = get_worktrees(0);
+	for (p = worktrees; *p; p++) {
+		struct worktree *wt = *p;
+		struct index_state istate = { NULL };
+
+		if (wt->is_current)
+			continue; /* current index already taken care of */
+
+		if (read_index_from(&istate,
+				    worktree_git_path(wt, "index")) > 0)
+			do_add_index_objects_to_pending(revs, &istate);
+		discard_index(&istate);
+	}
+	free_worktrees(worktrees);
 }
 
 static int add_parents_only(struct rev_info *revs, const char *arg_, int flags,
 			    int exclude_parent)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 	struct object *it;
 	struct commit *commit;
 	struct commit_list *parents;
@@ -1303,17 +1363,17 @@ static int add_parents_only(struct rev_info *revs, const char *arg_, int flags,
 		flags ^= UNINTERESTING | BOTTOM;
 		arg++;
 	}
-	if (get_sha1_committish(arg, sha1))
+	if (get_sha1_committish(arg, oid.hash))
 		return 0;
 	while (1) {
-		it = get_reference(revs, arg, sha1, 0);
+		it = get_reference(revs, arg, &oid, 0);
 		if (!it && revs->ignore_missing)
 			return 0;
 		if (it->type != OBJ_TAG)
 			break;
 		if (!((struct tag*)it)->tagged)
 			return 0;
-		hashcpy(sha1, ((struct tag*)it)->tagged->oid.hash);
+		oidcpy(&oid, &((struct tag*)it)->tagged->oid);
 	}
 	if (it->type != OBJ_COMMIT)
 		return 0;
@@ -1389,16 +1449,16 @@ static void prepare_show_merge(struct rev_info *revs)
 {
 	struct commit_list *bases;
 	struct commit *head, *other;
-	unsigned char sha1[20];
+	struct object_id oid;
 	const char **prune = NULL;
 	int i, prune_num = 1; /* counting terminating NULL */
 
-	if (get_sha1("HEAD", sha1))
+	if (get_oid("HEAD", &oid))
 		die("--merge without HEAD?");
-	head = lookup_commit_or_die(sha1, "HEAD");
-	if (get_sha1("MERGE_HEAD", sha1))
+	head = lookup_commit_or_die(&oid, "HEAD");
+	if (get_oid("MERGE_HEAD", &oid))
 		die("--merge without MERGE_HEAD?");
-	other = lookup_commit_or_die(sha1, "MERGE_HEAD");
+	other = lookup_commit_or_die(&oid, "MERGE_HEAD");
 	add_pending_object(revs, &head->object, "HEAD");
 	add_pending_object(revs, &other->object, "MERGE_HEAD");
 	bases = get_merge_bases(head, other);
@@ -1434,7 +1494,7 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 	struct object_context oc;
 	char *dotdot;
 	struct object *object;
-	unsigned char sha1[20];
+	struct object_id oid;
 	int local_flags;
 	const char *arg = arg_;
 	int cant_be_filename = revarg_opt & REVARG_CANNOT_BE_FILENAME;
@@ -1444,7 +1504,7 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 
 	dotdot = strstr(arg, "..");
 	if (dotdot) {
-		unsigned char from_sha1[20];
+		struct object_id from_oid;
 		const char *next = dotdot + 2;
 		const char *this = arg;
 		int symmetric = *next == '.';
@@ -1470,8 +1530,8 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 				return -1;
 			}
 		}
-		if (!get_sha1_committish(this, from_sha1) &&
-		    !get_sha1_committish(next, sha1)) {
+		if (!get_sha1_committish(this, from_oid.hash) &&
+		    !get_sha1_committish(next, oid.hash)) {
 			struct object *a_obj, *b_obj;
 
 			if (!cant_be_filename) {
@@ -1479,8 +1539,8 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 				verify_non_filename(revs->prefix, arg);
 			}
 
-			a_obj = parse_object(from_sha1);
-			b_obj = parse_object(sha1);
+			a_obj = parse_object(&from_oid);
+			b_obj = parse_object(&oid);
 			if (!a_obj || !b_obj) {
 			missing:
 				if (revs->ignore_missing)
@@ -1500,10 +1560,10 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 
 				a = (a_obj->type == OBJ_COMMIT
 				     ? (struct commit *)a_obj
-				     : lookup_commit_reference(a_obj->oid.hash));
+				     : lookup_commit_reference(&a_obj->oid));
 				b = (b_obj->type == OBJ_COMMIT
 				     ? (struct commit *)b_obj
-				     : lookup_commit_reference(b_obj->oid.hash));
+				     : lookup_commit_reference(&b_obj->oid));
 				if (!a || !b)
 					goto missing;
 				exclude = get_merge_bases(a, b);
@@ -1568,11 +1628,11 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 	if (revarg_opt & REVARG_COMMITTISH)
 		get_sha1_flags = GET_SHA1_COMMITTISH;
 
-	if (get_sha1_with_context(arg, get_sha1_flags, sha1, &oc))
+	if (get_sha1_with_context(arg, get_sha1_flags, oid.hash, &oc))
 		return revs->ignore_missing ? 0 : -1;
 	if (!cant_be_filename)
 		verify_non_filename(revs->prefix, arg);
-	object = get_reference(revs, arg, sha1, flags ^ local_flags);
+	object = get_reference(revs, arg, &oid, flags ^ local_flags);
 	add_rev_cmdline(revs, object, arg_, REV_CMD_REV, flags ^ local_flags);
 	add_pending_object_with_mode(revs, object, arg, oc.mode);
 	return 0;
@@ -2016,8 +2076,6 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->ignore_missing = 1;
 	} else {
 		int opts = diff_opt_parse(&revs->diffopt, argv, argc, revs->prefix);
-		if (!opts)
-			unkv[(*unkc)++] = arg;
 		return opts;
 	}
 	if (revs->graph && revs->track_linear)
@@ -2040,23 +2098,25 @@ void parse_revision_opt(struct rev_info *revs, struct parse_opt_ctx_t *ctx,
 	ctx->argc -= n;
 }
 
-static int for_each_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data, const char *term) {
+static int for_each_bisect_ref(struct ref_store *refs, each_ref_fn fn,
+			       void *cb_data, const char *term)
+{
 	struct strbuf bisect_refs = STRBUF_INIT;
 	int status;
 	strbuf_addf(&bisect_refs, "refs/bisect/%s", term);
-	status = for_each_ref_in_submodule(submodule, bisect_refs.buf, fn, cb_data);
+	status = refs_for_each_ref_in(refs, bisect_refs.buf, fn, cb_data);
 	strbuf_release(&bisect_refs);
 	return status;
 }
 
-static int for_each_bad_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
+static int for_each_bad_bisect_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
 {
-	return for_each_bisect_ref(submodule, fn, cb_data, term_bad);
+	return for_each_bisect_ref(refs, fn, cb_data, term_bad);
 }
 
-static int for_each_good_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
+static int for_each_good_bisect_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
 {
-	return for_each_bisect_ref(submodule, fn, cb_data, term_good);
+	return for_each_bisect_ref(refs, fn, cb_data, term_good);
 }
 
 static int handle_revision_pseudo_opt(const char *submodule,
@@ -2065,7 +2125,20 @@ static int handle_revision_pseudo_opt(const char *submodule,
 {
 	const char *arg = argv[0];
 	const char *optarg;
+	struct ref_store *refs;
 	int argcount;
+
+	if (submodule) {
+		/*
+		 * We need some something like get_submodule_worktrees()
+		 * before we can go through all worktrees of a submodule,
+		 * .e.g with adding all HEADs from --all, which is not
+		 * supported right now, so stick to single worktree.
+		 */
+		assert(revs->single_worktree != 0);
+		refs = get_submodule_ref_store(submodule);
+	} else
+		refs = get_main_ref_store();
 
 	/*
 	 * NOTE!
@@ -2078,22 +2151,29 @@ static int handle_revision_pseudo_opt(const char *submodule,
 	 * register it in the list at the top of handle_revision_opt.
 	 */
 	if (!strcmp(arg, "--all")) {
-		handle_refs(submodule, revs, *flags, for_each_ref_submodule);
-		handle_refs(submodule, revs, *flags, head_ref_submodule);
+		handle_refs(refs, revs, *flags, refs_for_each_ref);
+		handle_refs(refs, revs, *flags, refs_head_ref);
+		if (!revs->single_worktree) {
+			struct all_refs_cb cb;
+
+			init_all_refs_cb(&cb, revs, *flags);
+			other_head_refs(handle_one_ref, &cb);
+		}
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--branches")) {
-		handle_refs(submodule, revs, *flags, for_each_branch_ref_submodule);
+		handle_refs(refs, revs, *flags, refs_for_each_branch_ref);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--bisect")) {
 		read_bisect_terms(&term_bad, &term_good);
-		handle_refs(submodule, revs, *flags, for_each_bad_bisect_ref);
-		handle_refs(submodule, revs, *flags ^ (UNINTERESTING | BOTTOM), for_each_good_bisect_ref);
+		handle_refs(refs, revs, *flags, for_each_bad_bisect_ref);
+		handle_refs(refs, revs, *flags ^ (UNINTERESTING | BOTTOM),
+			    for_each_good_bisect_ref);
 		revs->bisect = 1;
 	} else if (!strcmp(arg, "--tags")) {
-		handle_refs(submodule, revs, *flags, for_each_tag_ref_submodule);
+		handle_refs(refs, revs, *flags, refs_for_each_tag_ref);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--remotes")) {
-		handle_refs(submodule, revs, *flags, for_each_remote_ref_submodule);
+		handle_refs(refs, revs, *flags, refs_for_each_remote_ref);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if ((argcount = parse_long_opt("glob", argv, &optarg))) {
 		struct all_refs_cb cb;
@@ -2140,6 +2220,8 @@ static int handle_revision_pseudo_opt(const char *submodule,
 			return error("invalid argument to --no-walk");
 	} else if (!strcmp(arg, "--do-walk")) {
 		revs->no_walk = 0;
+	} else if (!strcmp(arg, "--single-worktree")) {
+		revs->single_worktree = 1;
 	} else {
 		return 0;
 	}
@@ -2205,6 +2287,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 	read_from_stdin = 0;
 	for (left = i = 1; i < argc; i++) {
 		const char *arg = argv[i];
+		int maybe_opt = 0;
 		if (*arg == '-') {
 			int opts;
 
@@ -2234,11 +2317,17 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 			}
 			if (opts < 0)
 				exit(128);
-			continue;
+			maybe_opt = 1;
 		}
 
 
-		if (handle_revision_arg(arg, revs, flags, revarg_opt)) {
+		if (!handle_revision_arg(arg, revs, flags, revarg_opt))
+			got_rev_arg = 1;
+		else if (maybe_opt) {
+			/* arg is an unknown option */
+			argv[left++] = arg;
+			continue;
+		} else {
 			int j;
 			if (seen_dashdash || *arg == '^')
 				die("bad revision '%s'", arg);
@@ -2255,8 +2344,6 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 			append_prune_data(&prune_data, argv + i);
 			break;
 		}
-		else
-			got_rev_arg = 1;
 	}
 
 	if (prune_data.nr) {
@@ -2287,12 +2374,12 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 	if (revs->show_merge)
 		prepare_show_merge(revs);
 	if (revs->def && !revs->pending.nr && !got_rev_arg) {
-		unsigned char sha1[20];
+		struct object_id oid;
 		struct object *object;
 		struct object_context oc;
-		if (get_sha1_with_context(revs->def, 0, sha1, &oc))
+		if (get_sha1_with_context(revs->def, 0, oid.hash, &oc))
 			diagnose_missing_default(revs->def);
-		object = get_reference(revs, revs->def, sha1, 0);
+		object = get_reference(revs, revs->def, &oid, 0);
 		add_pending_object_with_mode(revs, object, revs->def, oc.mode);
 	}
 

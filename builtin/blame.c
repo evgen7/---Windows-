@@ -563,7 +563,7 @@ static struct origin *find_origin(struct scoreboard *sb,
 	diff_setup_done(&diff_opts);
 
 	if (is_null_oid(&origin->commit->object.oid))
-		do_diff_cache(parent->tree->object.oid.hash, &diff_opts);
+		do_diff_cache(&parent->tree->object.oid, &diff_opts);
 	else
 		diff_tree_sha1(parent->tree->object.oid.hash,
 			       origin->commit->tree->object.oid.hash,
@@ -633,7 +633,7 @@ static struct origin *find_rename(struct scoreboard *sb,
 	diff_setup_done(&diff_opts);
 
 	if (is_null_oid(&origin->commit->object.oid))
-		do_diff_cache(parent->tree->object.oid.hash, &diff_opts);
+		do_diff_cache(&parent->tree->object.oid, &diff_opts);
 	else
 		diff_tree_sha1(parent->tree->object.oid.hash,
 			       origin->commit->tree->object.oid.hash,
@@ -1272,7 +1272,7 @@ static void find_copy_in_parent(struct scoreboard *sb,
 		DIFF_OPT_SET(&diff_opts, FIND_COPIES_HARDER);
 
 	if (is_null_oid(&target->commit->object.oid))
-		do_diff_cache(parent->tree->object.oid.hash, &diff_opts);
+		do_diff_cache(&parent->tree->object.oid, &diff_opts);
 	else
 		diff_tree_sha1(parent->tree->object.oid.hash,
 			       target->commit->tree->object.oid.hash,
@@ -1561,13 +1561,13 @@ finish:
 struct commit_info {
 	struct strbuf author;
 	struct strbuf author_mail;
-	unsigned long author_time;
+	timestamp_t author_time;
 	struct strbuf author_tz;
 
 	/* filled only when asked for details */
 	struct strbuf committer;
 	struct strbuf committer_mail;
-	unsigned long committer_time;
+	timestamp_t committer_time;
 	struct strbuf committer_tz;
 
 	struct strbuf summary;
@@ -1578,7 +1578,7 @@ struct commit_info {
  */
 static void get_ac_line(const char *inbuf, const char *what,
 	struct strbuf *name, struct strbuf *mail,
-	unsigned long *time, struct strbuf *tz)
+	timestamp_t *time, struct strbuf *tz)
 {
 	struct ident_split ident;
 	size_t len, maillen, namelen;
@@ -1727,11 +1727,11 @@ static int emit_one_suspect_detail(struct origin *suspect, int repeat)
 	get_commit_info(suspect->commit, &ci, 1);
 	printf("author %s\n", ci.author.buf);
 	printf("author-mail %s\n", ci.author_mail.buf);
-	printf("author-time %lu\n", ci.author_time);
+	printf("author-time %"PRItime"\n", ci.author_time);
 	printf("author-tz %s\n", ci.author_tz.buf);
 	printf("committer %s\n", ci.committer.buf);
 	printf("committer-mail %s\n", ci.committer_mail.buf);
-	printf("committer-time %lu\n", ci.committer_time);
+	printf("committer-time %"PRItime"\n", ci.committer_time);
 	printf("committer-tz %s\n", ci.committer_tz.buf);
 	printf("summary %s\n", ci.summary.buf);
 	if (suspect->commit->object.flags & UNINTERESTING)
@@ -1837,14 +1837,14 @@ static void assign_blame(struct scoreboard *sb, int opt)
 	stop_progress(&pi.progress);
 }
 
-static const char *format_time(unsigned long time, const char *tz_str,
+static const char *format_time(timestamp_t time, const char *tz_str,
 			       int show_raw_time)
 {
 	static struct strbuf time_buf = STRBUF_INIT;
 
 	strbuf_reset(&time_buf);
 	if (show_raw_time) {
-		strbuf_addf(&time_buf, "%lu %s", time, tz_str);
+		strbuf_addf(&time_buf, "%"PRItime" %s", time, tz_str);
 	}
 	else {
 		const char *time_str;
@@ -2071,10 +2071,12 @@ static int prepare_lines(struct scoreboard *sb)
  */
 static int read_ancestry(const char *graft_file)
 {
-	FILE *fp = fopen(graft_file, "r");
+	FILE *fp = fopen_or_warn(graft_file, "r");
 	struct strbuf buf = STRBUF_INIT;
+
 	if (!fp)
 		return -1;
+
 	while (!strbuf_getwholeline(&buf, fp, '\n')) {
 		/* The format is just "Commit Parent1 Parent2 ...\n" */
 		struct commit_graft *graft = read_graft_line(buf.buf, buf.len);
@@ -2253,7 +2255,7 @@ static struct commit_list **append_parent(struct commit_list **tail, const struc
 {
 	struct commit *parent;
 
-	parent = lookup_commit_reference(oid->hash);
+	parent = lookup_commit_reference(oid);
 	if (!parent)
 		die("no such commit %s", oid_to_hex(oid));
 	return &commit_list_insert(parent, tail)->next;
@@ -2461,7 +2463,7 @@ static const char *dwim_reverse_initial(struct scoreboard *sb)
 	 */
 	struct object *obj;
 	struct commit *head_commit;
-	unsigned char head_sha1[20];
+	struct object_id head_oid;
 
 	if (sb->revs->pending.nr != 1)
 		return NULL;
@@ -2473,9 +2475,9 @@ static const char *dwim_reverse_initial(struct scoreboard *sb)
 		return NULL;
 
 	/* Do we have HEAD? */
-	if (!resolve_ref_unsafe("HEAD", RESOLVE_REF_READING, head_sha1, NULL))
+	if (!resolve_ref_unsafe("HEAD", RESOLVE_REF_READING, head_oid.hash, NULL))
 		return NULL;
-	head_commit = lookup_commit_reference_gently(head_sha1, 1);
+	head_commit = lookup_commit_reference_gently(&head_oid, 1);
 	if (!head_commit)
 		return NULL;
 

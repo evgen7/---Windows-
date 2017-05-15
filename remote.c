@@ -241,82 +241,6 @@ static void add_instead_of(struct rewrite *rewrite, const char *instead_of)
 	rewrite->instead_of_nr++;
 }
 
-static const char *skip_spaces(const char *s)
-{
-	while (isspace(*s))
-		s++;
-	return s;
-}
-
-static void read_remotes_file(struct remote *remote)
-{
-	struct strbuf buf = STRBUF_INIT;
-	FILE *f = fopen(git_path("remotes/%s", remote->name), "r");
-
-	if (!f)
-		return;
-	remote->configured_in_repo = 1;
-	remote->origin = REMOTE_REMOTES;
-	while (strbuf_getline(&buf, f) != EOF) {
-		const char *v;
-
-		strbuf_rtrim(&buf);
-
-		if (skip_prefix(buf.buf, "URL:", &v))
-			add_url_alias(remote, xstrdup(skip_spaces(v)));
-		else if (skip_prefix(buf.buf, "Push:", &v))
-			add_push_refspec(remote, xstrdup(skip_spaces(v)));
-		else if (skip_prefix(buf.buf, "Pull:", &v))
-			add_fetch_refspec(remote, xstrdup(skip_spaces(v)));
-	}
-	strbuf_release(&buf);
-	fclose(f);
-}
-
-static void read_branches_file(struct remote *remote)
-{
-	char *frag;
-	struct strbuf buf = STRBUF_INIT;
-	FILE *f = fopen(git_path("branches/%s", remote->name), "r");
-
-	if (!f)
-		return;
-
-	strbuf_getline_lf(&buf, f);
-	fclose(f);
-	strbuf_trim(&buf);
-	if (!buf.len) {
-		strbuf_release(&buf);
-		return;
-	}
-
-	remote->configured_in_repo = 1;
-	remote->origin = REMOTE_BRANCHES;
-
-	/*
-	 * The branches file would have URL and optionally
-	 * #branch specified.  The "master" (or specified) branch is
-	 * fetched and stored in the local branch matching the
-	 * remote name.
-	 */
-	frag = strchr(buf.buf, '#');
-	if (frag)
-		*(frag++) = '\0';
-	else
-		frag = "master";
-
-	add_url_alias(remote, strbuf_detach(&buf, NULL));
-	add_fetch_refspec(remote, xstrfmt("refs/heads/%s:refs/heads/%s",
-					  frag, remote->name));
-
-	/*
-	 * Cogito compatible push: push current HEAD to remote #branch
-	 * (master if missing)
-	 */
-	add_push_refspec(remote, xstrfmt("HEAD:refs/heads/%s", frag));
-	remote->fetch_tags = 1; /* always auto-follow */
-}
-
 static int handle_config(const char *key, const char *value, void *cb)
 {
 	const char *name;
@@ -645,13 +569,6 @@ void free_refspec(int nr_refspec, struct refspec *refspec)
 	free(refspec);
 }
 
-static int valid_remote_nick(const char *name)
-{
-	if (!name[0] || is_dot_or_dotdot(name))
-		return 0;
-	return !strchr(name, '/'); /* no slash */
-}
-
 const char *remote_for_branch(struct branch *branch, int *explicit)
 {
 	if (branch && branch->remote_name) {
@@ -693,12 +610,6 @@ static struct remote *remote_get_1(const char *name,
 		name = get_default(current_branch, &name_given);
 
 	ret = make_remote(name, 0);
-	if (valid_remote_nick(name) && have_git_dir()) {
-		if (!valid_remote(ret))
-			read_remotes_file(ret);
-		if (!valid_remote(ret))
-			read_branches_file(ret);
-	}
 	if (name_given && !valid_remote(ret))
 		add_url_alias(ret, name);
 	if (!valid_remote(ret))
@@ -1191,9 +1102,10 @@ static int match_explicit(struct ref *src, struct ref *dst,
 		else if (is_null_oid(&matched_src->new_oid))
 			error("unable to delete '%s': remote ref does not exist",
 			      dst_value);
-		else if ((dst_guess = guess_ref(dst_value, matched_src)))
+		else if ((dst_guess = guess_ref(dst_value, matched_src))) {
 			matched_dst = make_linked_ref(dst_guess, dst_tail);
-		else
+			free(dst_guess);
+		} else
 			error("unable to push to unqualified destination: %s\n"
 			      "The destination refspec neither matches an "
 			      "existing ref on the remote nor\n"
@@ -1296,7 +1208,7 @@ static void add_to_tips(struct tips *tips, const struct object_id *oid)
 
 	if (is_null_oid(oid))
 		return;
-	commit = lookup_commit_reference_gently(oid->hash, 1);
+	commit = lookup_commit_reference_gently(oid, 1);
 	if (!commit || (commit->object.flags & TMP_MARK))
 		return;
 	commit->object.flags |= TMP_MARK;
@@ -1358,7 +1270,8 @@ static void add_missing_tags(struct ref *src, struct ref **dst, struct ref ***ds
 
 			if (is_null_oid(&ref->new_oid))
 				continue;
-			commit = lookup_commit_reference_gently(ref->new_oid.hash, 1);
+			commit = lookup_commit_reference_gently(&ref->new_oid,
+								1);
 			if (!commit)
 				/* not pushing a commit, which is not an error */
 				continue;
@@ -1585,8 +1498,8 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 				reject_reason = REF_STATUS_REJECT_ALREADY_EXISTS;
 			else if (!has_object_file(&ref->old_oid))
 				reject_reason = REF_STATUS_REJECT_FETCH_FIRST;
-			else if (!lookup_commit_reference_gently(ref->old_oid.hash, 1) ||
-				 !lookup_commit_reference_gently(ref->new_oid.hash, 1))
+			else if (!lookup_commit_reference_gently(&ref->old_oid, 1) ||
+				 !lookup_commit_reference_gently(&ref->new_oid, 1))
 				reject_reason = REF_STATUS_REJECT_NEEDS_FORCE;
 			else if (!ref_newer(&ref->new_oid, &ref->old_oid))
 				reject_reason = REF_STATUS_REJECT_NONFASTFORWARD;
@@ -1953,12 +1866,12 @@ int ref_newer(const struct object_id *new_oid, const struct object_id *old_oid)
 	 * Both new and old must be commit-ish and new is descendant of
 	 * old.  Otherwise we require --force.
 	 */
-	o = deref_tag(parse_object(old_oid->hash), NULL, 0);
+	o = deref_tag(parse_object(old_oid), NULL, 0);
 	if (!o || o->type != OBJ_COMMIT)
 		return 0;
 	old = (struct commit *) o;
 
-	o = deref_tag(parse_object(new_oid->hash), NULL, 0);
+	o = deref_tag(parse_object(new_oid), NULL, 0);
 	if (!o || o->type != OBJ_COMMIT)
 		return 0;
 	new = (struct commit *) o;
@@ -2009,13 +1922,13 @@ int stat_tracking_info(struct branch *branch, int *num_ours, int *num_theirs,
 	/* Cannot stat if what we used to build on no longer exists */
 	if (read_ref(base, oid.hash))
 		return -1;
-	theirs = lookup_commit_reference(oid.hash);
+	theirs = lookup_commit_reference(&oid);
 	if (!theirs)
 		return -1;
 
 	if (read_ref(branch->refname, oid.hash))
 		return -1;
-	ours = lookup_commit_reference(oid.hash);
+	ours = lookup_commit_reference(&oid);
 	if (!ours)
 		return -1;
 

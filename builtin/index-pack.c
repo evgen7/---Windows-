@@ -13,7 +13,7 @@
 #include "thread-utils.h"
 
 static const char index_pack_usage[] =
-"git index-pack [-v] [-o <index-file>] [--keep | --keep=<msg>] [--verify] [--strict] (<pack-file> | --stdin [--fix-thin] [<pack-file>])";
+"git index-pack [-v] [-o <index-file>] [--keep | --keep=<msg>] [--verify] [--strict] [--clone-bundle] (<pack-file> | --stdin [--fix-thin] [<pack-file>])";
 
 struct object_entry {
 	struct pack_idx_entry idx;
@@ -747,13 +747,13 @@ static int compare_objects(const unsigned char *buf, unsigned long size,
 		ssize_t len = read_istream(data->st, data->buf, size);
 		if (len == 0)
 			die(_("SHA1 COLLISION FOUND WITH %s !"),
-			    sha1_to_hex(data->entry->idx.sha1));
+			    oid_to_hex(&data->entry->idx.oid));
 		if (len < 0)
 			die(_("unable to read %s"),
-			    sha1_to_hex(data->entry->idx.sha1));
+			    oid_to_hex(&data->entry->idx.oid));
 		if (memcmp(buf, data->buf, len))
 			die(_("SHA1 COLLISION FOUND WITH %s !"),
-			    sha1_to_hex(data->entry->idx.sha1));
+			    oid_to_hex(&data->entry->idx.oid));
 		size -= len;
 		buf += len;
 	}
@@ -771,12 +771,12 @@ static int check_collison(struct object_entry *entry)
 
 	memset(&data, 0, sizeof(data));
 	data.entry = entry;
-	data.st = open_istream(entry->idx.sha1, &type, &size, NULL);
+	data.st = open_istream(entry->idx.oid.hash, &type, &size, NULL);
 	if (!data.st)
 		return -1;
 	if (size != entry->size || type != entry->type)
 		die(_("SHA1 COLLISION FOUND WITH %s !"),
-		    sha1_to_hex(entry->idx.sha1));
+		    oid_to_hex(&entry->idx.oid));
 	unpack_data(entry, compare_objects, &data);
 	close_istream(data.st);
 	free(data.buf);
@@ -785,7 +785,7 @@ static int check_collison(struct object_entry *entry)
 
 static void sha1_object(const void *data, struct object_entry *obj_entry,
 			unsigned long size, enum object_type type,
-			const unsigned char *sha1)
+			const struct object_id *oid)
 {
 	void *new_data = NULL;
 	int collision_test_needed = 0;
@@ -794,7 +794,7 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 
 	if (startup_info->have_repository) {
 		read_lock();
-		collision_test_needed = has_sha1_file_with_flags(sha1, HAS_SHA1_QUICK);
+		collision_test_needed = has_sha1_file_with_flags(oid->hash, HAS_SHA1_QUICK);
 		read_unlock();
 	}
 
@@ -809,31 +809,31 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 		enum object_type has_type;
 		unsigned long has_size;
 		read_lock();
-		has_type = sha1_object_info(sha1, &has_size);
+		has_type = sha1_object_info(oid->hash, &has_size);
 		if (has_type < 0)
-			die(_("cannot read existing object info %s"), sha1_to_hex(sha1));
+			die(_("cannot read existing object info %s"), oid_to_hex(oid));
 		if (has_type != type || has_size != size)
-			die(_("SHA1 COLLISION FOUND WITH %s !"), sha1_to_hex(sha1));
-		has_data = read_sha1_file(sha1, &has_type, &has_size);
+			die(_("SHA1 COLLISION FOUND WITH %s !"), oid_to_hex(oid));
+		has_data = read_sha1_file(oid->hash, &has_type, &has_size);
 		read_unlock();
 		if (!data)
 			data = new_data = get_data_from_pack(obj_entry);
 		if (!has_data)
-			die(_("cannot read existing object %s"), sha1_to_hex(sha1));
+			die(_("cannot read existing object %s"), oid_to_hex(oid));
 		if (size != has_size || type != has_type ||
 		    memcmp(data, has_data, size) != 0)
-			die(_("SHA1 COLLISION FOUND WITH %s !"), sha1_to_hex(sha1));
+			die(_("SHA1 COLLISION FOUND WITH %s !"), oid_to_hex(oid));
 		free(has_data);
 	}
 
 	if (strict) {
 		read_lock();
 		if (type == OBJ_BLOB) {
-			struct blob *blob = lookup_blob(sha1);
+			struct blob *blob = lookup_blob(oid);
 			if (blob)
 				blob->object.flags |= FLAG_CHECKED;
 			else
-				die(_("invalid blob object %s"), sha1_to_hex(sha1));
+				die(_("invalid blob object %s"), oid_to_hex(oid));
 		} else {
 			struct object *obj;
 			int eaten;
@@ -845,7 +845,8 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 			 * we do not need to free the memory here, as the
 			 * buf is deleted by the caller.
 			 */
-			obj = parse_object_buffer(sha1, type, size, buf, &eaten);
+			obj = parse_object_buffer(oid, type, size, buf,
+						  &eaten);
 			if (!obj)
 				die(_("invalid %s"), typename(type));
 			if (do_fsck_object &&
@@ -957,9 +958,10 @@ static void resolve_delta(struct object_entry *delta_obj,
 	if (!result->data)
 		bad_object(delta_obj->idx.offset, _("failed to apply delta"));
 	hash_sha1_file(result->data, result->size,
-		       typename(delta_obj->real_type), delta_obj->idx.sha1);
+		       typename(delta_obj->real_type),
+		       delta_obj->idx.oid.hash);
 	sha1_object(result->data, NULL, result->size, delta_obj->real_type,
-		    delta_obj->idx.sha1);
+		    &delta_obj->idx.oid);
 	counter_lock();
 	nr_resolved_deltas++;
 	counter_unlock();
@@ -989,7 +991,7 @@ static struct base_data *find_unresolved_deltas_1(struct base_data *base,
 						  struct base_data *prev_base)
 {
 	if (base->ref_last == -1 && base->ofs_last == -1) {
-		find_ref_delta_children(base->obj->idx.sha1,
+		find_ref_delta_children(base->obj->idx.oid.hash,
 					&base->ref_first, &base->ref_last,
 					OBJ_REF_DELTA);
 
@@ -1130,7 +1132,8 @@ static void parse_pack_objects(unsigned char *sha1)
 	for (i = 0; i < nr_objects; i++) {
 		struct object_entry *obj = &objects[i];
 		void *data = unpack_raw_entry(obj, &ofs_delta->offset,
-					      ref_delta_sha1, obj->idx.sha1);
+					      ref_delta_sha1,
+					      obj->idx.oid.hash);
 		obj->real_type = obj->type;
 		if (obj->type == OBJ_OFS_DELTA) {
 			nr_ofs_deltas++;
@@ -1146,7 +1149,8 @@ static void parse_pack_objects(unsigned char *sha1)
 			obj->real_type = OBJ_BAD;
 			nr_delays++;
 		} else
-			sha1_object(data, NULL, obj->size, obj->type, obj->idx.sha1);
+			sha1_object(data, NULL, obj->size, obj->type,
+				    &obj->idx.oid);
 		free(data);
 		display_progress(progress, i+1);
 	}
@@ -1172,7 +1176,8 @@ static void parse_pack_objects(unsigned char *sha1)
 		if (obj->real_type != OBJ_BAD)
 			continue;
 		obj->real_type = obj->type;
-		sha1_object(NULL, obj, obj->size, obj->type, obj->idx.sha1);
+		sha1_object(NULL, obj, obj->size, obj->type,
+			    &obj->idx.oid);
 		nr_delays--;
 	}
 	if (nr_delays)
@@ -1330,7 +1335,7 @@ static struct object_entry *append_obj_to_pack(struct sha1file *f,
 	obj[1].idx.offset += write_compressed(f, buf, size);
 	obj[0].idx.crc32 = crc32_end(f);
 	sha1flush(f);
-	hashcpy(obj->idx.sha1, sha1);
+	hashcpy(obj->idx.oid.hash, sha1);
 	return obj;
 }
 
@@ -1383,9 +1388,40 @@ static void fix_unresolved_deltas(struct sha1file *f)
 	free(sorted_by_pos);
 }
 
+static void write_bundle_file(const char *filename, unsigned char *sha1,
+			      const char *packname)
+{
+	int fd = open(filename, O_CREAT|O_EXCL|O_WRONLY, 0600);
+	struct strbuf buf = STRBUF_INIT;
+	struct stat st;
+	int i;
+
+	if (stat(packname, &st))
+		die(_("cannot stat %s"), packname);
+
+	strbuf_addstr(&buf, "# v3 git bundle\n");
+	strbuf_addf(&buf, "size: %lu\n", (unsigned long) st.st_size);
+	strbuf_addf(&buf, "sha1: %s\n", sha1_to_hex(sha1));
+	strbuf_addf(&buf, "data: %s\n\n", packname);
+
+	for (i = 0; i < nr_objects; i++) {
+		struct object *o = lookup_object(objects[i].idx.oid.hash);
+		if (!o || (o->flags & FLAG_LINK))
+			continue;
+		strbuf_addf(&buf, "%s refs/objects/%s\n",
+			    sha1_to_hex(o->oid.hash),
+			    sha1_to_hex(o->oid.hash));
+	}
+	if (write_in_full(fd, buf.buf, buf.len) != buf.len)
+		die(_("cannot write bundle header for %s"), packname);
+	close(fd);
+	strbuf_release(&buf);
+}
+
 static void final(const char *final_pack_name, const char *curr_pack_name,
 		  const char *final_index_name, const char *curr_index_name,
 		  const char *keep_name, const char *keep_msg,
+		  const char *bundle_name, int foreign_nr,
 		  unsigned char *sha1)
 {
 	const char *report = "pack";
@@ -1462,6 +1498,13 @@ static void final(const char *final_pack_name, const char *curr_pack_name,
 			input_len -= err;
 			input_offset += err;
 		}
+	}
+
+	if (bundle_name) {
+		if (foreign_nr)
+			warning(_("not writing bundle for an incomplete pack"));
+		else
+			write_bundle_file(bundle_name, sha1, final_pack_name);
 	}
 
 	strbuf_release(&index_name);
@@ -1581,13 +1624,14 @@ static void show_pack_info(int stat_only)
 		if (stat_only)
 			continue;
 		printf("%s %-6s %lu %lu %"PRIuMAX,
-		       sha1_to_hex(obj->idx.sha1),
+		       oid_to_hex(&obj->idx.oid),
 		       typename(obj->real_type), obj->size,
 		       (unsigned long)(obj[1].idx.offset - obj->idx.offset),
 		       (uintmax_t)obj->idx.offset);
 		if (is_delta_type(obj->type)) {
 			struct object_entry *bobj = &objects[obj_stat[i].base_object_no];
-			printf(" %u %s", obj_stat[i].delta_depth, sha1_to_hex(bobj->idx.sha1));
+			printf(" %u %s", obj_stat[i].delta_depth,
+			       oid_to_hex(&bobj->idx.oid));
 		}
 		putchar('\n');
 	}
@@ -1622,12 +1666,14 @@ static const char *derive_filename(const char *pack_name, const char *suffix,
 
 int cmd_index_pack(int argc, const char **argv, const char *prefix)
 {
-	int i, fix_thin_pack = 0, verify = 0, stat_only = 0;
+	int i, fix_thin_pack = 0, verify = 0, stat_only = 0, clone_bundle = 0;
 	const char *curr_index;
 	const char *index_name = NULL, *pack_name = NULL;
 	const char *keep_name = NULL, *keep_msg = NULL;
-	struct strbuf index_name_buf = STRBUF_INIT,
-		      keep_name_buf = STRBUF_INIT;
+	const char *bundle_name = NULL;
+	struct strbuf index_name_buf = STRBUF_INIT;
+	struct strbuf keep_name_buf = STRBUF_INIT;
+	struct strbuf bundle_name_buf = STRBUF_INIT;
 	struct pack_idx_entry **idx_objects;
 	struct pack_idx_option opts;
 	unsigned char pack_sha1[20];
@@ -1672,6 +1718,10 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 				verify = 1;
 				show_stat = 1;
 				stat_only = 1;
+			} else if (!strcmp(arg, "--clone-bundle")) {
+				strict = 1;
+				clone_bundle = 1;
+				check_self_contained_and_connected = 1;
 			} else if (!strcmp(arg, "--keep")) {
 				keep_msg = "";
 			} else if (starts_with(arg, "--keep=")) {
@@ -1737,10 +1787,14 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 		die(_("--fix-thin cannot be used without --stdin"));
 	if (from_stdin && !startup_info->have_repository)
 		die(_("--stdin requires a git repository"));
+	if (clone_bundle && from_stdin)
+		die(_("--clone-bundle cannot be used with --stdin"));
 	if (!index_name && pack_name)
 		index_name = derive_filename(pack_name, ".idx", &index_name_buf);
 	if (keep_msg && !keep_name && pack_name)
 		keep_name = derive_filename(pack_name, ".keep", &keep_name_buf);
+	if (clone_bundle)
+		bundle_name = derive_filename(pack_name, ".bndl", &bundle_name_buf);
 
 	if (verify) {
 		if (!index_name)
@@ -1789,6 +1843,7 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 		final(pack_name, curr_pack,
 		      index_name, curr_index,
 		      keep_name, keep_msg,
+		      bundle_name, foreign_nr,
 		      pack_sha1);
 	else
 		close(input_fd);

@@ -1,5 +1,12 @@
+/*
+ * This is git.git's copy of gawk.git's regex engine. Please see that
+ * project for the latest version & to submit patches to this code,
+ * and git.git's compat/regex/README for information on how git's copy
+ * of this code is maintained.
+ */
+
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002-2006, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2002-2016 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -14,9 +21,8 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-   02110-1301 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
 static void re_string_construct_common (const char *str, int len,
 					re_string_t *pstr,
@@ -45,7 +51,7 @@ MAX(size_t a, size_t b)
    re_string_reconstruct before using the object.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_string_allocate (re_string_t *pstr, const char *str, int len, int init_len,
 		    RE_TRANSLATE_TYPE trans, int icase, const re_dfa_t *dfa)
 {
@@ -73,7 +79,7 @@ re_string_allocate (re_string_t *pstr, const char *str, int len, int init_len,
 /* This function allocate the buffers, and initialize them.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_string_construct (re_string_t *pstr, const char *str, int len,
 		     RE_TRANSLATE_TYPE trans, int icase, const re_dfa_t *dfa)
 {
@@ -136,7 +142,7 @@ re_string_construct (re_string_t *pstr, const char *str, int len,
 /* Helper functions for re_string_allocate, and re_string_construct.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_string_realloc_buffers (re_string_t *pstr, int new_buf_len)
 {
 #ifdef RE_ENABLE_I18N
@@ -246,13 +252,8 @@ build_wcs_buffer (re_string_t *pstr)
       else
 	p = (const char *) pstr->raw_mbs + pstr->raw_mbs_idx + byte_idx;
       mbclen = __mbrtowc (&wc, p, remain_len, &pstr->cur_state);
-      if (BE (mbclen == (size_t) -2, 0))
-	{
-	  /* The buffer doesn't have enough space, finish to build.  */
-	  pstr->cur_state = prev_st;
-	  break;
-	}
-      else if (BE (mbclen == (size_t) -1 || mbclen == 0, 0))
+      if (BE (mbclen == (size_t) -1 || mbclen == 0
+	      || (mbclen == (size_t) -2 && pstr->bufs_len >= pstr->len), 0))
 	{
 	  /* We treat these cases as a singlebyte character.  */
 	  mbclen = 1;
@@ -260,6 +261,12 @@ build_wcs_buffer (re_string_t *pstr)
 	  if (BE (pstr->trans != NULL, 0))
 	    wc = pstr->trans[wc];
 	  pstr->cur_state = prev_st;
+	}
+      else if (BE (mbclen == (size_t) -2, 0))
+	{
+	  /* The buffer doesn't have enough space, finish to build.  */
+	  pstr->cur_state = prev_st;
+	  break;
 	}
 
       /* Write wide character and padding.  */
@@ -276,7 +283,7 @@ build_wcs_buffer (re_string_t *pstr)
    but for REG_ICASE.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 build_wcs_upper_buffer (re_string_t *pstr)
 {
   mbstate_t prev_st;
@@ -326,7 +333,7 @@ build_wcs_upper_buffer (re_string_t *pstr)
 		  size_t mbcdlen;
 
 		  wcu = towupper (wc);
-		  mbcdlen = wcrtomb (buf, wcu, &prev_st);
+		  mbcdlen = __wcrtomb (buf, wcu, &prev_st);
 		  if (BE (mbclen == mbcdlen, 1))
 		    memcpy (pstr->mbs + byte_idx, buf, mbclen);
 		  else
@@ -343,9 +350,11 @@ build_wcs_upper_buffer (re_string_t *pstr)
 	      for (remain_len = byte_idx + mbclen - 1; byte_idx < remain_len ;)
 		pstr->wcs[byte_idx++] = WEOF;
 	    }
-	  else if (mbclen == (size_t) -1 || mbclen == 0)
+	  else if (mbclen == (size_t) -1 || mbclen == 0
+		   || (mbclen == (size_t) -2 && pstr->bufs_len >= pstr->len))
 	    {
-	      /* It is an invalid character or '\0'.  Just use the byte.  */
+	      /* It is an invalid character, an incomplete character
+		 at the end of the string, or '\0'.  Just use the byte.  */
 	      int ch = pstr->raw_mbs[pstr->raw_mbs_idx + byte_idx];
 	      pstr->mbs[byte_idx] = ch;
 	      /* And also cast it to wide char.  */
@@ -458,7 +467,8 @@ build_wcs_upper_buffer (re_string_t *pstr)
 	    for (remain_len = byte_idx + mbclen - 1; byte_idx < remain_len ;)
 	      pstr->wcs[byte_idx++] = WEOF;
 	  }
-	else if (mbclen == (size_t) -1 || mbclen == 0)
+	else if (mbclen == (size_t) -1 || mbclen == 0
+		 || (mbclen == (size_t) -2 && pstr->bufs_len >= pstr->len))
 	  {
 	    /* It is an invalid character or '\0'.  Just use the byte.  */
 	    int ch = pstr->raw_mbs[pstr->raw_mbs_idx + src_idx];
@@ -505,11 +515,11 @@ re_string_skip_chars (re_string_t *pstr, int new_raw_idx, wint_t *last_wc)
        rawbuf_idx < new_raw_idx;)
     {
       wchar_t wc2;
-      int remain_len = pstr->len - rawbuf_idx;
+      int remain_len = pstr->raw_len - rawbuf_idx;
       prev_st = pstr->cur_state;
       mbclen = __mbrtowc (&wc2, (const char *) pstr->raw_mbs + rawbuf_idx,
 			  remain_len, &pstr->cur_state);
-      if (BE (mbclen == (size_t) -2 || mbclen == (size_t) -1 || mbclen == 0, 0))
+      if (BE ((ssize_t) mbclen <= 0, 0))
 	{
 	  /* We treat these cases as a single byte character.  */
 	  if (mbclen == 0 || remain_len == 0)
@@ -577,7 +587,7 @@ re_string_translate_buffer (re_string_t *pstr)
    convert to upper case in case of REG_ICASE, apply translation.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_string_reconstruct (re_string_t *pstr, int idx, int eflags)
 {
   int offset = idx - pstr->raw_mbs_idx;
@@ -685,7 +695,7 @@ re_string_reconstruct (re_string_t *pstr, int idx, int eflags)
 			 pstr->valid_len - offset);
 	      pstr->valid_len -= offset;
 	      pstr->valid_raw_len -= offset;
-#if DEBUG
+#if defined DEBUG && DEBUG
 	      assert (pstr->valid_len > 0);
 #endif
 	    }
@@ -741,16 +751,18 @@ re_string_reconstruct (re_string_t *pstr, int idx, int eflags)
 			  unsigned char buf[6];
 			  size_t mbclen;
 
+			  const unsigned char *pp = p;
 			  if (BE (pstr->trans != NULL, 0))
 			    {
 			      int i = mlen < 6 ? mlen : 6;
 			      while (--i >= 0)
 				buf[i] = pstr->trans[p[i]];
+			      pp = buf;
 			    }
 			  /* XXX Don't use mbrtowc, we know which conversion
 			     to use (UTF-8 -> UCS4).  */
 			  memset (&cur_state, 0, sizeof (cur_state));
-			  mbclen = __mbrtowc (&wc2, (const char *) p, mlen,
+			  mbclen = __mbrtowc (&wc2, (const char *) pp, mlen,
 					      &cur_state);
 			  if (raw + offset - p <= mbclen
 			      && mbclen < (size_t) -2)
@@ -835,7 +847,7 @@ re_string_reconstruct (re_string_t *pstr, int idx, int eflags)
 }
 
 static unsigned char
-internal_function __attribute ((pure))
+internal_function __attribute__ ((__pure__))
 re_string_peek_byte_case (const re_string_t *pstr, int idx)
 {
   int ch, off;
@@ -871,7 +883,7 @@ re_string_peek_byte_case (const re_string_t *pstr, int idx)
 }
 
 static unsigned char
-internal_function __attribute ((pure))
+internal_function
 re_string_fetch_byte_case (re_string_t *pstr)
 {
   if (BE (!pstr->mbs_allocated, 1))
@@ -940,7 +952,7 @@ re_string_context_at (const re_string_t *input, int idx, int eflags)
       int wc_idx = idx;
       while(input->wcs[wc_idx] == WEOF)
 	{
-#ifdef DEBUG
+#if defined DEBUG && DEBUG
 	  /* It must not happen.  */
 	  assert (wc_idx >= 0);
 #endif
@@ -967,7 +979,7 @@ re_string_context_at (const re_string_t *input, int idx, int eflags)
 /* Functions for set operation.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_alloc (re_node_set *set, int size)
 {
   /*
@@ -989,7 +1001,7 @@ re_node_set_alloc (re_node_set *set, int size)
 }
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_init_1 (re_node_set *set, int elem)
 {
   set->alloc = 1;
@@ -1005,7 +1017,7 @@ re_node_set_init_1 (re_node_set *set, int elem)
 }
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_init_2 (re_node_set *set, int elem1, int elem2)
 {
   set->alloc = 2;
@@ -1035,7 +1047,7 @@ re_node_set_init_2 (re_node_set *set, int elem1, int elem2)
 }
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_init_copy (re_node_set *dest, const re_node_set *src)
 {
   dest->nelem = src->nelem;
@@ -1060,7 +1072,7 @@ re_node_set_init_copy (re_node_set *dest, const re_node_set *src)
    Note: We assume dest->elems is NULL, when dest->alloc is 0.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_add_intersect (re_node_set *dest, const re_node_set *src1,
 			   const re_node_set *src2)
 {
@@ -1151,7 +1163,7 @@ re_node_set_add_intersect (re_node_set *dest, const re_node_set *src1,
    DEST. Return value indicate the error code or REG_NOERROR if succeeded.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_init_union (re_node_set *dest, const re_node_set *src1,
 			const re_node_set *src2)
 {
@@ -1204,7 +1216,7 @@ re_node_set_init_union (re_node_set *dest, const re_node_set *src1,
    DEST. Return value indicate the error code or REG_NOERROR if succeeded.  */
 
 static reg_errcode_t
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_merge (re_node_set *dest, const re_node_set *src)
 {
   int is, id, sbase, delta;
@@ -1284,10 +1296,10 @@ re_node_set_merge (re_node_set *dest, const re_node_set *src)
 
 /* Insert the new element ELEM to the re_node_set* SET.
    SET should not already have ELEM.
-   return -1 if an error has occurred, return 1 otherwise.  */
+   return -1 if an error is occured, return 1 otherwise.  */
 
 static int
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_insert (re_node_set *set, int elem)
 {
   int idx;
@@ -1341,10 +1353,10 @@ re_node_set_insert (re_node_set *set, int elem)
 
 /* Insert the new element ELEM to the re_node_set* SET.
    SET should not already have any element greater than or equal to ELEM.
-   Return -1 if an error has occurred, return 1 otherwise.  */
+   Return -1 if an error is occured, return 1 otherwise.  */
 
 static int
-internal_function
+internal_function __attribute_warn_unused_result__
 re_node_set_insert_last (re_node_set *set, int elem)
 {
   /* Realloc if we need.  */
@@ -1367,7 +1379,7 @@ re_node_set_insert_last (re_node_set *set, int elem)
    return 1 if SET1 and SET2 are equivalent, return 0 otherwise.  */
 
 static int
-internal_function __attribute ((pure))
+internal_function __attribute__ ((__pure__))
 re_node_set_compare (const re_node_set *set1, const re_node_set *set2)
 {
   int i;
@@ -1382,7 +1394,7 @@ re_node_set_compare (const re_node_set *set1, const re_node_set *set2)
 /* Return (idx + 1) if SET contains the element ELEM, return 0 otherwise.  */
 
 static int
-internal_function __attribute ((pure))
+internal_function __attribute__ ((__pure__))
 re_node_set_contains (const re_node_set *set, int elem)
 {
   unsigned int idx, right, mid;
@@ -1416,7 +1428,7 @@ re_node_set_remove_at (re_node_set *set, int idx)
 
 
 /* Add the token TOKEN to dfa->nodes, and return the index of the token.
-   Or return -1, if an error has occurred.  */
+   Or return -1, if an error will be occured.  */
 
 static int
 internal_function
@@ -1446,7 +1458,18 @@ re_dfa_add_node (re_dfa_t *dfa, re_token_t token)
       new_eclosures = re_realloc (dfa->eclosures, re_node_set, new_nodes_alloc);
       if (BE (new_nexts == NULL || new_indices == NULL
 	      || new_edests == NULL || new_eclosures == NULL, 0))
-	return -1;
+	{
+	   /* if any are not NULL, free them, avoid leaks */
+	   if (new_nexts != NULL)
+	      re_free(new_nexts);
+	   if (new_indices != NULL)
+	      re_free(new_indices);
+	   if (new_edests != NULL)
+	      re_free(new_edests);
+	   if (new_eclosures != NULL)
+	      re_free(new_eclosures);
+	   return -1;
+	}
       dfa->nexts = new_nexts;
       dfa->org_indices = new_indices;
       dfa->edests = new_edests;
@@ -1486,7 +1509,7 @@ calc_state_hash (const re_node_set *nodes, unsigned int context)
 	   optimization.  */
 
 static re_dfastate_t *
-internal_function
+internal_function __attribute_warn_unused_result__
 re_acquire_state (reg_errcode_t *err, const re_dfa_t *dfa,
 		  const re_node_set *nodes)
 {
@@ -1530,7 +1553,7 @@ re_acquire_state (reg_errcode_t *err, const re_dfa_t *dfa,
 	   optimization.  */
 
 static re_dfastate_t *
-internal_function
+internal_function __attribute_warn_unused_result__
 re_acquire_state_context (reg_errcode_t *err, const re_dfa_t *dfa,
 			  const re_node_set *nodes, unsigned int context)
 {
@@ -1567,6 +1590,7 @@ re_acquire_state_context (reg_errcode_t *err, const re_dfa_t *dfa,
    indicates the error code if failed.  */
 
 static reg_errcode_t
+__attribute_warn_unused_result__
 register_state (const re_dfa_t *dfa, re_dfastate_t *newstate,
 		unsigned int hash)
 {
@@ -1617,11 +1641,11 @@ free_state (re_dfastate_t *state)
   re_free (state);
 }
 
-/* Create the new state which is independ of contexts.
+/* Create the new state which is independent of contexts.
    Return the new state if succeeded, otherwise return NULL.  */
 
 static re_dfastate_t *
-internal_function
+internal_function __attribute_warn_unused_result__
 create_ci_newstate (const re_dfa_t *dfa, const re_node_set *nodes,
 		    unsigned int hash)
 {
@@ -1671,7 +1695,7 @@ create_ci_newstate (const re_dfa_t *dfa, const re_node_set *nodes,
    Return the new state if succeeded, otherwise return NULL.  */
 
 static re_dfastate_t *
-internal_function
+internal_function __attribute_warn_unused_result__
 create_cd_newstate (const re_dfa_t *dfa, const re_node_set *nodes,
 		    unsigned int context, unsigned int hash)
 {

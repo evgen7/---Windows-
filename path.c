@@ -7,6 +7,7 @@
 #include "dir.h"
 #include "worktree.h"
 #include "submodule-config.h"
+#include "exec_cmd.h"
 
 static int get_st_mode_bits(const char *path, int *mode)
 {
@@ -104,7 +105,6 @@ struct common_dir {
 };
 
 static struct common_dir common_list[] = {
-	{ 0, 1, 0, "branches" },
 	{ 0, 1, 0, "hooks" },
 	{ 0, 1, 0, "info" },
 	{ 0, 0, 1, "info/sparse-checkout" },
@@ -115,7 +115,6 @@ static struct common_dir common_list[] = {
 	{ 0, 1, 0, "objects" },
 	{ 0, 1, 0, "refs" },
 	{ 0, 1, 1, "refs/bisect" },
-	{ 0, 1, 0, "remotes" },
 	{ 0, 1, 0, "worktrees" },
 	{ 0, 1, 0, "rr-cache" },
 	{ 0, 1, 0, "svn" },
@@ -627,6 +626,10 @@ char *expand_user_path(const char *path, int real_home)
 
 	if (path == NULL)
 		goto return_null;
+#ifdef __MINGW32__
+	if (path[0] == '/')
+		return system_path(path + 1);
+#endif
 	if (path[0] == '~') {
 		const char *first_slash = strchrnul(path, '/');
 		const char *username = path + 1;
