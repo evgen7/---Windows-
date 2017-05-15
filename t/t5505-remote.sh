@@ -798,6 +798,61 @@ Pull: refs/heads/master:refs/heads/origin
 Pull: refs/heads/next:refs/heads/origin2
 EOF
 
+test_expect_success 'migrate a remote from named file in $GIT_DIR/remotes' '
+	git clone one five &&
+	origin_url=$(pwd)/one &&
+	(
+		cd five &&
+		git remote remove origin &&
+		mkdir -p .git/remotes &&
+		cat ../remotes_origin >.git/remotes/origin &&
+		git remote rename origin origin &&
+		test_path_is_missing .git/remotes/origin &&
+		test "$(git config remote.origin.url)" = "$origin_url" &&
+		cat >push_expected <<-\EOF &&
+		refs/heads/master:refs/heads/upstream
+		refs/heads/next:refs/heads/upstream2
+		EOF
+		cat >fetch_expected <<-\EOF &&
+		refs/heads/master:refs/heads/origin
+		refs/heads/next:refs/heads/origin2
+		EOF
+		git config --get-all remote.origin.push >push_actual &&
+		git config --get-all remote.origin.fetch >fetch_actual &&
+		test_cmp push_expected push_actual &&
+		test_cmp fetch_expected fetch_actual
+	)
+'
+
+test_expect_success 'migrate a remote from named file in $GIT_DIR/branches' '
+	git clone one six &&
+	origin_url=$(pwd)/one &&
+	(
+		cd six &&
+		git remote rm origin &&
+		echo "$origin_url" >.git/branches/origin &&
+		git remote rename origin origin &&
+		test_path_is_missing .git/branches/origin &&
+		test "$(git config remote.origin.url)" = "$origin_url" &&
+		test "$(git config remote.origin.fetch)" = "refs/heads/master:refs/heads/origin" &&
+		test "$(git config remote.origin.push)" = "HEAD:refs/heads/master"
+	)
+'
+
+test_expect_success 'migrate a remote from named file in $GIT_DIR/branches (2)' '
+	git clone one seven &&
+	(
+		cd seven &&
+		git remote rm origin &&
+		echo "quux#foom" > .git/branches/origin &&
+		git remote rename origin origin &&
+		test_path_is_missing .git/branches/origin &&
+		test "$(git config remote.origin.url)" = "quux" &&
+		test "$(git config remote.origin.fetch)" = "refs/heads/foom:refs/heads/origin"
+		test "$(git config remote.origin.push)" = "HEAD:refs/heads/foom"
+	)
+'
+
 test_expect_success 'remote prune to cause a dangling symref' '
 	git clone one eight &&
 	(
