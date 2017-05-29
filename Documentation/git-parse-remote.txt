@@ -3,7 +3,7 @@ git-parse-remote(1)
 
 NAME
 ----
-git-parse-remote - Routines to help parsing remote repository information
+git-parse-remote - Routines to help parsing remote repository access parameters
 
 
 SYNOPSIS
@@ -14,8 +14,9 @@ SYNOPSIS
 DESCRIPTION
 -----------
 This script is included in various scripts to supply
-routines to query the remote repository and its branch
-associated with the current branch.
+routines to parse files under $GIT_DIR/remotes/ and
+$GIT_DIR/branches/ and configuration variables that are related
+to fetching, pulling and pushing.
 
 GIT
 ---

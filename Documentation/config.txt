@@ -145,6 +145,16 @@ A few more notes on matching via `gitdir` and `gitdir/i`:
 
  * Symlinks in `$GIT_DIR` are not resolved before matching.
 
+ * Both the symlink & realpath versions of paths will be matched
+   outside of `$GIT_DIR`. E.g. if ~/git is a symlink to
+   /mnt/storage/git, both `gitdir:~/git` and `gitdir:/mnt/storage/git`
+   will match.
++
+This was not the case in the initial release of this feature in
+v2.13.0, which only matched the realpath version. Configuration that
+wants to be compatible with the initial release of this feature needs
+to either specify only the realpath version, or both versions.
+
  * Note that "../" is not special and will match literally, which is
    unlikely what you want.
 
@@ -345,7 +355,7 @@ core.fileMode::
 	is to be honored.
 +
 Some filesystems lose the executable bit when a file that is
-marked as executable is checked out, or checks out an
+marked as executable is checked out, or checks out a
 non-executable file with executable bit on.
 linkgit:git-clone[1] or linkgit:git-init[1] probe the filesystem
 to see if it handles the executable bit correctly
@@ -399,6 +409,13 @@ core.protectNTFS::
 	cause problems with the NTFS filesystem, e.g. conflict with
 	8.3 "short" names.
 	Defaults to `true` on Windows, and `false` elsewhere.
+
+core.fsmonitor::
+	If set to true, call the query-fsmonitor hook proc which will
+	identify all files that may have had changes since the last
+	request. This information is used to speed up operations like
+	'git commit' and 'git status' by limiting what git must scan to
+	detect changes.
 
 core.trustctime::
 	If false, the ctime differences between the index and the
@@ -845,25 +862,6 @@ relatively high IO latencies.  When enabled, Git will do the
 index comparison to the filesystem data in parallel, allowing
 overlapping IO's.  Defaults to true.
 
-core.fscache::
-	Enable additional caching of file system data for some operations.
-+
-Git for Windows uses this to bulk-read and cache lstat data of entire
-directories (instead of doing lstat file by file).
-
-core.longpaths::
-	Enable long path (> 260) support for builtin commands in Git for
-	Windows. This is disabled by default, as long paths are not supported
-	by Windows Explorer, cmd.exe and the Git for Windows tool chain
-	(msys, bash, tcl, perl...). Only enable this if you know what you're
-	doing and are prepared to live with a few quirks.
-
-core.unsetenvvars::
-	EXPERIMENTAL, Windows-only: comma-separated list of environment
-	variables' names that need to be unset before spawning any other
-	process. Defaults to `PERL5LIB` to account for the fact that Git
-	for Windows insists on using its own Perl interpreter.
-
 core.createObject::
 	You can set this to 'link', in which case a hardlink followed by
 	a delete of the source are used to make sure that object creation
@@ -1081,14 +1079,24 @@ This does not affect linkgit:git-format-patch[1] or the
 'git-diff-{asterisk}' plumbing commands.  Can be overridden on the
 command line with the `--color[=<when>]` option.
 
+color.moved::
+	A boolean value, whether a diff should color moved lines
+	differently. The moved lines are searched for in the diff only.
+	Duplicated lines from somewhere in the project that are not
+	part of the diff are not colored as moved.
+	Defaults to false.
+
 color.diff.<slot>::
 	Use customized color for diff colorization.  `<slot>` specifies
 	which part of the patch to use the specified color, and is one
 	of `context` (context text - `plain` is a historical synonym),
 	`meta` (metainformation), `frag`
 	(hunk header), 'func' (function in hunk header), `old` (removed lines),
-	`new` (added lines), `commit` (commit headers), or `whitespace`
-	(highlighting whitespace errors).
+	`new` (added lines), `commit` (commit headers), `whitespace`
+	(highlighting whitespace errors), `oldMoved` (removed lines that
+	reappear), `newMoved` (added lines that were removed elsewhere),
+	`oldMovedAlternative` and `newMovedAlternative` (as a fallback to
+	cover adjacent blocks of moved code)
 
 color.decorate.<slot>::
 	Use customized color for 'git log --decorate' output.  `<slot>` is one
@@ -2173,6 +2181,10 @@ log.showRoot::
 	Tools like linkgit:git-log[1] or linkgit:git-whatchanged[1], which
 	normally hide the root commit will now show it. True by default.
 
+log.showSignature::
+	If true, makes linkgit:git-log[1], linkgit:git-show[1], and
+	linkgit:git-whatchanged[1] assume `--show-signature`.
+
 log.mailmap::
 	If true, makes linkgit:git-log[1], linkgit:git-show[1], and
 	linkgit:git-whatchanged[1] assume `--use-mailmap`.
@@ -2945,6 +2957,16 @@ sendemail.xmailer::
 
 sendemail.signedoffcc (deprecated)::
 	Deprecated alias for `sendemail.signedoffbycc`.
+
+sendemail.smtpBatchSize::
+	Number of messages to be sent per connection, after that a relogin
+	will happen.  If the value is 0 or undefined, send all messages in
+	one connection.
+	See also the `--batch-size` option of linkgit:git-send-email[1].
+
+sendemail.smtpReloginDelay::
+	Seconds wait before reconnecting to smtp server.
+	See also the `--relogin-delay` option of linkgit:git-send-email[1].
 
 showbranch.default::
 	The default set of branches for linkgit:git-show-branch[1].

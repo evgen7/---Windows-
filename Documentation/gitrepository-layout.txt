@@ -144,11 +144,12 @@ config::
 	used instead.
 
 branches::
-	A highly deprecated way to store shorthands to be used
+	A slightly deprecated way to store shorthands to be used
 	to specify a URL to 'git fetch', 'git pull' and 'git push'.
 	A file can be stored as `branches/<name>` and then
 	'name' can be given to these commands in place of
-	'repository' argument.  This mechanism is legacy
+	'repository' argument.  See the REMOTES section in
+	linkgit:git-fetch[1] for details.  This mechanism is legacy
 	and not likely to be found in modern repositories. This
 	directory is ignored if $GIT_COMMON_DIR is set and
 	"$GIT_COMMON_DIR/branches" will be used instead.
@@ -212,13 +213,13 @@ info/sparse-checkout::
 	See also: linkgit:git-read-tree[1].
 
 remotes::
-	A highly deprecated location to store shorthands for URL and
-	default refnames for use when interacting with remote
-	repositories via 'git fetch', 'git pull' and 'git push'
-	commands.  This mechanism is legacy and not likely to be
-	found in modern repositories. This directory is ignored if
-	$GIT_COMMON_DIR is set and "$GIT_COMMON_DIR/remotes" will
-	be used instead.
+	Stores shorthands for URL and default refnames for use
+	when interacting with remote repositories via 'git fetch',
+	'git pull' and 'git push' commands.  See the REMOTES section
+	in linkgit:git-fetch[1] for details.  This mechanism is legacy
+	and not likely to be found in modern repositories. This
+	directory is ignored if $GIT_COMMON_DIR is set and
+	"$GIT_COMMON_DIR/remotes" will be used instead.
 
 logs::
 	Records of changes made to refs are stored in this directory.

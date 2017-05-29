@@ -5,37 +5,37 @@ test_description='git grep in binary files'
 . ./test-lib.sh
 
 nul_match () {
-	status=$1
+	matches=$1
 	flags=$2
 	pattern=$3
 	pattern_human=$(echo "$pattern" | sed 's/Q/<NUL>/g')
 
-	if test "$status" = 1
+	if test "$matches" = 1
 	then
 		test_expect_success "git grep -f f $flags '$pattern_human' a" "
 			printf '$pattern' | q_to_nul >f &&
 			git grep -f f $flags a
 		"
-	elif test "$status" = 0
+	elif test "$matches" = 0
 	then
 		test_expect_success "git grep -f f $flags '$pattern_human' a" "
 			printf '$pattern' | q_to_nul >f &&
 			test_must_fail git grep -f f $flags a
 		"
-	elif test "$status" = T1
+	elif test "$matches" = T1
 	then
 		test_expect_failure "git grep -f f $flags '$pattern_human' a" "
 			printf '$pattern' | q_to_nul >f &&
 			git grep -f f $flags a
 		"
-	elif test "$status" = T0
+	elif test "$matches" = T0
 	then
 		test_expect_failure "git grep -f f $flags '$pattern_human' a" "
 			printf '$pattern' | q_to_nul >f &&
 			test_must_fail git grep -f f $flags a
 		"
 	else
-		test_expect_success "PANIC: Test framework error. Unknown status $status" 'false'
+		test_expect_success "PANIC: Test framework error. Unknown matches value $matches" 'false'
 	fi
 }
 

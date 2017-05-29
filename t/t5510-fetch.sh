@@ -46,10 +46,12 @@ test_expect_success "clone and setup child repos" '
 		cd three &&
 		git config branch.master.remote two &&
 		git config branch.master.merge refs/heads/one &&
-		git config remote.two.url ../two/.git/ &&
-		git config remote.two.fetch refs/heads/master:refs/heads/two &&
-		git config --add remote.two.fetch \
-			refs/heads/one:refs/heads/one
+		mkdir -p .git/remotes &&
+		{
+			echo "URL: ../two/.git/"
+			echo "Pull: refs/heads/master:refs/heads/two"
+			echo "Pull: refs/heads/one:refs/heads/one"
+		} >.git/remotes/two
 	) &&
 	git clone . bundle &&
 	git clone . seven

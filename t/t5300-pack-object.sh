@@ -426,10 +426,12 @@ test_expect_success !PTHREADS,C_LOCALE_OUTPUT 'index-pack --threads=N or pack.th
 	grep ^warning: err >warnings &&
 	test_line_count = 1 warnings &&
 	grep -F "no threads support, ignoring --threads=2" err &&
+
 	test_must_fail git -c pack.threads=2 index-pack 2>err &&
 	grep ^warning: err >warnings &&
 	test_line_count = 1 warnings &&
 	grep -F "no threads support, ignoring pack.threads" err &&
+
 	test_must_fail git -c pack.threads=2 index-pack --threads=4 2>err &&
 	grep ^warning: err >warnings &&
 	test_line_count = 2 warnings &&
@@ -442,11 +444,12 @@ test_expect_success !PTHREADS,C_LOCALE_OUTPUT 'pack-objects --threads=N or pack.
 	grep ^warning: err >warnings &&
 	test_line_count = 1 warnings &&
 	grep -F "no threads support, ignoring --threads" err &&
+
 	git -c pack.threads=2 pack-objects --stdout --all </dev/null >/dev/null 2>err &&
-	cat err &&
 	grep ^warning: err >warnings &&
 	test_line_count = 1 warnings &&
 	grep -F "no threads support, ignoring pack.threads" err &&
+
 	git -c pack.threads=2 pack-objects --threads=4 --stdout --all </dev/null >/dev/null 2>err &&
 	grep ^warning: err >warnings &&
 	test_line_count = 2 warnings &&

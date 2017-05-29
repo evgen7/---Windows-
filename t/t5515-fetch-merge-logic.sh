@@ -55,6 +55,29 @@ test_expect_success setup '
 	git config remote.config-glob.fetch refs/heads/*:refs/remotes/rem/* &&
 	remotes="$remotes config-glob" &&
 
+	mkdir -p .git/remotes &&
+	{
+		echo "URL: ../.git/"
+		echo "Pull: refs/heads/master:remotes/rem/master"
+		echo "Pull: refs/heads/one:remotes/rem/one"
+		echo "Pull: two:remotes/rem/two"
+		echo "Pull: refs/heads/three:remotes/rem/three"
+	} >.git/remotes/remote-explicit &&
+	remotes="$remotes remote-explicit" &&
+
+	{
+		echo "URL: ../.git/"
+		echo "Pull: refs/heads/*:refs/remotes/rem/*"
+	} >.git/remotes/remote-glob &&
+	remotes="$remotes remote-glob" &&
+
+	mkdir -p .git/branches &&
+	echo "../.git" > .git/branches/branches-default &&
+	remotes="$remotes branches-default" &&
+
+	echo "../.git#one" > .git/branches/branches-one &&
+	remotes="$remotes branches-one" &&
+
 	for remote in $remotes ; do
 		git config branch.br-$remote.remote $remote &&
 		git config branch.br-$remote-merge.remote $remote &&

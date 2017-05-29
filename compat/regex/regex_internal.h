@@ -1,12 +1,5 @@
-/*
- * This is git.git's copy of gawk.git's regex engine. Please see that
- * project for the latest version & to submit patches to this code,
- * and git.git's compat/regex/README for information on how git's copy
- * of this code is maintained.
- */
-
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002-2016 Free Software Foundation, Inc.
+   Copyright (C) 2002-2005, 2007, 2008, 2010 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -21,8 +14,9 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   License along with the GNU C Library; if not, write to the Free
+   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+   02111-1307 USA.  */
 
 #ifndef _REGEX_INTERNAL_H
 #define _REGEX_INTERNAL_H 1
@@ -48,14 +42,13 @@
 #if defined HAVE_STDBOOL_H || defined _LIBC
 # include <stdbool.h>
 #endif /* HAVE_STDBOOL_H || _LIBC */
+#if !defined(ZOS_USS)
 #if defined HAVE_STDINT_H || defined _LIBC
 # include <stdint.h>
 #endif /* HAVE_STDINT_H || _LIBC */
-
-#include "intprops.h"
-
+#endif /* !ZOS_USS */
 #if defined _LIBC
-# include <libc-lock.h>
+# include <bits/libc-lock.h>
 #else
 # define __libc_lock_define(CLASS,NAME)
 # define __libc_lock_init(NAME) do { } while (0)
@@ -87,6 +80,7 @@ is_blank (int c)
 # ifndef _RE_DEFINE_LOCALE_FUNCTIONS
 #  define _RE_DEFINE_LOCALE_FUNCTIONS 1
 #   include <locale/localeinfo.h>
+#   include <locale/elem-hash.h>
 #   include <locale/coll-lookup.h>
 # endif
 #endif
@@ -97,7 +91,7 @@ is_blank (int c)
 # ifdef _LIBC
 #  undef gettext
 #  define gettext(msgid) \
-  __dcgettext (_libc_intl_domainname, msgid, LC_MESSAGES)
+  INTUSE(__dcgettext) (_libc_intl_domainname, msgid, LC_MESSAGES)
 # endif
 #else
 # define gettext(msgid) (msgid)
@@ -114,7 +108,14 @@ is_blank (int c)
 # define SIZE_MAX ((size_t) -1)
 #endif
 
-#if ! defined(__DJGPP__) && (defined(GAWK) || _LIBC)
+#ifndef NO_MBSUPPORT
+#include "mbsupport.h" /* gawk */
+#endif
+#ifndef MB_CUR_MAX
+#define MB_CUR_MAX 1
+#endif
+
+#if (defined MBS_SUPPORT) || _LIBC
 # define RE_ENABLE_I18N
 #endif
 
@@ -153,20 +154,17 @@ is_blank (int c)
 # define __mempcpy mempcpy
 # define __wcrtomb wcrtomb
 # define __regfree regfree
+# define attribute_hidden
 #endif /* not _LIBC */
 
-#if __GNUC__ < 3 + (__GNUC_MINOR__ < 1)
-# define __attribute__(arg)
+#ifdef __GNUC__
+# define __attribute(arg) __attribute__ (arg)
+#else
+# define __attribute(arg)
 #endif
 
-#ifdef GAWK
-/*
- * Instead of trying to figure out which GCC version introduced
- * this symbol, just define it out and be done.
- */
-# undef __attribute_warn_unused_result__
-# define __attribute_warn_unused_result__
-#endif
+extern const char __re_error_msgid[] attribute_hidden;
+extern const size_t __re_error_msgid_idx[] attribute_hidden;
 
 /* An integer used to represent a set of bits.  It must be unsigned,
    and must be at least as wide as unsigned int.  */
@@ -416,7 +414,7 @@ typedef struct re_dfa_t re_dfa_t;
 
 #ifndef _LIBC
 # ifdef __i386__
-#  define internal_function   __attribute__ ((regparm (3), stdcall))
+#  define internal_function   __attribute ((regparm (3), stdcall))
 # else
 #  define internal_function
 # endif
@@ -435,7 +433,7 @@ static void build_upper_buffer (re_string_t *pstr) internal_function;
 static void re_string_translate_buffer (re_string_t *pstr) internal_function;
 static unsigned int re_string_context_at (const re_string_t *input, int idx,
 					  int eflags)
-     internal_function __attribute__ ((pure));
+     internal_function __attribute ((pure));
 #endif
 #define re_string_peek_byte(pstr, offset) \
   ((pstr)->mbs[(pstr)->cur_idx + offset])
@@ -456,50 +454,26 @@ static unsigned int re_string_context_at (const re_string_t *input, int idx,
 
 #ifndef _LIBC
 # if HAVE_ALLOCA
-#  include <alloca.h>
+#  if (_MSC_VER)
+#   include <malloc.h>
+#   define __libc_use_alloca(n) 0
+#  else
+#   include <alloca.h>
 /* The OS usually guarantees only one guard page at the bottom of the stack,
    and a page size can be as small as 4096 bytes.  So we cannot safely
    allocate anything larger than 4096 bytes.  Also care for the possibility
    of a few compiler-allocated temporary stack slots.  */
 #  define __libc_use_alloca(n) ((n) < 4032)
+#  endif
 # else
 /* alloca is implemented with malloc, so just use malloc.  */
 #  define __libc_use_alloca(n) 0
 # endif
 #endif
 
-/*
- * GAWK checks for zero-size allocations everywhere else,
- * do it here too.
- */
-#ifndef GAWK
 #define re_malloc(t,n) ((t *) malloc ((n) * sizeof (t)))
-#define re_realloc(p,t,n) ((t *) realloc (p, (n) * sizeof (t)))
-#else
-static void *
-test_malloc(size_t count, const char *file, size_t line)
-{
-	if (count == 0) {
-		fprintf(stderr, "%s:%lu: allocation of zero bytes\n",
-				file, (unsigned long) line);
-		exit(1);
-	}
-	return malloc(count);
-}
-
-static void *
-test_realloc(void *p, size_t count, const char *file, size_t line)
-{
-	if (count == 0) {
-		fprintf(stderr, "%s:%lu: reallocation of zero bytes\n",
-				file, (unsigned long) line);
-		exit(1);
-	}
-	return realloc(p, count);
-}
-#define re_malloc(t,n) ((t *) test_malloc (((n) * sizeof (t)), __FILE__, __LINE__))
-#define re_realloc(p,t,n) ((t *) test_realloc (p, (n) * sizeof (t), __FILE__, __LINE__))
-#endif
+/* SunOS 4.1.x realloc doesn't accept null pointers: pre-Standard C. Sigh. */
+#define re_realloc(p,t,n) ((p != NULL) ? (t *) realloc (p,(n)*sizeof(t)) : (t *) calloc(n,sizeof(t)))
 #define re_free(p) free (p)
 
 struct bin_tree_t
@@ -755,7 +729,7 @@ typedef struct
 
 
 /* Inline functions for bitset operation.  */
-static void __attribute__ ((unused))
+static inline void
 bitset_not (bitset_t set)
 {
   int bitset_i;
@@ -763,7 +737,7 @@ bitset_not (bitset_t set)
     set[bitset_i] = ~set[bitset_i];
 }
 
-static void __attribute__ ((unused))
+static inline void
 bitset_merge (bitset_t dest, const bitset_t src)
 {
   int bitset_i;
@@ -771,7 +745,7 @@ bitset_merge (bitset_t dest, const bitset_t src)
     dest[bitset_i] |= src[bitset_i];
 }
 
-static void __attribute__ ((unused))
+static inline void
 bitset_mask (bitset_t dest, const bitset_t src)
 {
   int bitset_i;
@@ -781,8 +755,8 @@ bitset_mask (bitset_t dest, const bitset_t src)
 
 #ifdef RE_ENABLE_I18N
 /* Inline functions for re_string.  */
-static int
-internal_function __attribute__ ((pure, unused))
+static inline int
+internal_function __attribute ((pure))
 re_string_char_size_at (const re_string_t *pstr, int idx)
 {
   int byte_idx;
@@ -794,8 +768,8 @@ re_string_char_size_at (const re_string_t *pstr, int idx)
   return byte_idx;
 }
 
-static wint_t
-internal_function __attribute__ ((pure, unused))
+static inline wint_t
+internal_function __attribute ((pure))
 re_string_wchar_at (const re_string_t *pstr, int idx)
 {
   if (pstr->mb_cur_max == 1)
@@ -804,17 +778,15 @@ re_string_wchar_at (const re_string_t *pstr, int idx)
 }
 
 # ifndef NOT_IN_libc
-#  ifdef _LIBC
-#   include <locale/weight.h>
-#  endif
-
 static int
-internal_function __attribute__ ((pure, unused))
+internal_function __attribute ((pure))
 re_string_elem_size_at (const re_string_t *pstr, int idx)
 {
 #  ifdef _LIBC
   const unsigned char *p, *extra;
   const int32_t *table, *indirect;
+  int32_t tmp;
+#   include <locale/weight.h>
   uint_fast32_t nrules = _NL_CURRENT_WORD (LC_COLLATE, _NL_COLLATE_NRULES);
 
   if (nrules != 0)
@@ -825,7 +797,7 @@ re_string_elem_size_at (const re_string_t *pstr, int idx)
       indirect = (const int32_t *) _NL_CURRENT (LC_COLLATE,
 						_NL_COLLATE_INDIRECTMB);
       p = pstr->mbs + idx;
-      findidx (table, indirect, extra, &p, pstr->len - idx);
+      tmp = findidx (&p);
       return p - pstr->mbs - idx;
     }
   else

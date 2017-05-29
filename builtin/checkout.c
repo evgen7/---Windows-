@@ -56,7 +56,6 @@ struct checkout_opts {
 	int overwrite_ignore;
 	int ignore_skipworktree;
 	int ignore_other_worktrees;
-	int no_index;
 	int show_progress;
 
 	const char *new_branch;
@@ -290,9 +289,6 @@ static int checkout_paths(const struct checkout_opts *opts,
 		die(_("Cannot update paths and switch to branch '%s' at the same time."),
 		    opts->new_branch);
 
-	if (opts->no_index && !opts->source_tree)
-		die(_("'--working-tree-only' requires a tree-ish"));
-
 	if (opts->patch_mode)
 		return run_add_interactive(revision, "--patch=checkout",
 					   &opts->pathspec);
@@ -396,9 +392,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 	}
 	errs |= checkout_delayed_entries(&state);
 
-	if (opts->no_index)
-		; /* discard the in-core index */
-	else if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
+	if (write_locked_index(&the_index, lock_file, COMMIT_LOCK))
 		die(_("unable to write new index file"));
 
 	read_ref_full("HEAD", 0, rev.hash, NULL);
@@ -1195,7 +1189,6 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 			    "checkout", "control recursive updating of submodules",
 			    PARSE_OPT_OPTARG, option_parse_recurse_submodules },
 		OPT_BOOL(0, "progress", &opts.show_progress, N_("force progress reporting")),
-		OPT_BOOL(0, "working-tree-only", &opts.no_index, N_("checkout to working tree only without touching the index")),
 		OPT_END(),
 	};
 

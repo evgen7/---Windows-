@@ -17,6 +17,7 @@
 #include "utf8.h"
 #include "varint.h"
 #include "ewah/ewok.h"
+#include "fsmonitor.h"
 
 /*
  * Tells read_directory_recursive how a file or directory should be treated.
@@ -666,7 +667,7 @@ static void trim_trailing_spaces(char *buf)
  *
  * If "name" has the trailing slash, it'll be excluded in the search.
  */
-static struct untracked_cache_dir *lookup_untracked(struct untracked_cache *uc,
+struct untracked_cache_dir *lookup_untracked(struct untracked_cache *uc,
 						    struct untracked_cache_dir *dir,
 						    const char *name, int len)
 {
@@ -752,8 +753,9 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 
 	fd = open(fname, O_RDONLY);
 	if (fd < 0 || fstat(fd, &st) < 0) {
-		warn_on_fopen_errors(fname);
-		if (0 <= fd)
+		if (fd < 0)
+			warn_on_fopen_errors(fname);
+		else
 			close(fd);
 		if (!istate ||
 		    (buf = read_skip_worktree_file_from_index(istate, fname, &size, sha1_stat)) == NULL)
@@ -1679,6 +1681,18 @@ static int valid_cached_dir(struct dir_struct *dir,
 	if (!untracked)
 		return 0;
 
+	refresh_by_fsmonitor(&the_index);
+	if (dir->untracked->use_fsmonitor) {
+		/*
+		 * With fsmonitor, we can trust the untracked cache's
+		 * valid field.
+		 */
+		if (untracked->valid)
+			goto skip_stat;
+		else
+			invalidate_directory(dir->untracked, untracked);
+	}
+
 	if (stat(path->len ? path->buf : ".", &st)) {
 		invalidate_directory(dir->untracked, untracked);
 		memset(&untracked->stat_data, 0, sizeof(untracked->stat_data));
@@ -1692,6 +1706,7 @@ static int valid_cached_dir(struct dir_struct *dir,
 		return 0;
 	}
 
+skip_stat:
 	if (untracked->check_only != !!check_only) {
 		invalidate_directory(dir->untracked, untracked);
 		return 0;
@@ -1812,7 +1827,10 @@ static enum path_treatment read_directory_recursive(struct dir_struct *dir,
 			dir_state = state;
 
 		/* recurse into subdir if instructed by treat_path */
-		if (state == path_recurse) {
+		if ((state == path_recurse) ||
+			((state == path_untracked) &&
+			 (dir->flags & DIR_SHOW_IGNORED_TOO) &&
+			 (get_dtype(cdir.de, istate, path.buf, path.len) == DT_DIR))) {
 			struct untracked_cache_dir *ud;
 			ud = lookup_untracked(dir->untracked, untracked,
 					      path.buf + baselen,
@@ -1867,12 +1885,20 @@ static enum path_treatment read_directory_recursive(struct dir_struct *dir,
 	return dir_state;
 }
 
-static int cmp_name(const void *p1, const void *p2)
+int cmp_dir_entry(const void *p1, const void *p2)
 {
 	const struct dir_entry *e1 = *(const struct dir_entry **)p1;
 	const struct dir_entry *e2 = *(const struct dir_entry **)p2;
 
 	return name_compare(e1->name, e1->len, e2->name, e2->len);
+}
+
+/* check if *out lexically strictly contains *in */
+int check_dir_entry_contains(const struct dir_entry *out, const struct dir_entry *in)
+{
+	return (out->len < in->len) &&
+		(out->name[out->len - 1] == '/') &&
+		!memcmp(out->name, in->name, out->len);
 }
 
 static int treat_leading_path(struct dir_struct *dir,
@@ -2089,8 +2115,32 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		dir->untracked = NULL;
 	if (!len || treat_leading_path(dir, istate, path, len, pathspec))
 		read_directory_recursive(dir, istate, path, len, untracked, 0, pathspec);
-	QSORT(dir->entries, dir->nr, cmp_name);
-	QSORT(dir->ignored, dir->ignored_nr, cmp_name);
+	QSORT(dir->entries, dir->nr, cmp_dir_entry);
+	QSORT(dir->ignored, dir->ignored_nr, cmp_dir_entry);
+
+	/*
+	 * If DIR_SHOW_IGNORED_TOO is set, read_directory_recursive() will
+	 * also pick up untracked contents of untracked dirs; by default
+	 * we discard these, but given DIR_KEEP_UNTRACKED_CONTENTS we do not.
+	 */
+	if ((dir->flags & DIR_SHOW_IGNORED_TOO) &&
+		     !(dir->flags & DIR_KEEP_UNTRACKED_CONTENTS)) {
+		int i, j;
+
+		/* remove from dir->entries untracked contents of untracked dirs */
+		for (i = j = 0; j < dir->nr; j++) {
+			if (i &&
+			    check_dir_entry_contains(dir->entries[i - 1], dir->entries[j])) {
+				free(dir->entries[j]);
+				dir->entries[j] = NULL;
+			} else {
+				dir->entries[i++] = dir->entries[j];
+			}
+		}
+
+		dir->nr = i;
+	}
+
 	if (dir->untracked) {
 		static struct trace_key trace_untracked_stats = TRACE_KEY_INIT(UNTRACKED_STATS);
 		trace_printf_key(&trace_untracked_stats,

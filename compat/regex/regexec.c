@@ -1,12 +1,5 @@
-/*
- * This is git.git's copy of gawk.git's regex engine. Please see that
- * project for the latest version & to submit patches to this code,
- * and git.git's compat/regex/README for information on how git's copy
- * of this code is maintained.
- */
-
 /* Extended regular expression matching and search library.
-   Copyright (C) 2002-2016 Free Software Foundation, Inc.
+   Copyright (C) 2002-2005, 2007, 2009, 2010 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Isamu Hasegawa <isamu@yamato.ibm.com>.
 
@@ -21,12 +14,9 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
-
-#ifdef HAVE_STDINT_H
-#include <stdint.h>
-#endif /* HAVE_STDINT_H */
+   License along with the GNU C Library; if not, write to the Free
+   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+   02110-1301 USA.  */
 
 static reg_errcode_t match_ctx_init (re_match_context_t *cache, int eflags,
 				     int n) internal_function;
@@ -50,18 +40,18 @@ static reg_errcode_t re_search_internal (const regex_t *preg,
 					 const char *string, int length,
 					 int start, int range, int stop,
 					 size_t nmatch, regmatch_t pmatch[],
-					 int eflags) internal_function;
+					 int eflags);
 static int re_search_2_stub (struct re_pattern_buffer *bufp,
 			     const char *string1, int length1,
 			     const char *string2, int length2,
 			     int start, int range, struct re_registers *regs,
-			     int stop, int ret_len) internal_function;
+			     int stop, int ret_len);
 static int re_search_stub (struct re_pattern_buffer *bufp,
 			   const char *string, int length, int start,
 			   int range, int stop, struct re_registers *regs,
-			   int ret_len) internal_function;
+			   int ret_len);
 static unsigned re_copy_regs (struct re_registers *regs, regmatch_t *pmatch,
-			      int nregs, int regs_allocated) internal_function;
+			      int nregs, int regs_allocated);
 static reg_errcode_t prune_impossible_nodes (re_match_context_t *mctx);
 static int check_matching (re_match_context_t *mctx, int fl_longest_match,
 			   int *p_match_first) internal_function;
@@ -207,17 +197,8 @@ static int group_nodes_into_DFAstates (const re_dfa_t *dfa,
 static int check_node_accept (const re_match_context_t *mctx,
 			      const re_token_t *node, int idx)
      internal_function;
-static reg_errcode_t extend_buffers (re_match_context_t *mctx, int min_len)
+static reg_errcode_t extend_buffers (re_match_context_t *mctx)
      internal_function;
-
-#ifdef GAWK
-#undef MIN	/* safety */
-static int
-MIN(size_t a, size_t b)
-{
-	return (a < b ? a : b);
-}
-#endif
 
 /* Entry point for POSIX code.  */
 
@@ -236,8 +217,12 @@ MIN(size_t a, size_t b)
    We return 0 if we find a match and REG_NOMATCH if not.  */
 
 int
-regexec (const regex_t *__restrict preg, const char *__restrict string,
-	 size_t nmatch, regmatch_t pmatch[], int eflags)
+regexec (
+	const regex_t *__restrict preg,
+	const char *__restrict string,
+	size_t nmatch,
+	regmatch_t pmatch[],
+	int eflags)
 {
   reg_errcode_t err;
   int start, length;
@@ -308,7 +293,7 @@ compat_symbol (libc, __compat_regexec, regexec, GLIBC_2_0);
    concerned.
 
    If REGS is not NULL, and BUFP->no_sub is not set, the offsets of the match
-   and all groups is stored in REGS.  (For the "_2" variants, the offsets are
+   and all groups is stroed in REGS.  (For the "_2" variants, the offsets are
    computed relative to the concatenation, not relative to the individual
    strings.)
 
@@ -317,8 +302,11 @@ compat_symbol (libc, __compat_regexec, regexec, GLIBC_2_0);
    match was found and -2 indicates an internal error.  */
 
 int
-re_match (struct re_pattern_buffer *bufp, const char *string, int length,
-	  int start, struct re_registers *regs)
+re_match (struct re_pattern_buffer *bufp,
+	  const char *string,
+	  int length,
+	  int start,
+	  struct re_registers *regs)
 {
   return re_search_stub (bufp, string, length, start, 0, length, regs, 1);
 }
@@ -327,8 +315,10 @@ weak_alias (__re_match, re_match)
 #endif
 
 int
-re_search (struct re_pattern_buffer *bufp, const char *string, int length,
-	   int start, int range, struct re_registers *regs)
+re_search (struct re_pattern_buffer *bufp,
+	   const char *string,
+	   int length, int start, int range,
+	   struct re_registers *regs)
 {
   return re_search_stub (bufp, string, length, start, range, length, regs, 0);
 }
@@ -337,7 +327,8 @@ weak_alias (__re_search, re_search)
 #endif
 
 int
-re_match_2 (struct re_pattern_buffer *bufp, const char *string1, int length1,
+re_match_2 (struct re_pattern_buffer *bufp,
+	    const char *string1, int length1,
 	    const char *string2, int length2, int start,
 	    struct re_registers *regs, int stop)
 {
@@ -349,9 +340,10 @@ weak_alias (__re_match_2, re_match_2)
 #endif
 
 int
-re_search_2 (struct re_pattern_buffer *bufp, const char *string1, int length1,
-	     const char *string2, int length2, int start, int range,
-	     struct re_registers *regs, int stop)
+re_search_2 (struct re_pattern_buffer *bufp,
+	     const char *string1, int length1,
+	     const char *string2, int length2, int start,
+	     int range, struct re_registers *regs,  int stop)
 {
   return re_search_2_stub (bufp, string1, length1, string2, length2,
 			   start, range, regs, stop, 0);
@@ -361,37 +353,32 @@ weak_alias (__re_search_2, re_search_2)
 #endif
 
 static int
-internal_function
-re_search_2_stub (struct re_pattern_buffer *bufp, const char *string1,
-		  int length1, const char *string2, int length2, int start,
+re_search_2_stub (struct re_pattern_buffer *bufp,
+		  const char *string1, int length1,
+		  const char *string2, int length2, int start,
 		  int range, struct re_registers *regs,
 		  int stop, int ret_len)
 {
   const char *str;
   int rval;
-  int len;
-  char *s = NULL;
+  int len = length1 + length2;
+  int free_str = 0;
 
-  if (BE ((length1 < 0 || length2 < 0 || stop < 0
-	   || INT_ADD_WRAPV (length1, length2, &len)),
-	  0))
+  if (BE (length1 < 0 || length2 < 0 || stop < 0, 0))
     return -2;
 
   /* Concatenate the strings.  */
   if (length2 > 0)
     if (length1 > 0)
       {
-	s = re_malloc (char, len);
+	char *s = re_malloc (char, len);
 
 	if (BE (s == NULL, 0))
 	  return -2;
-#ifdef _LIBC
-	memcpy (__mempcpy (s, string1, length1), string2, length2);
-#else
 	memcpy (s, string1, length1);
 	memcpy (s + length1, string2, length2);
-#endif
 	str = s;
+	free_str = 1;
       }
     else
       str = string2;
@@ -399,7 +386,8 @@ re_search_2_stub (struct re_pattern_buffer *bufp, const char *string1,
     str = string1;
 
   rval = re_search_stub (bufp, str, len, start, range, stop, regs, ret_len);
-  re_free (s);
+  if (free_str)
+    re_free ((char *) str);
   return rval;
 }
 
@@ -409,10 +397,10 @@ re_search_2_stub (struct re_pattern_buffer *bufp, const char *string1,
    otherwise the position of the match is returned.  */
 
 static int
-internal_function
-re_search_stub (struct re_pattern_buffer *bufp, const char *string, int length,
-		int start, int range, int stop, struct re_registers *regs,
-		int ret_len)
+re_search_stub (struct re_pattern_buffer *bufp,
+		const char *string, int length, int start,
+		int range, int stop,
+		struct re_registers *regs, int ret_len)
 {
   reg_errcode_t result;
   regmatch_t *pmatch;
@@ -467,7 +455,7 @@ re_search_stub (struct re_pattern_buffer *bufp, const char *string, int length,
 
   rval = 0;
 
-  /* I hope we needn't fill ther regs with -1's when no match was found.  */
+  /* I hope we needn't fill their regs with -1's when no match was found.  */
   if (result != REG_NOERROR)
     rval = -1;
   else if (regs != NULL)
@@ -496,9 +484,9 @@ re_search_stub (struct re_pattern_buffer *bufp, const char *string, int length,
 }
 
 static unsigned
-internal_function
-re_copy_regs (struct re_registers *regs, regmatch_t *pmatch, int nregs,
-	      int regs_allocated)
+re_copy_regs (struct re_registers *regs,
+	      regmatch_t *pmatch,
+	      int nregs, int regs_allocated)
 {
   int rval = REGS_REALLOCATE;
   int i;
@@ -575,8 +563,11 @@ re_copy_regs (struct re_registers *regs, regmatch_t *pmatch, int nregs,
    freeing the old data.  */
 
 void
-re_set_registers (struct re_pattern_buffer *bufp, struct re_registers *regs,
-		  unsigned num_regs, regoff_t *starts, regoff_t *ends)
+re_set_registers (struct re_pattern_buffer *bufp,
+		  struct re_registers *regs,
+		  unsigned num_regs,
+		  regoff_t *starts,
+		  regoff_t *ends)
 {
   if (num_regs)
     {
@@ -604,7 +595,8 @@ int
 # ifdef _LIBC
 weak_function
 # endif
-re_exec (const char *s)
+re_exec (s)
+     const char *s;
 {
   return 0 == regexec (&re_comp_buf, s, 0, NULL, 0);
 }
@@ -614,7 +606,7 @@ re_exec (const char *s)
 
 /* Searches for a compiled pattern PREG in the string STRING, whose
    length is LENGTH.  NMATCH, PMATCH, and EFLAGS have the same
-   meaning as with regexec.  START, and RANGE have the same meanings
+   mingings with regexec.  START, and RANGE have the same meanings
    with re_search.
    Return REG_NOERROR if we find a match, and REG_NOMATCH if not,
    otherwise return the error code.
@@ -622,10 +614,11 @@ re_exec (const char *s)
    (START + RANGE >= 0 && START + RANGE <= LENGTH)  */
 
 static reg_errcode_t
-__attribute_warn_unused_result__ internal_function
-re_search_internal (const regex_t *preg, const char *string, int length,
-		    int start, int range, int stop, size_t nmatch,
-		    regmatch_t pmatch[], int eflags)
+re_search_internal (const regex_t *preg,
+		    const char *string,
+		    int length, int start, int range, int stop,
+		    size_t nmatch, regmatch_t pmatch[],
+		    int eflags)
 {
   reg_errcode_t err;
   const re_dfa_t *dfa = (const re_dfa_t *) preg->buffer;
@@ -651,7 +644,7 @@ re_search_internal (const regex_t *preg, const char *string, int length,
   nmatch -= extra_nmatch;
 
   /* Check if the DFA haven't been compiled.  */
-  if (BE (preg->used == 0 || dfa == NULL || dfa->init_state == NULL
+  if (BE (preg->used == 0 || dfa->init_state == NULL
 	  || dfa->init_state_word == NULL || dfa->init_state_nl == NULL
 	  || dfa->init_state_begbuf == NULL, 0))
     return REG_NOMATCH;
@@ -678,8 +671,7 @@ re_search_internal (const regex_t *preg, const char *string, int length,
   fl_longest_match = (nmatch != 0 || dfa->nbackref);
 
   err = re_string_allocate (&mctx.input, string, length, dfa->nodes_len + 1,
-			    preg->translate, (preg->syntax & RE_ICASE) != 0,
-			    dfa);
+			    preg->translate, preg->syntax & RE_ICASE, dfa);
   if (BE (err != REG_NOERROR, 0))
     goto free_return;
   mctx.input.stop = stop;
@@ -896,7 +888,7 @@ re_search_internal (const regex_t *preg, const char *string, int length,
 	    goto free_return;
 	}
 
-      /* At last, add the offset to each register, since we slid
+      /* At last, add the offset to the each registers, since we slided
 	 the buffers so that we could assume that the matching starts
 	 from 0.  */
       for (reg_idx = 0; reg_idx < nmatch; ++reg_idx)
@@ -1041,7 +1033,7 @@ prune_impossible_nodes (re_match_context_t *mctx)
    since initial states may have constraints like "\<", "^", etc..  */
 
 static inline re_dfastate_t *
-__attribute__ ((always_inline)) internal_function
+__attribute ((always_inline)) internal_function
 acquire_init_state_context (reg_errcode_t *err, const re_match_context_t *mctx,
 			    int idx)
 {
@@ -1079,11 +1071,11 @@ acquire_init_state_context (reg_errcode_t *err, const re_match_context_t *mctx,
    FL_LONGEST_MATCH means we want the POSIX longest matching.
    If P_MATCH_FIRST is not NULL, and the match fails, it is set to the
    next place where we may want to try matching.
-   Note that the matcher assume that the maching starts from the current
+   Note that the matcher assume that the matching starts from the current
    index of the buffer.  */
 
 static int
-internal_function __attribute_warn_unused_result__
+internal_function
 check_matching (re_match_context_t *mctx, int fl_longest_match,
 		int *p_match_first)
 {
@@ -1148,12 +1140,11 @@ check_matching (re_match_context_t *mctx, int fl_longest_match,
       re_dfastate_t *old_state = cur_state;
       int next_char_idx = re_string_cur_idx (&mctx->input) + 1;
 
-      if ((BE (next_char_idx >= mctx->input.bufs_len, 0)
-	   && mctx->input.bufs_len < mctx->input.len)
+      if (BE (next_char_idx >= mctx->input.bufs_len, 0)
 	  || (BE (next_char_idx >= mctx->input.valid_len, 0)
 	      && mctx->input.valid_len < mctx->input.len))
 	{
-	  err = extend_buffers (mctx, next_char_idx + 1);
+	  err = extend_buffers (mctx);
 	  if (BE (err != REG_NOERROR, 0))
 	    {
 	      assert (err == REG_ESPACE);
@@ -1357,7 +1348,7 @@ proceed_next_node (const re_match_context_t *mctx, int nregs, regmatch_t *regs,
 }
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 push_fail_stack (struct re_fail_stack_t *fs, int str_idx, int dest_node,
 		 int nregs, regmatch_t *regs, re_node_set *eps_via_nodes)
 {
@@ -1404,7 +1395,7 @@ pop_fail_stack (struct re_fail_stack_t *fs, int *pidx, int nregs,
    pmatch[i].rm_so == pmatch[i].rm_eo == -1 for 0 < i < nmatch.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 set_regs (const regex_t *preg, const re_match_context_t *mctx, size_t nmatch,
 	  regmatch_t *pmatch, int fl_backtrack)
 {
@@ -1660,7 +1651,7 @@ sift_states_backward (const re_match_context_t *mctx, re_sift_context_t *sctx)
 }
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 build_sifted_states (const re_match_context_t *mctx, re_sift_context_t *sctx,
 		     int str_idx, re_node_set *cur_dest)
 {
@@ -1727,13 +1718,12 @@ clean_state_log_if_needed (re_match_context_t *mctx, int next_state_log_idx)
 {
   int top = mctx->state_log_top;
 
-  if ((next_state_log_idx >= mctx->input.bufs_len
-       && mctx->input.bufs_len < mctx->input.len)
+  if (next_state_log_idx >= mctx->input.bufs_len
       || (next_state_log_idx >= mctx->input.valid_len
 	  && mctx->input.valid_len < mctx->input.len))
     {
       reg_errcode_t err;
-      err = extend_buffers (mctx, next_state_log_idx + 1);
+      err = extend_buffers (mctx);
       if (BE (err != REG_NOERROR, 0))
 	return err;
     }
@@ -1823,7 +1813,7 @@ update_cur_sifted_state (const re_match_context_t *mctx,
 }
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 add_epsilon_src_nodes (const re_dfa_t *dfa, re_node_set *dest_nodes,
 		       const re_node_set *candidates)
 {
@@ -2136,7 +2126,7 @@ check_subexp_limits (const re_dfa_t *dfa, re_node_set *dest_nodes,
 }
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 sift_states_bkref (const re_match_context_t *mctx, re_sift_context_t *sctx,
 		   int str_idx, const re_node_set *candidates)
 {
@@ -2249,7 +2239,7 @@ sift_states_iter_mb (const re_match_context_t *mctx, re_sift_context_t *sctx,
 			    dfa->nexts[node_idx]))
     /* The node can't accept the `multi byte', or the
        destination was already thrown away, then the node
-       could't accept the current input `multi byte'.   */
+       couldn't accept the current input `multi byte'.   */
     naccepted = 0;
   /* Otherwise, it is sure that the node could accept
      `naccepted' bytes input.  */
@@ -2266,7 +2256,7 @@ sift_states_iter_mb (const re_match_context_t *mctx, re_sift_context_t *sctx,
    update the destination of STATE_LOG.  */
 
 static re_dfastate_t *
-internal_function __attribute_warn_unused_result__
+internal_function
 transit_state (reg_errcode_t *err, re_match_context_t *mctx,
 	       re_dfastate_t *state)
 {
@@ -2323,7 +2313,7 @@ transit_state (reg_errcode_t *err, re_match_context_t *mctx,
 }
 
 /* Update the state_log if we need */
-re_dfastate_t *
+static re_dfastate_t *
 internal_function
 merge_state_with_log (reg_errcode_t *err, re_match_context_t *mctx,
 		      re_dfastate_t *next_state)
@@ -2336,7 +2326,7 @@ merge_state_with_log (reg_errcode_t *err, re_match_context_t *mctx,
       mctx->state_log[cur_idx] = next_state;
       mctx->state_log_top = cur_idx;
     }
-  else if (mctx->state_log[cur_idx] == 0)
+  else if (mctx->state_log[cur_idx] == NULL)
     {
       mctx->state_log[cur_idx] = next_state;
     }
@@ -2431,7 +2421,7 @@ find_recover_state (reg_errcode_t *err, re_match_context_t *mctx)
 /* From the node set CUR_NODES, pick up the nodes whose types are
    OP_OPEN_SUBEXP and which have corresponding back references in the regular
    expression. And register them to use them later for evaluating the
-   corresponding back references.  */
+   correspoding back references.  */
 
 static reg_errcode_t
 internal_function
@@ -2691,7 +2681,7 @@ transit_state_bkref (re_match_context_t *mctx, const re_node_set *nodes)
    delay these checking for prune_impossible_nodes().  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 get_subexp (re_match_context_t *mctx, int bkref_node, int bkref_str_idx)
 {
   const re_dfa_t *const dfa = mctx->dfa;
@@ -2787,7 +2777,7 @@ get_subexp (re_match_context_t *mctx, int bkref_node, int bkref_str_idx)
 		  if (bkref_str_off >= mctx->input.len)
 		    break;
 
-		  err = extend_buffers (mctx, bkref_str_off + 1);
+		  err = extend_buffers (mctx);
 		  if (BE (err != REG_NOERROR, 0))
 		    return err;
 
@@ -2891,7 +2881,7 @@ find_subexp_node (const re_dfa_t *dfa, const re_node_set *nodes,
    Return REG_NOERROR if it can arrive, or REG_NOMATCH otherwise.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 check_arrival (re_match_context_t *mctx, state_array_t *path, int top_node,
 	       int top_str, int last_node, int last_str, int type)
 {
@@ -3052,7 +3042,7 @@ check_arrival (re_match_context_t *mctx, state_array_t *path, int top_node,
 	 Can't we unify them?  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 check_arrival_add_next_nodes (re_match_context_t *mctx, int str_idx,
 			      re_node_set *cur_nodes, re_node_set *next_nodes)
 {
@@ -3186,7 +3176,7 @@ check_arrival_expand_ecl (const re_dfa_t *dfa, re_node_set *cur_nodes,
    problematic append it to DST_NODES.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 check_arrival_expand_ecl_sub (const re_dfa_t *dfa, re_node_set *dst_nodes,
 			      int target, int ex_subexp, int type)
 {
@@ -3230,7 +3220,7 @@ check_arrival_expand_ecl_sub (const re_dfa_t *dfa, re_node_set *dst_nodes,
    in MCTX->BKREF_ENTS.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 expand_bkref_cache (re_match_context_t *mctx, re_node_set *cur_nodes,
 		    int cur_str, int subexp_num, int type)
 {
@@ -3367,14 +3357,12 @@ build_trtable (const re_dfa_t *dfa, re_dfastate_t *state)
   if (BE (ndests <= 0, 0))
     {
       if (dests_node_malloced)
-	re_free (dests_alloc);
+	free (dests_alloc);
       /* Return 0 in case of an error, 1 otherwise.  */
       if (ndests == 0)
 	{
 	  state->trtable = (re_dfastate_t **)
 	    calloc (sizeof (re_dfastate_t *), SBC_MAX);
-	  if (BE (state->trtable == NULL, 0))
-	    return 0;
 	  return 1;
 	}
       return 0;
@@ -3399,18 +3387,18 @@ build_trtable (const re_dfa_t *dfa, re_dfastate_t *state)
   else
 #endif
     {
-      dest_states =
-	re_malloc (re_dfastate_t *, ndests * 3);
+      dest_states = (re_dfastate_t **)
+	malloc (ndests * 3 * sizeof (re_dfastate_t *));
       if (BE (dest_states == NULL, 0))
 	{
 out_free:
 	  if (dest_states_malloced)
-	    re_free (dest_states);
+	    free (dest_states);
 	  re_node_set_free (&follows);
 	  for (i = 0; i < ndests; ++i)
 	    re_node_set_free (dests_node + i);
 	  if (dests_node_malloced)
-	    re_free (dests_alloc);
+	    free (dests_alloc);
 	  return 0;
 	}
       dest_states_malloced = true;
@@ -3541,14 +3529,14 @@ out_free:
     }
 
   if (dest_states_malloced)
-    re_free (dest_states);
+    free (dest_states);
 
   re_node_set_free (&follows);
   for (i = 0; i < ndests; ++i)
     re_node_set_free (dests_node + i);
 
   if (dests_node_malloced)
-    re_free (dests_alloc);
+    free (dests_alloc);
 
   return 1;
 }
@@ -3748,10 +3736,6 @@ group_nodes_into_DFAstates (const re_dfa_t *dfa, const re_dfastate_t *state,
    one collating element like '.', '[a-z]', opposite to the other nodes
    can only accept one byte.  */
 
-# ifdef _LIBC
-#  include <locale/weight.h>
-# endif
-
 static int
 internal_function
 check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
@@ -3873,6 +3857,8 @@ check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
 	  const int32_t *table, *indirect;
 	  const unsigned char *weights, *extra;
 	  const char *collseqwc;
+	  /* This #include defines a local function!  */
+#  include <locale/weight.h>
 
 	  /* match with collating_symbol?  */
 	  if (cset->ncoll_syms)
@@ -3928,7 +3914,7 @@ check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
 		_NL_CURRENT (LC_COLLATE, _NL_COLLATE_EXTRAMB);
 	      indirect = (const int32_t *)
 		_NL_CURRENT (LC_COLLATE, _NL_COLLATE_INDIRECTMB);
-	      int32_t idx = findidx (table, indirect, extra, &cp, elem_len);
+	      int32_t idx = findidx (&cp);
 	      if (idx > 0)
 		for (i = 0; i < cset->nequiv_classes; ++i)
 		  {
@@ -3959,10 +3945,18 @@ check_node_accept_bytes (const re_dfa_t *dfa, int node_idx,
 # endif /* _LIBC */
 	{
 	  /* match with range expression?  */
+#if __GNUC__ >= 2
+	  wchar_t cmp_buf[] = {L'\0', L'\0', wc, L'\0', L'\0', L'\0'};
+#else
+	  wchar_t cmp_buf[] = {L'\0', L'\0', L'\0', L'\0', L'\0', L'\0'};
+	  cmp_buf[2] = wc;
+#endif
 	  for (i = 0; i < cset->nranges; ++i)
 	    {
-	      if (cset->range_starts[i] <= wc
-		  && wc <= cset->range_ends[i])
+	      cmp_buf[0] = cset->range_starts[i];
+	      cmp_buf[4] = cset->range_ends[i];
+	      if (wcscoll (cmp_buf, cmp_buf + 2) <= 0
+		  && wcscoll (cmp_buf + 2, cmp_buf + 4) <= 0)
 		{
 		  match_len = char_len;
 		  goto check_node_accept_bytes_match;
@@ -4031,7 +4025,7 @@ find_collation_sequence_value (const unsigned char *mbs, size_t mbs_len)
 	  /* Skip the collation sequence value.  */
 	  idx += sizeof (uint32_t);
 	  /* Skip the wide char sequence of the collating element.  */
-	  idx = idx + sizeof (uint32_t) * (*(int32_t *) (extra + idx) + 1);
+	  idx = idx + sizeof (uint32_t) * (extra[idx] + 1);
 	  /* If we found the entry, return the sequence value.  */
 	  if (found)
 	    return *(uint32_t *) (extra + idx);
@@ -4098,8 +4092,8 @@ check_node_accept (const re_match_context_t *mctx, const re_token_t *node,
 /* Extend the buffers, if the buffers have run out.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
-extend_buffers (re_match_context_t *mctx, int min_len)
+internal_function
+extend_buffers (re_match_context_t *mctx)
 {
   reg_errcode_t ret;
   re_string_t *pstr = &mctx->input;
@@ -4108,10 +4102,8 @@ extend_buffers (re_match_context_t *mctx, int min_len)
   if (BE (INT_MAX / 2 / sizeof (re_dfastate_t *) <= pstr->bufs_len, 0))
     return REG_ESPACE;
 
-  /* Double the lengthes of the buffers, but allocate at least MIN_LEN.  */
-  ret = re_string_realloc_buffers (pstr,
-				   MAX (min_len,
-					MIN (pstr->len, pstr->bufs_len * 2)));
+  /* Double the lengthes of the buffers.  */
+  ret = re_string_realloc_buffers (pstr, pstr->bufs_len * 2);
   if (BE (ret != REG_NOERROR, 0))
     return ret;
 
@@ -4163,7 +4155,7 @@ extend_buffers (re_match_context_t *mctx, int min_len)
 /* Initialize MCTX.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 match_ctx_init (re_match_context_t *mctx, int eflags, int n)
 {
   mctx->eflags = eflags;
@@ -4211,7 +4203,7 @@ match_ctx_clean (re_match_context_t *mctx)
 	  re_free (top->path->array);
 	  re_free (top->path);
 	}
-      re_free (top);
+      free (top);
     }
 
   mctx->nsub_tops = 0;
@@ -4236,7 +4228,7 @@ match_ctx_free (re_match_context_t *mctx)
 */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 match_ctx_add_entry (re_match_context_t *mctx, int node, int str_idx, int from,
 		     int to)
 {
@@ -4308,7 +4300,7 @@ search_cur_bkref_entry (const re_match_context_t *mctx, int str_idx)
    at STR_IDX.  */
 
 static reg_errcode_t
-internal_function __attribute_warn_unused_result__
+internal_function
 match_ctx_add_subtop (re_match_context_t *mctx, int node, int str_idx)
 {
 #ifdef DEBUG

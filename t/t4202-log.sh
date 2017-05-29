@@ -231,14 +231,47 @@ second
 initial
 EOF
 test_expect_success 'log --invert-grep --grep' '
-	git log --pretty="tformat:%s" --invert-grep --grep=th --grep=Sec >actual &&
-	test_cmp expect actual
+	# Fixed
+	git -c grep.patternType=fixed log --pretty="tformat:%s" --invert-grep --grep=th --grep=Sec >actual &&
+	test_cmp expect actual &&
+
+	# POSIX basic
+	git -c grep.patternType=basic log --pretty="tformat:%s" --invert-grep --grep=t[h] --grep=S[e]c >actual &&
+	test_cmp expect actual &&
+
+	# POSIX extended
+	git -c grep.patternType=basic log --pretty="tformat:%s" --invert-grep --grep=t[h] --grep=S[e]c >actual &&
+	test_cmp expect actual &&
+
+	# PCRE
+	if test_have_prereq PCRE
+	then
+		git -c grep.patternType=perl log --pretty="tformat:%s" --invert-grep --grep=t[h] --grep=S[e]c >actual &&
+		test_cmp expect actual
+	fi
 '
 
 test_expect_success 'log --invert-grep --grep -i' '
 	echo initial >expect &&
-	git log --pretty="tformat:%s" --invert-grep -i --grep=th --grep=Sec >actual &&
-	test_cmp expect actual
+
+	# Fixed
+	git -c grep.patternType=fixed log --pretty="tformat:%s" --invert-grep -i --grep=th --grep=Sec >actual &&
+	test_cmp expect actual &&
+
+	# POSIX basic
+	git -c grep.patternType=basic log --pretty="tformat:%s" --invert-grep -i --grep=t[h] --grep=S[e]c >actual &&
+	test_cmp expect actual &&
+
+	# POSIX extended
+	git -c grep.patternType=extended log --pretty="tformat:%s" --invert-grep -i --grep=t[h] --grep=S[e]c >actual &&
+	test_cmp expect actual &&
+
+	# PCRE
+	if test_have_prereq PCRE
+	then
+		git -c grep.patternType=perl log --pretty="tformat:%s" --invert-grep -i --grep=t[h] --grep=S[e]c >actual &&
+		test_cmp expect actual
+	fi
 '
 
 test_expect_success 'log --grep option parsing' '
@@ -256,8 +289,25 @@ test_expect_success 'log -i --grep' '
 
 test_expect_success 'log --grep -i' '
 	echo Second >expect &&
+
+	# Fixed
 	git log -1 --pretty="tformat:%s" --grep=sec -i >actual &&
-	test_cmp expect actual
+	test_cmp expect actual &&
+
+	# POSIX basic
+	git -c grep.patternType=basic log -1 --pretty="tformat:%s" --grep=s[e]c -i >actual &&
+	test_cmp expect actual &&
+
+	# POSIX extended
+	git -c grep.patternType=extended log -1 --pretty="tformat:%s" --grep=s[e]c -i >actual &&
+	test_cmp expect actual &&
+
+	# PCRE
+	if test_have_prereq PCRE
+	then
+		git -c grep.patternType=perl log -1 --pretty="tformat:%s" --grep=s[e]c -i >actual &&
+		test_cmp expect actual
+	fi
 '
 
 test_expect_success 'log -F -E --grep=<ere> uses ere' '
@@ -275,14 +325,16 @@ test_expect_success PCRE 'log -F -E --perl-regexp --grep=<pcre> uses PCRE' '
 		test_commit 1d &&
 		test_commit 2e
 	) &&
-	echo 2e >expect &&
+
 	# In PCRE \d in [\d] is like saying "0-9", and matches the 2
 	# in 2e...
+	echo 2e >expect &&
 	git -C num_commits log -1 --pretty="tformat:%s" -F -E --perl-regexp --grep="[\d]" >actual &&
 	test_cmp expect actual &&
+
+	# ...in POSIX basic and extended it is the same as [d],
+	# i.e. "d", which matches 1d, but does not match 2e.
 	echo 1d >expect &&
-	# ...in POSIX basic & extended it is the same as [d],
-	# i.e. "d", which matches 1d, but not and does not match 2e.
 	git -C num_commits log -1 --pretty="tformat:%s" -F -E --grep="[\d]" >actual &&
 	test_cmp expect actual
 '
@@ -336,7 +388,9 @@ test_expect_success 'log with various grep.patternType configurations & command-
 		then
 			# Only PCRE would match [\d]\| with only
 			# "(1|2)" due to [\d]. POSIX basic would match
-			# both it and "1", and POSIX extended would
+			# both it and "1" since similarly to the
+			# extended match above it is the same as
+			# \([\d]\|\). POSIX extended would
 			# match neither.
 			git -c grep.patternType=perl log --pretty=tformat:%s \
 				--grep="[\d]\|" >actual.perl &&
@@ -350,8 +404,20 @@ test_expect_success 'log with various grep.patternType configurations & command-
 			--grep="(1|2)" >actual.fixed.short-arg &&
 		git log --pretty=tformat:%s -E \
 			--grep="\|2" >actual.extended.short-arg &&
+		if test_have_prereq PCRE
+		then
+			git log --pretty=tformat:%s -P \
+				--grep="[\d]\|" >actual.perl.short-arg
+		else
+			test_must_fail git log -P \
+				--grep="[\d]\|"
+		fi &&
 		test_cmp expect.fixed actual.fixed.short-arg &&
 		test_cmp expect.extended actual.extended.short-arg &&
+		if test_have_prereq PCRE
+		then
+			test_cmp expect.perl actual.perl.short-arg
+		fi &&
 
 		git log --pretty=tformat:%s --fixed-strings \
 			--grep="(1|2)" >actual.fixed.long-arg &&
@@ -1483,6 +1549,15 @@ test_expect_success 'log --source paints tag names' '
 	1ac6c77	source-tag one
 	EOF
 	git log --oneline --source source-tag source-a >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'log --source paints symmetric ranges' '
+	cat >expect <<-\EOF &&
+	09e12a9	source-b three
+	8e393e1	source-a two
+	EOF
+	git log --oneline --source source-a...source-b >actual &&
 	test_cmp expect actual
 '
 

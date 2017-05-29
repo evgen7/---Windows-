@@ -16,7 +16,7 @@ typedef struct rev_name {
 	int from_tag;
 } rev_name;
 
-static long cutoff = LONG_MAX;
+static timestamp_t cutoff = TIME_MAX;
 
 static const char *prio_names[] = {
 	N_("head"), N_("lightweight"), N_("annotated"),

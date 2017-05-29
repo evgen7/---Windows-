@@ -241,6 +241,82 @@ static void add_instead_of(struct rewrite *rewrite, const char *instead_of)
 	rewrite->instead_of_nr++;
 }
 
+static const char *skip_spaces(const char *s)
+{
+	while (isspace(*s))
+		s++;
+	return s;
+}
+
+static void read_remotes_file(struct remote *remote)
+{
+	struct strbuf buf = STRBUF_INIT;
+	FILE *f = fopen_or_warn(git_path("remotes/%s", remote->name), "r");
+
+	if (!f)
+		return;
+	remote->configured_in_repo = 1;
+	remote->origin = REMOTE_REMOTES;
+	while (strbuf_getline(&buf, f) != EOF) {
+		const char *v;
+
+		strbuf_rtrim(&buf);
+
+		if (skip_prefix(buf.buf, "URL:", &v))
+			add_url_alias(remote, xstrdup(skip_spaces(v)));
+		else if (skip_prefix(buf.buf, "Push:", &v))
+			add_push_refspec(remote, xstrdup(skip_spaces(v)));
+		else if (skip_prefix(buf.buf, "Pull:", &v))
+			add_fetch_refspec(remote, xstrdup(skip_spaces(v)));
+	}
+	strbuf_release(&buf);
+	fclose(f);
+}
+
+static void read_branches_file(struct remote *remote)
+{
+	char *frag;
+	struct strbuf buf = STRBUF_INIT;
+	FILE *f = fopen_or_warn(git_path("branches/%s", remote->name), "r");
+
+	if (!f)
+		return;
+
+	strbuf_getline_lf(&buf, f);
+	fclose(f);
+	strbuf_trim(&buf);
+	if (!buf.len) {
+		strbuf_release(&buf);
+		return;
+	}
+
+	remote->configured_in_repo = 1;
+	remote->origin = REMOTE_BRANCHES;
+
+	/*
+	 * The branches file would have URL and optionally
+	 * #branch specified.  The "master" (or specified) branch is
+	 * fetched and stored in the local branch matching the
+	 * remote name.
+	 */
+	frag = strchr(buf.buf, '#');
+	if (frag)
+		*(frag++) = '\0';
+	else
+		frag = "master";
+
+	add_url_alias(remote, strbuf_detach(&buf, NULL));
+	add_fetch_refspec(remote, xstrfmt("refs/heads/%s:refs/heads/%s",
+					  frag, remote->name));
+
+	/*
+	 * Cogito compatible push: push current HEAD to remote #branch
+	 * (master if missing)
+	 */
+	add_push_refspec(remote, xstrfmt("HEAD:refs/heads/%s", frag));
+	remote->fetch_tags = 1; /* always auto-follow */
+}
+
 static int handle_config(const char *key, const char *value, void *cb)
 {
 	const char *name;
@@ -401,26 +477,6 @@ static void read_config(void)
 	alias_all_urls();
 }
 
-/*
- * This function frees a refspec array.
- * Warning: code paths should be checked to ensure that the src
- *          and dst pointers are always freeable pointers as well
- *          as the refspec pointer itself.
- */
-static void free_refspecs(struct refspec *refspec, int nr_refspec)
-{
-	int i;
-
-	if (!refspec)
-		return;
-
-	for (i = 0; i < nr_refspec; i++) {
-		free(refspec[i].src);
-		free(refspec[i].dst);
-	}
-	free(refspec);
-}
-
 static struct refspec *parse_refspec_internal(int nr_refspec, const char **refspec, int fetch, int verify)
 {
 	int i;
@@ -534,7 +590,7 @@ static struct refspec *parse_refspec_internal(int nr_refspec, const char **refsp
 		 * since it is only possible to reach this point from within
 		 * the for loop above.
 		 */
-		free_refspecs(rs, i+1);
+		free_refspec(i+1, rs);
 		return NULL;
 	}
 	die("Invalid refspec '%s'", refspec[i]);
@@ -545,7 +601,7 @@ int valid_fetch_refspec(const char *fetch_refspec_str)
 	struct refspec *refspec;
 
 	refspec = parse_refspec_internal(1, &fetch_refspec_str, 1, 1);
-	free_refspecs(refspec, 1);
+	free_refspec(1, refspec);
 	return !!refspec;
 }
 
@@ -562,11 +618,27 @@ struct refspec *parse_push_refspec(int nr_refspec, const char **refspec)
 void free_refspec(int nr_refspec, struct refspec *refspec)
 {
 	int i;
+
+	if (!refspec)
+		return;
+
 	for (i = 0; i < nr_refspec; i++) {
 		free(refspec[i].src);
 		free(refspec[i].dst);
 	}
 	free(refspec);
+}
+
+static int valid_remote_nick(const char *name)
+{
+	if (!name[0] || is_dot_or_dotdot(name))
+		return 0;
+
+	/* remote nicknames cannot contain slashes */
+	while (*name)
+		if (is_dir_sep(*name++))
+			return 0;
+	return 1;
 }
 
 const char *remote_for_branch(struct branch *branch, int *explicit)
@@ -610,6 +682,12 @@ static struct remote *remote_get_1(const char *name,
 		name = get_default(current_branch, &name_given);
 
 	ret = make_remote(name, 0);
+	if (valid_remote_nick(name) && have_git_dir()) {
+		if (!valid_remote(ret))
+			read_remotes_file(ret);
+		if (!valid_remote(ret))
+			read_branches_file(ret);
+	}
 	if (name_given && !valid_remote(ret))
 		add_url_alias(ret, name);
 	if (!valid_remote(ret))
