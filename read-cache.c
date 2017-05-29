@@ -18,7 +18,6 @@
 #include "varint.h"
 #include "split-index.h"
 #include "utf8.h"
-#include "fsmonitor.h"
 
 /* Mask for the name length in ce_flags in the on-disk index */
 
@@ -38,12 +37,11 @@
 #define CACHE_EXT_RESOLVE_UNDO 0x52455543 /* "REUC" */
 #define CACHE_EXT_LINK 0x6c696e6b	  /* "link" */
 #define CACHE_EXT_UNTRACKED 0x554E5452	  /* "UNTR" */
-#define CACHE_EXT_FSMONITOR 0x46534D4E	  /* "FSMN" */
 
 /* changes that can be kept in $GIT_DIR/index (basically all extensions) */
 #define EXTMASK (RESOLVE_UNDO_CHANGED | CACHE_TREE_CHANGED | \
 		 CE_ENTRY_ADDED | CE_ENTRY_REMOVED | CE_ENTRY_CHANGED | \
-		 SPLIT_INDEX_ORDERED | UNTRACKED_CHANGED | FSMONITOR_CHANGED)
+		 SPLIT_INDEX_ORDERED | UNTRACKED_CHANGED)
 
 struct index_state the_index;
 static const char *alternate_index_output;
@@ -63,7 +61,6 @@ static void replace_index_entry(struct index_state *istate, int nr, struct cache
 	free(old);
 	set_index_entry(istate, nr, ce);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
-	ce->ce_flags |= CE_FSMONITOR_DIRTY;
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 }
 
@@ -780,7 +777,6 @@ int chmod_index_entry(struct index_state *istate, struct cache_entry *ce,
 	}
 	cache_tree_invalidate_path(istate, ce->name);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
-	ce->ce_flags |= CE_FSMONITOR_DIRTY;
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 
 	return 0;
@@ -1348,8 +1344,6 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 	const char *added_fmt;
 	const char *unmerged_fmt;
 
-	refresh_by_fsmonitor(istate);
-
 	modified_fmt = (in_porcelain ? "M\t%s\n" : "%s: needs update\n");
 	deleted_fmt = (in_porcelain ? "D\t%s\n" : "%s: needs update\n");
 	typechange_fmt = (in_porcelain ? "T\t%s\n" : "%s needs update\n");
@@ -1386,11 +1380,8 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 			continue;
 
 		new = refresh_cache_ent(istate, ce, options, &cache_errno, &changed);
-		if (new == ce) {
-			ce->ce_flags &= ~CE_FSMONITOR_DIRTY;
+		if (new == ce)
 			continue;
-		}
-
 		if (!new) {
 			const char *fmt;
 
@@ -1400,7 +1391,6 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 				 */
 				ce->ce_flags &= ~CE_VALID;
 				ce->ce_flags |= CE_UPDATE_IN_BASE;
-				ce->ce_flags |= CE_FSMONITOR_DIRTY;
 				istate->cache_changed |= CE_ENTRY_CHANGED;
 			}
 			if (quiet)
@@ -1558,9 +1548,6 @@ static int read_index_extension(struct index_state *istate,
 		break;
 	case CACHE_EXT_UNTRACKED:
 		istate->untracked = read_untracked_extension(data, sz);
-		break;
-	case CACHE_EXT_FSMONITOR:
-		read_fsmonitor_extension(istate, data, sz);
 		break;
 	default:
 		if (*ext < 'A' || 'Z' < *ext)
@@ -1734,7 +1721,6 @@ static void post_read_index_from(struct index_state *istate)
 	check_ce_order(istate);
 	tweak_untracked_cache(istate);
 	tweak_split_index(istate);
-	process_fsmonitor_extension(istate);
 }
 
 /* remember to discard_cache() before reading a different cache! */
@@ -1891,9 +1877,15 @@ int discard_index(struct index_state *istate)
 {
 	int i;
 
-	unshare_split_index(istate, 1);
-	for (i = 0; i < istate->cache_nr; i++)
+	for (i = 0; i < istate->cache_nr; i++) {
+		if (istate->cache[i]->index &&
+		    istate->split_index &&
+		    istate->split_index->base &&
+		    istate->cache[i]->index <= istate->split_index->base->cache_nr &&
+		    istate->cache[i] == istate->split_index->base->cache[istate->cache[i]->index - 1])
+			continue;
 		free(istate->cache[i]);
+	}
 	resolve_undo_clear_index(istate);
 	istate->cache_nr = 0;
 	istate->cache_changed = 0;
@@ -2195,10 +2187,9 @@ void update_index_if_able(struct index_state *istate, struct lock_file *lockfile
 		rollback_lock_file(lockfile);
 }
 
-static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
+static int do_write_index(struct index_state *istate, int newfd,
 			  int strip_extensions)
 {
-	int newfd = tempfile->fd;
 	git_SHA_CTX c;
 	struct cache_header hdr;
 	int i, err, removed, extended, hdr_version;
@@ -2206,7 +2197,6 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 	int entries = istate->cache_nr;
 	struct stat st;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-	int drop_cache_tree = 0;
 
 	for (i = removed = extended = 0; i < entries; i++) {
 		if (cache[i]->ce_flags & CE_REMOVE)
@@ -2257,8 +2247,6 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 				warning(msg, ce->name);
 			else
 				return error(msg, ce->name);
-
-			drop_cache_tree = 1;
 		}
 		if (ce_write_entry(&c, newfd, ce, previous_name) < 0)
 			return -1;
@@ -2277,7 +2265,7 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 		if (err)
 			return -1;
 	}
-	if (!strip_extensions && !drop_cache_tree && istate->cache_tree) {
+	if (!strip_extensions && istate->cache_tree) {
 		struct strbuf sb = STRBUF_INIT;
 
 		cache_tree_write(&sb, istate->cache_tree);
@@ -2309,22 +2297,8 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 		if (err)
 			return -1;
 	}
-	if (!strip_extensions && istate->fsmonitor_last_update) {
-		struct strbuf sb = STRBUF_INIT;
 
-		write_fsmonitor_extension(&sb, istate);
-		err = write_index_ext_header(&c, newfd, CACHE_EXT_FSMONITOR, sb.len) < 0
-			|| ce_write(&c, newfd, sb.buf, sb.len) < 0;
-		strbuf_release(&sb);
-		if (err)
-			return -1;
-	}
-
-	if (ce_flush(&c, newfd, istate->sha1))
-		return -1;
-	if (close_tempfile(tempfile))
-		return error(_("could not close '%s'"), tempfile->filename.buf);
-	if (stat(tempfile->filename.buf, &st))
+	if (ce_flush(&c, newfd, istate->sha1) || fstat(newfd, &st))
 		return -1;
 	istate->timestamp.sec = (unsigned int)st.st_mtime;
 	istate->timestamp.nsec = ST_MTIME_NSEC(st);
@@ -2347,7 +2321,7 @@ static int commit_locked_index(struct lock_file *lk)
 static int do_write_locked_index(struct index_state *istate, struct lock_file *lock,
 				 unsigned flags)
 {
-	int ret = do_write_index(istate, &lock->tempfile, 0);
+	int ret = do_write_index(istate, get_lock_file_fd(lock), 0);
 	if (ret)
 		return ret;
 	assert((flags & (COMMIT_LOCK | CLOSE_LOCK)) !=
@@ -2444,7 +2418,7 @@ static int write_shared_index(struct index_state *istate,
 		return do_write_locked_index(istate, lock, flags);
 	}
 	move_cache_to_base_index(istate);
-	ret = do_write_index(si->base, &temporary_sharedindex, 1);
+	ret = do_write_index(si->base, fd, 1);
 	if (ret) {
 		delete_tempfile(&temporary_sharedindex);
 		return ret;
@@ -2653,10 +2627,4 @@ void stat_validity_update(struct stat_validity *sv, int fd)
 			sv->sd = xcalloc(1, sizeof(struct stat_data));
 		fill_stat_data(sv->sd, &st);
 	}
-}
-
-void move_index_extensions(struct index_state *dst, struct index_state *src)
-{
-	dst->untracked = src->untracked;
-	src->untracked = NULL;
 }
