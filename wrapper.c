@@ -423,27 +423,9 @@ static void warn_on_inaccessible(const char *path)
 	warning_errno(_("unable to access '%s'"), path);
 }
 
-/*
- * Our code often opens a path to an optional file, to work on its
- * contents when we can successfully open it.  We can ignore a failure
- * to open if such an optional file does not exist, but we do want to
- * report a failure in opening for other reasons (e.g. we got an I/O
- * error, or the file is there, but we lack the permission to open).
- *
- * Call this function after seeing an error from open() or fopen() to
- * see if the errno indicates a missing file that we can safely ignore.
- */
-static int is_missing_file_error(int errno_) {
-#ifdef GIT_WINDOWS_NATIVE
-	if (errno_ == EINVAL)
-		return 1;
-#endif
-	return (errno_ == ENOENT || errno_ == ENOTDIR);
-}
-
 int warn_on_fopen_errors(const char *path)
 {
-	if (!is_missing_file_error(errno)) {
+	if (errno != ENOENT && errno != ENOTDIR) {
 		warn_on_inaccessible(path);
 		return -1;
 	}

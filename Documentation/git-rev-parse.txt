@@ -140,7 +140,9 @@ can be used.
 --short=number::
 	Instead of outputting the full SHA-1 values of object names try to
 	abbreviate them to a shorter unique name. When no length is specified
-	7 is used. The minimum length is 4.
+	the effective value of the configuration variable `core.abbrev` (see
+	linkgit:git-config[1]) is used.  The minimum length is 4.  The length
+	may be exceeded to ensure unique object names.	Implies `--verify`.
 
 --symbolic::
 	Usually the object names are output in SHA-1 form (with
