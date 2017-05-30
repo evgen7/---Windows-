@@ -384,7 +384,6 @@ const char *help_unknown_cmd(const char *cmd)
 
 int cmd_version(int argc, const char **argv, const char *prefix)
 {
-	static char build_platform[] = GIT_BUILD_PLATFORM;
 	int build_options = 0;
 	const char * const usage[] = {
 		N_("git version [<options>]"),
@@ -407,9 +406,7 @@ int cmd_version(int argc, const char **argv, const char *prefix)
 	printf("git version %s\n", git_version_string);
 
 	if (build_options) {
-		printf("built from commit: %s\n", git_built_from_commit_string);
 		printf("sizeof-long: %d\n", (int)sizeof(long));
-		printf("machine: %s\n", build_platform);
 		/* NEEDSWORK: also save and output GIT-BUILD_OPTIONS? */
 	}
 	return 0;
