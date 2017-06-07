@@ -335,14 +335,6 @@ typedef uintmax_t timestamp_t;
 #define _PATH_DEFPATH "/usr/local/bin:/usr/bin:/bin"
 #endif
 
-#ifndef platform_core_config
-static inline int noop_core_config(const char *var, const char *value)
-{
-	return 0;
-}
-#define platform_core_config noop_core_config
-#endif
-
 #ifndef has_dos_drive_prefix
 static inline int git_has_dos_drive_prefix(const char *path)
 {
@@ -1159,21 +1151,6 @@ static inline int is_missing_file_error(int errno_)
 {
 	return (errno_ == ENOENT || errno_ == ENOTDIR);
 }
-
-/*
- * Enable/disable a read-only cache for file system data on platforms that
- * support it.
- *
- * Implementing a live-cache is complicated and requires special platform
- * support (inotify, ReadDirectoryChangesW...). enable_fscache shall be used
- * to mark sections of git code that extensively read from the file system
- * without modifying anything. Implementations can use this to cache e.g. stat
- * data or even file content without the need to synchronize with the file
- * system.
- */
-#ifndef enable_fscache
-#define enable_fscache(x) /* noop */
-#endif
 
 extern int cmd_main(int, const char **);
 
