@@ -868,13 +868,6 @@ core.fscache::
 Git for Windows uses this to bulk-read and cache lstat data of entire
 directories (instead of doing lstat file by file).
 
-core.longpaths::
-	Enable long path (> 260) support for builtin commands in Git for
-	Windows. This is disabled by default, as long paths are not supported
-	by Windows Explorer, cmd.exe and the Git for Windows tool chain
-	(msys, bash, tcl, perl...). Only enable this if you know what you're
-	doing and are prepared to live with a few quirks.
-
 core.unsetenvvars::
 	EXPERIMENTAL, Windows-only: comma-separated list of environment
 	variables' names that need to be unset before spawning any other
@@ -1099,12 +1092,9 @@ This does not affect linkgit:git-format-patch[1] or the
 'git-diff-{asterisk}' plumbing commands.  Can be overridden on the
 command line with the `--color[=<when>]` option.
 
-color.moved::
-	A boolean value, whether a diff should color moved lines
-	differently. The moved lines are searched for in the diff only.
-	Duplicated lines from somewhere in the project that are not
-	part of the diff are not colored as moved.
-	Defaults to false.
+diff.colorMoved::
+	If set moved lines in a diff are colored differently,
+	for details see '--color-moved' in linkgit:git-diff[1].
 
 color.diff.<slot>::
 	Use customized color for diff colorization.  `<slot>` specifies
@@ -1113,10 +1103,9 @@ color.diff.<slot>::
 	`meta` (metainformation), `frag`
 	(hunk header), 'func' (function in hunk header), `old` (removed lines),
 	`new` (added lines), `commit` (commit headers), `whitespace`
-	(highlighting whitespace errors), `oldMoved` (removed lines that
-	reappear), `newMoved` (added lines that were removed elsewhere),
-	`oldMovedAlternative` and `newMovedAlternative` (as a fallback to
-	cover adjacent blocks of moved code)
+	(highlighting whitespace errors), `oldMoved`, `newMoved`,
+	`oldMovedAlternative` and `newMovedAlternative` (See the '<mode>'
+	setting of '--color-moved' in linkgit:git-diff[1] for details).
 
 color.decorate.<slot>::
 	Use customized color for 'git log --decorate' output.  `<slot>` is one
@@ -3141,6 +3130,11 @@ submodule.active::
 	submodule's path to determine if the submodule is of interest to git
 	commands.
 
+submodule.recurse::
+	Specifies if commands recurse into submodules by default. This
+	applies to all commands that have a `--recurse-submodules` option.
+	Defaults to false.
+
 submodule.fetchJobs::
 	Specifies how many submodules are fetched/cloned at the same time.
 	A positive integer allows up to that number of submodules fetched
@@ -3286,6 +3280,13 @@ url.<base>.insteadOf::
 	the best alternative for the particular user, even for a
 	never-before-seen repository on the site.  When more than one
 	insteadOf strings match a given URL, the longest match is used.
++
+Note that any protocol restrictions will be applied to the rewritten
+URL. If the rewrite changes the URL to use a custom protocol or remote
+helper, you may need to adjust the `protocol.*.allow` config to permit
+the request.  In particular, protocols you expect to use for submodules
+must be set to `always` rather than the default of `user`. See the
+description of `protocol.allow` above.
 
 url.<base>.pushInsteadOf::
 	Any URL that starts with this value will not be pushed to;

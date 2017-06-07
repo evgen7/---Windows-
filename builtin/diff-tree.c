@@ -7,7 +7,7 @@
 
 static struct rev_info log_tree_opt;
 
-static int diff_tree_commit_sha1(const struct object_id *oid)
+static int diff_tree_commit_oid(const struct object_id *oid)
 {
 	struct commit *commit = lookup_commit_reference(oid);
 	if (!commit)
@@ -49,8 +49,8 @@ static int stdin_diff_trees(struct tree *tree1, const char *p)
 		return -1;
 	printf("%s %s\n", oid_to_hex(&tree1->object.oid),
 			  oid_to_hex(&tree2->object.oid));
-	diff_tree_sha1(tree1->object.oid.hash, tree2->object.oid.hash,
-		       "", &log_tree_opt.diffopt);
+	diff_tree_oid(&tree1->object.oid, &tree2->object.oid,
+		      "", &log_tree_opt.diffopt);
 	log_tree_diff_flush(&log_tree_opt);
 	return 0;
 }
@@ -98,12 +98,14 @@ static void diff_tree_tweak_rev(struct rev_info *rev, struct setup_revision_opt 
 
 int cmd_diff_tree(int argc, const char **argv, const char *prefix)
 {
-	int nr_sha1;
 	char line[1000];
 	struct object *tree1, *tree2;
 	static struct rev_info *opt = &log_tree_opt;
 	struct setup_revision_opt s_r_opt;
 	int read_stdin = 0;
+
+	if (argc == 2 && !strcmp(argv[1], "-h"))
+		usage(diff_tree_usage);
 
 	git_config(git_diff_basic_config, NULL); /* no "diff" UI options */
 	init_revisions(opt, prefix);
@@ -128,19 +130,20 @@ int cmd_diff_tree(int argc, const char **argv, const char *prefix)
 	}
 
 	/*
-	 * NOTE! We expect "a ^b" to be equal to "a..b", so we
-	 * reverse the order of the objects if the second one
-	 * is marked UNINTERESTING.
+	 * NOTE!  We expect "a..b" to expand to "^a b" but it is
+	 * perfectly valid for revision range parser to yield "b ^a",
+	 * which means the same thing. If we get the latter, i.e. the
+	 * second one is marked UNINTERESTING, we recover the original
+	 * order the user gave, i.e. "a..b", by swapping the trees.
 	 */
-	nr_sha1 = opt->pending.nr;
-	switch (nr_sha1) {
+	switch (opt->pending.nr) {
 	case 0:
 		if (!read_stdin)
 			usage(diff_tree_usage);
 		break;
 	case 1:
 		tree1 = opt->pending.objects[0].item;
-		diff_tree_commit_sha1(&tree1->oid);
+		diff_tree_commit_oid(&tree1->oid);
 		break;
 	case 2:
 		tree1 = opt->pending.objects[0].item;
@@ -148,9 +151,7 @@ int cmd_diff_tree(int argc, const char **argv, const char *prefix)
 		if (tree2->flags & UNINTERESTING) {
 			SWAP(tree2, tree1);
 		}
-		diff_tree_sha1(tree1->oid.hash,
-			       tree2->oid.hash,
-			       "", &opt->diffopt);
+		diff_tree_oid(&tree1->oid, &tree2->oid, "", &opt->diffopt);
 		log_tree_diff_flush(opt);
 		break;
 	}

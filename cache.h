@@ -1023,6 +1023,13 @@ static inline void oidcpy(struct object_id *dst, const struct object_id *src)
 	hashcpy(dst->hash, src->hash);
 }
 
+static inline struct object_id *oiddup(const struct object_id *src)
+{
+	struct object_id *dst = xmalloc(sizeof(struct object_id));
+	oidcpy(dst, src);
+	return dst;
+}
+
 static inline void hashclr(unsigned char *hash)
 {
 	memset(hash, 0, GIT_SHA1_RAWSZ);
@@ -1546,17 +1553,20 @@ extern int ident_cmp(const struct ident_split *, const struct ident_split *);
 struct checkout {
 	struct index_state *istate;
 	const char *base_dir;
+	struct delayed_checkout *delayed_checkout;
 	int base_dir_len;
 	unsigned force:1,
 		 quiet:1,
 		 not_new:1,
 		 refresh_cache:1;
 };
-#define CHECKOUT_INIT { NULL, "" }
+#define CHECKOUT_INIT { NULL, "", NULL }
+
 
 #define TEMPORARY_FILENAME_LENGTH 25
 extern int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *topath);
-extern int checkout_delayed_entries(const struct checkout *state);
+extern void enable_delayed_checkout(struct checkout *state);
+extern int finish_delayed_checkout(struct checkout *state);
 
 struct cache_def {
 	struct strbuf path;

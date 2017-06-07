@@ -56,10 +56,10 @@ static char diff_colors[][COLOR_MAXLEN] = {
 	GIT_COLOR_YELLOW,	/* COMMIT */
 	GIT_COLOR_BG_RED,	/* WHITESPACE */
 	GIT_COLOR_NORMAL,	/* FUNCINFO */
-	GIT_COLOR_BOLD_RED,	/* OLD_MOVED_A */
-	GIT_COLOR_BG_RED,	/* OLD_MOVED_B */
-	GIT_COLOR_BOLD_GREEN,	/* NEW_MOVED_A */
-	GIT_COLOR_BG_GREEN,	/* NEW_MOVED_B */
+	GIT_COLOR_DI_IT_MAGENTA,/* OLD_MOVED */
+	GIT_COLOR_BG_RED,	/* OLD_MOVED ALTERNATIVE */
+	GIT_COLOR_DI_IT_CYAN,	/* NEW_MOVED */
+	GIT_COLOR_BG_GREEN,	/* NEW_MOVED ALTERNATIVE */
 };
 
 static NORETURN void die_want_option(const char *option_name)
@@ -241,14 +241,33 @@ int git_diff_heuristic_config(const char *var, const char *value, void *cb)
 	return 0;
 }
 
+static int parse_color_moved(const char *arg)
+{
+	if (!strcmp(arg, "no"))
+		return MOVED_LINES_NO;
+	else if (!strcmp(arg, "nobounds"))
+		return MOVED_LINES_BOUNDARY_NO;
+	else if (!strcmp(arg, "allbounds"))
+		return MOVED_LINES_BOUNDARY_ALL;
+	else if (!strcmp(arg, "adjacentbounds"))
+		return MOVED_LINES_BOUNDARY_ADJACENT;
+	else if (!strcmp(arg, "alternate"))
+		return MOVED_LINES_ALTERNATE;
+	else
+		return -1;
+}
+
 int git_diff_ui_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, "diff.color") || !strcmp(var, "color.diff")) {
 		diff_use_color_default = git_config_colorbool(var, value);
 		return 0;
 	}
-	if (!strcmp(var, "color.moved")) {
-		diff_color_moved_default = git_config_bool(var, value);
+	if (!strcmp(var, "diff.colormoved")) {
+		int cm = parse_color_moved(value);
+		if (cm < 0)
+			return -1;
+		diff_color_moved_default = cm;
 		return 0;
 	}
 	if (!strcmp(var, "diff.context")) {
@@ -652,41 +671,70 @@ static void add_lines_to_move_detection(struct diff_options *o,
 	}
 }
 
+static void mark_color_as_moved_single_line(struct diff_options *o,
+					    struct diff_line *l, int alt_color)
+{
+	switch (l->sign) {
+	case '+':
+		l->set = diff_get_color_opt(o,
+			DIFF_FILE_NEW_MOVED + alt_color);
+		break;
+	case '-':
+		l->set = diff_get_color_opt(o,
+			DIFF_FILE_OLD_MOVED + alt_color);
+		break;
+	default:
+		die("BUG: we should have continued earlier?");
+	}
+}
+
 static void mark_color_as_moved(struct diff_options *o,
 				struct hashmap *add_lines,
 				struct hashmap *del_lines)
 {
 	struct moved_entry **pmb = NULL; /* potentially moved blocks */
+	struct diff_line *prev_line = NULL;
 	int pmb_nr = 0, pmb_alloc = 0;
-	int use_alt_color = 0;
-	int n;
+	int n, flipped_block = 0;
 
 	for (n = 0; n < o->line_buffer_nr; n++) {
 		struct hashmap *hm = NULL;
 		struct moved_entry *key;
 		struct moved_entry *match = NULL;
 		struct diff_line *l = &o->line_buffer[n];
-		int i, lp, rp;
+		int i, lp, rp, adjacent_blocks = 0;
 
+		/* Check for any match to color it as a move. */
 		switch (l->sign) {
 		case '+':
 			hm = del_lines;
+			key = prepare_entry(o, n);
+			match = hashmap_get(hm, key, o);
+			free(key);
 			break;
 		case '-':
 			hm = add_lines;
+			key = prepare_entry(o, n);
+			match = hashmap_get(hm, key, o);
+			free(key);
 			break;
-		default:
-			use_alt_color = 0;
-			pmb_nr = 0; /* no running sets */
+		default: ;
+			flipped_block = 0;
+		}
+
+		if (!match) {
+			pmb_nr = 0;
+			if (prev_line &&
+			    o->color_moved == MOVED_LINES_BOUNDARY_ALL)
+				mark_color_as_moved_single_line(o, prev_line, 1);
+			prev_line = NULL;
 			continue;
 		}
 
-		/* Check for any match to color it as a move. */
-		key = prepare_entry(o, n);
-		match = hashmap_get(hm, key, o);
-		free(key);
-		if (!match)
+		if (o->color_moved == MOVED_LINES_BOUNDARY_NO) {
+			mark_color_as_moved_single_line(o, l, 0);
 			continue;
+		}
 
 		/* Check any potential block runs, advance each or nullify */
 		for (i = 0; i < pmb_nr; i++) {
@@ -701,7 +749,7 @@ static void mark_color_as_moved(struct diff_options *o,
 			}
 		}
 
-		/* Shrink the set to the remaining runs */
+		/* Shrink the set of potential block to the remaining running */
 		for (lp = 0, rp = pmb_nr - 1; lp <= rp;) {
 			while (lp < pmb_nr && pmb[lp])
 				lp++;
@@ -719,34 +767,44 @@ static void mark_color_as_moved(struct diff_options *o,
 			}
 		}
 
-		if (rp > -1) {
-			/* Remember the number of running sets */
-			pmb_nr = rp + 1;
-		} else {
-			/* Toggle color */
-			use_alt_color = (use_alt_color + 1) % 2;
+		/* Remember the number of running sets */
+		pmb_nr = rp + 1;
 
-			/* Build up a new set */
-			pmb_nr = 0;
+		if (pmb_nr == 0) {
+			/*
+			 * This line is the start of a new block.
+			 * Setup the set of potential blocks.
+			 */
 			for (; match; match = hashmap_get_next(hm, match)) {
 				ALLOC_GROW(pmb, pmb_nr + 1, pmb_alloc);
 				pmb[pmb_nr++] = match;
 			}
+
+			if (o->color_moved == MOVED_LINES_BOUNDARY_ALL) {
+				adjacent_blocks = 1;
+			} else {
+				/* Check if two blocks are adjacent */
+				adjacent_blocks = prev_line &&
+						  prev_line->sign == l->sign;
+			}
 		}
 
-		switch (l->sign) {
-		case '+':
-			l->set = diff_get_color_opt(o,
-				DIFF_FILE_NEW_MOVED + use_alt_color);
-			break;
-		case '-':
-			l->set = diff_get_color_opt(o,
-				DIFF_FILE_OLD_MOVED + use_alt_color);
-			break;
-		default:
-			die("BUG: we should have continued earlier?");
+		if (o->color_moved == MOVED_LINES_ALTERNATE) {
+			if (adjacent_blocks)
+				flipped_block = (flipped_block + 1) % 2;
+			mark_color_as_moved_single_line(o, l, flipped_block);
+		} else {
+			/* MOVED_LINES_BOUNDARY_{ADJACENT, ALL} */
+			mark_color_as_moved_single_line(o, l, adjacent_blocks);
+			if (adjacent_blocks && prev_line)
+				prev_line->set = l->set;
 		}
+
+		prev_line = l;
 	}
+	if (prev_line && o->color_moved == MOVED_LINES_BOUNDARY_ALL)
+		mark_color_as_moved_single_line(o, prev_line, 1);
+
 	free(pmb);
 }
 
@@ -3043,13 +3101,13 @@ void free_filespec(struct diff_filespec *spec)
 	}
 }
 
-void fill_filespec(struct diff_filespec *spec, const unsigned char *sha1,
-		   int sha1_valid, unsigned short mode)
+void fill_filespec(struct diff_filespec *spec, const struct object_id *oid,
+		   int oid_valid, unsigned short mode)
 {
 	if (mode) {
 		spec->mode = canon_mode(mode);
-		hashcpy(spec->oid.hash, sha1);
-		spec->oid_valid = sha1_valid;
+		oidcpy(&spec->oid, oid);
+		spec->oid_valid = oid_valid;
 	}
 }
 
@@ -3058,7 +3116,7 @@ void fill_filespec(struct diff_filespec *spec, const unsigned char *sha1,
  * the work tree has that object contents, return true, so that
  * prepare_temp_file() does not have to inflate and extract.
  */
-static int reuse_worktree_file(const char *name, const unsigned char *sha1, int want_file)
+static int reuse_worktree_file(const char *name, const struct object_id *oid, int want_file)
 {
 	const struct cache_entry *ce;
 	struct stat st;
@@ -3089,7 +3147,7 @@ static int reuse_worktree_file(const char *name, const unsigned char *sha1, int 
 	 * objects however would tend to be slower as they need
 	 * to be individually opened and inflated.
 	 */
-	if (!FAST_WORKING_DIRECTORY && !want_file && has_sha1_pack(sha1))
+	if (!FAST_WORKING_DIRECTORY && !want_file && has_sha1_pack(oid->hash))
 		return 0;
 
 	/*
@@ -3109,7 +3167,7 @@ static int reuse_worktree_file(const char *name, const unsigned char *sha1, int 
 	 * This is not the sha1 we are looking for, or
 	 * unreusable because it is not a regular file.
 	 */
-	if (hashcmp(sha1, ce->oid.hash) || !S_ISREG(ce->ce_mode))
+	if (oidcmp(oid, &ce->oid) || !S_ISREG(ce->ce_mode))
 		return 0;
 
 	/*
@@ -3183,7 +3241,7 @@ int diff_populate_filespec(struct diff_filespec *s, unsigned int flags)
 		return diff_populate_gitlink(s, size_only);
 
 	if (!s->oid_valid ||
-	    reuse_worktree_file(s->path, s->oid.hash, 0)) {
+	    reuse_worktree_file(s->path, &s->oid, 0)) {
 		struct strbuf buf = STRBUF_INIT;
 		struct stat st;
 		int fd;
@@ -3349,7 +3407,7 @@ static struct diff_tempfile *prepare_temp_file(const char *name,
 
 	if (!S_ISGITLINK(one->mode) &&
 	    (!one->oid_valid ||
-	     reuse_worktree_file(name, one->oid.hash, 1))) {
+	     reuse_worktree_file(name, &one->oid, 1))) {
 		struct stat st;
 		if (lstat(name, &st) < 0) {
 			if (errno == ENOENT)
@@ -3371,13 +3429,13 @@ static struct diff_tempfile *prepare_temp_file(const char *name,
 			/* we can borrow from the file in the work tree */
 			temp->name = name;
 			if (!one->oid_valid)
-				sha1_to_hex_r(temp->hex, null_sha1);
+				oid_to_hex_r(temp->hex, &null_oid);
 			else
 				oid_to_hex_r(temp->hex, &one->oid);
 			/* Even though we may sometimes borrow the
 			 * contents from the work tree, we always want
 			 * one->mode.  mode is trustworthy even when
-			 * !(one->sha1_valid), as long as
+			 * !(one->oid_valid), as long as
 			 * DIFF_FILE_VALID(one).
 			 */
 			xsnprintf(temp->mode, sizeof(temp->mode), "%06o", one->mode);
@@ -3580,7 +3638,7 @@ static void run_diff_cmd(const char *pgm,
 		fprintf(o->file, "* Unmerged path %s\n", name);
 }
 
-static void diff_fill_sha1_info(struct diff_filespec *one)
+static void diff_fill_oid_info(struct diff_filespec *one)
 {
 	if (DIFF_FILE_VALID(one)) {
 		if (!one->oid_valid) {
@@ -3639,8 +3697,8 @@ static void run_diff(struct diff_filepair *p, struct diff_options *o)
 		return;
 	}
 
-	diff_fill_sha1_info(one);
-	diff_fill_sha1_info(two);
+	diff_fill_oid_info(one);
+	diff_fill_oid_info(two);
 
 	if (!pgm &&
 	    DIFF_FILE_VALID(one) && DIFF_FILE_VALID(two) &&
@@ -3685,8 +3743,8 @@ static void run_diffstat(struct diff_filepair *p, struct diff_options *o,
 	if (o->prefix_length)
 		strip_prefix(o->prefix_length, &name, &other);
 
-	diff_fill_sha1_info(p->one);
-	diff_fill_sha1_info(p->two);
+	diff_fill_oid_info(p->one);
+	diff_fill_oid_info(p->two);
 
 	builtin_diffstat(name, other, p->one, p->two, diffstat, o, p);
 }
@@ -3709,8 +3767,8 @@ static void run_checkdiff(struct diff_filepair *p, struct diff_options *o)
 	if (o->prefix_length)
 		strip_prefix(o->prefix_length, &name, &other);
 
-	diff_fill_sha1_info(p->one);
-	diff_fill_sha1_info(p->two);
+	diff_fill_oid_info(p->one);
+	diff_fill_oid_info(p->two);
 
 	builtin_checkdiff(name, other, attr_path, p->one, p->two, o);
 }
@@ -4291,10 +4349,18 @@ int diff_opt_parse(struct diff_options *options,
 	else if (!strcmp(arg, "--no-color"))
 		options->use_color = 0;
 	else if (!strcmp(arg, "--color-moved"))
-		options->color_moved = 1;
+		if (diff_color_moved_default)
+			options->color_moved = diff_color_moved_default;
+		else
+			options->color_moved = MOVED_LINES_BOUNDARY_ADJACENT;
 	else if (!strcmp(arg, "--no-color-moved"))
-		options->color_moved = 0;
-	else if (!strcmp(arg, "--color-words")) {
+		options->color_moved = MOVED_LINES_NO;
+	else if (skip_prefix(arg, "--color-moved=", &arg)) {
+		int cm = parse_color_moved(arg);
+		if (cm < 0)
+			die("bad --color-moved argument: %s", arg);
+		options->color_moved = cm;
+	} else if (!strcmp(arg, "--color-words")) {
 		options->use_color = 1;
 		options->word_diff = DIFF_WORDS_COLOR;
 	}
@@ -4940,7 +5006,7 @@ static void patch_id_add_mode(git_SHA_CTX *ctx, unsigned mode)
 }
 
 /* returns 0 upon success, and writes result into sha1 */
-static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, int diff_header_only)
+static int diff_get_patch_id(struct diff_options *options, struct object_id *oid, int diff_header_only)
 {
 	struct diff_queue_struct *q = &diff_queued_diff;
 	int i;
@@ -4972,8 +5038,8 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 		if (DIFF_PAIR_UNMERGED(p))
 			continue;
 
-		diff_fill_sha1_info(p->one);
-		diff_fill_sha1_info(p->two);
+		diff_fill_oid_info(p->one);
+		diff_fill_oid_info(p->two);
 
 		len1 = remove_space(p->one->path, strlen(p->one->path));
 		len2 = remove_space(p->two->path, strlen(p->two->path));
@@ -5012,9 +5078,9 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 		if (diff_filespec_is_binary(p->one) ||
 		    diff_filespec_is_binary(p->two)) {
 			git_SHA1_Update(&ctx, oid_to_hex(&p->one->oid),
-					40);
+					GIT_SHA1_HEXSZ);
 			git_SHA1_Update(&ctx, oid_to_hex(&p->two->oid),
-					40);
+					GIT_SHA1_HEXSZ);
 			continue;
 		}
 
@@ -5027,15 +5093,15 @@ static int diff_get_patch_id(struct diff_options *options, unsigned char *sha1, 
 				     p->one->path);
 	}
 
-	git_SHA1_Final(sha1, &ctx);
+	git_SHA1_Final(oid->hash, &ctx);
 	return 0;
 }
 
-int diff_flush_patch_id(struct diff_options *options, unsigned char *sha1, int diff_header_only)
+int diff_flush_patch_id(struct diff_options *options, struct object_id *oid, int diff_header_only)
 {
 	struct diff_queue_struct *q = &diff_queued_diff;
 	int i;
-	int result = diff_get_patch_id(options, sha1, diff_header_only);
+	int result = diff_get_patch_id(options, oid, diff_header_only);
 
 	for (i = 0; i < q->nr; i++)
 		diff_free_filepair(q->queue[i]);
@@ -5483,8 +5549,8 @@ static int is_submodule_ignored(const char *path, struct diff_options *options)
 
 void diff_addremove(struct diff_options *options,
 		    int addremove, unsigned mode,
-		    const unsigned char *sha1,
-		    int sha1_valid,
+		    const struct object_id *oid,
+		    int oid_valid,
 		    const char *concatpath, unsigned dirty_submodule)
 {
 	struct diff_filespec *one, *two;
@@ -5516,9 +5582,9 @@ void diff_addremove(struct diff_options *options,
 	two = alloc_filespec(concatpath);
 
 	if (addremove != '+')
-		fill_filespec(one, sha1, sha1_valid, mode);
+		fill_filespec(one, oid, oid_valid, mode);
 	if (addremove != '-') {
-		fill_filespec(two, sha1, sha1_valid, mode);
+		fill_filespec(two, oid, oid_valid, mode);
 		two->dirty_submodule = dirty_submodule;
 	}
 
@@ -5529,9 +5595,9 @@ void diff_addremove(struct diff_options *options,
 
 void diff_change(struct diff_options *options,
 		 unsigned old_mode, unsigned new_mode,
-		 const unsigned char *old_sha1,
-		 const unsigned char *new_sha1,
-		 int old_sha1_valid, int new_sha1_valid,
+		 const struct object_id *old_oid,
+		 const struct object_id *new_oid,
+		 int old_oid_valid, int new_oid_valid,
 		 const char *concatpath,
 		 unsigned old_dirty_submodule, unsigned new_dirty_submodule)
 {
@@ -5544,8 +5610,8 @@ void diff_change(struct diff_options *options,
 
 	if (DIFF_OPT_TST(options, REVERSE_DIFF)) {
 		SWAP(old_mode, new_mode);
-		SWAP(old_sha1, new_sha1);
-		SWAP(old_sha1_valid, new_sha1_valid);
+		SWAP(old_oid, new_oid);
+		SWAP(old_oid_valid, new_oid_valid);
 		SWAP(old_dirty_submodule, new_dirty_submodule);
 	}
 
@@ -5555,8 +5621,8 @@ void diff_change(struct diff_options *options,
 
 	one = alloc_filespec(concatpath);
 	two = alloc_filespec(concatpath);
-	fill_filespec(one, old_sha1, old_sha1_valid, old_mode);
-	fill_filespec(two, new_sha1, new_sha1_valid, new_mode);
+	fill_filespec(one, old_oid, old_oid_valid, old_mode);
+	fill_filespec(two, new_oid, new_oid_valid, new_mode);
 	one->dirty_submodule = old_dirty_submodule;
 	two->dirty_submodule = new_dirty_submodule;
 	p = diff_queue(&diff_queued_diff, one, two);
@@ -5683,7 +5749,7 @@ int textconv_object(const char *path,
 	struct userdiff_driver *textconv;
 
 	df = alloc_filespec(path);
-	fill_filespec(df, oid->hash, oid_valid, mode);
+	fill_filespec(df, oid, oid_valid, mode);
 	textconv = get_textconv(df);
 	if (!textconv) {
 		free_filespec(df);

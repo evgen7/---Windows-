@@ -493,7 +493,7 @@ static void compile_pcre2_pattern(struct grep_pat *p, const struct grep_opt *opt
 	if (p->pcre2_pattern) {
 		p->pcre2_match_data = pcre2_match_data_create_from_pattern(p->pcre2_pattern, NULL);
 		if (!p->pcre2_match_data)
-			die("couldn't allocate PCRE2 match data");
+			die("Couldn't allocate PCRE2 match data");
 	} else {
 		pcre2_get_error_message(error, errbuf, sizeof(errbuf));
 		compile_regexp_failed(p, (const char *)&errbuf);
@@ -502,16 +502,14 @@ static void compile_pcre2_pattern(struct grep_pat *p, const struct grep_opt *opt
 	pcre2_config(PCRE2_CONFIG_JIT, &p->pcre2_jit_on);
 	if (p->pcre2_jit_on == 1) {
 		jitret = pcre2_jit_compile(p->pcre2_pattern, PCRE2_JIT_COMPLETE);
-		if (!jitret)
-			p->pcre2_jit_on = 1;
-		else
-			die("couldn't JIT the PCRE2 pattern '%s', got '%d'\n", p->pattern, jitret);
+		if (jitret)
+			die("Couldn't JIT the PCRE2 pattern '%s', got '%d'\n", p->pattern, jitret);
 		p->pcre2_jit_stack = pcre2_jit_stack_create(1, 1024 * 1024, NULL);
 		if (!p->pcre2_jit_stack)
-			die("couldn't allocate PCRE2 JIT stack");
+			die("Couldn't allocate PCRE2 JIT stack");
 		p->pcre2_match_context = pcre2_match_context_create(NULL);
 		if (!p->pcre2_jit_stack)
-			die("couldn't allocate PCRE2 match context");
+			die("Couldn't allocate PCRE2 match context");
 		pcre2_jit_stack_assign(p->pcre2_match_context, NULL, p->pcre2_jit_stack);
 	} else if (p->pcre2_jit_on != 0) {
 		die("BUG: The pcre2_jit_on variable should be 0 or 1, not %d",
@@ -1586,11 +1584,11 @@ static int fill_textconv_grep(struct userdiff_driver *driver,
 	 */
 	df = alloc_filespec(gs->path);
 	switch (gs->type) {
-	case GREP_SOURCE_SHA1:
+	case GREP_SOURCE_OID:
 		fill_filespec(df, gs->identifier, 1, 0100644);
 		break;
 	case GREP_SOURCE_FILE:
-		fill_filespec(df, null_sha1, 0, 0100644);
+		fill_filespec(df, &null_oid, 0, 0100644);
 		break;
 	default:
 		die("BUG: attempt to textconv something without a path?");
@@ -1930,9 +1928,8 @@ void grep_source_init(struct grep_source *gs, enum grep_source_type type,
 		 * If the identifier is non-NULL (in the submodule case) it
 		 * will be a SHA1 that needs to be copied.
 		 */
-	case GREP_SOURCE_SHA1:
-		gs->identifier = xmalloc(20);
-		hashcpy(gs->identifier, identifier);
+	case GREP_SOURCE_OID:
+		gs->identifier = oiddup(identifier);
 		break;
 	case GREP_SOURCE_BUF:
 		gs->identifier = NULL;
@@ -1955,7 +1952,7 @@ void grep_source_clear_data(struct grep_source *gs)
 {
 	switch (gs->type) {
 	case GREP_SOURCE_FILE:
-	case GREP_SOURCE_SHA1:
+	case GREP_SOURCE_OID:
 	case GREP_SOURCE_SUBMODULE:
 		free(gs->buf);
 		gs->buf = NULL;
@@ -1967,7 +1964,7 @@ void grep_source_clear_data(struct grep_source *gs)
 	}
 }
 
-static int grep_source_load_sha1(struct grep_source *gs)
+static int grep_source_load_oid(struct grep_source *gs)
 {
 	enum object_type type;
 
@@ -1978,7 +1975,7 @@ static int grep_source_load_sha1(struct grep_source *gs)
 	if (!gs->buf)
 		return error(_("'%s': unable to read %s"),
 			     gs->name,
-			     sha1_to_hex(gs->identifier));
+			     oid_to_hex(gs->identifier));
 	return 0;
 }
 
@@ -2024,8 +2021,8 @@ static int grep_source_load(struct grep_source *gs)
 	switch (gs->type) {
 	case GREP_SOURCE_FILE:
 		return grep_source_load_file(gs);
-	case GREP_SOURCE_SHA1:
-		return grep_source_load_sha1(gs);
+	case GREP_SOURCE_OID:
+		return grep_source_load_oid(gs);
 	case GREP_SOURCE_BUF:
 		return gs->buf ? 0 : -1;
 	case GREP_SOURCE_SUBMODULE:

@@ -4,7 +4,6 @@
 #include "quote.h"
 #include "sigchain.h"
 #include "pkt-line.h"
-#include "list.h"
 #include "sub-process.h"
 
 /*
@@ -38,13 +37,6 @@ struct text_stat {
 
 	/* These are just approximations! */
 	unsigned printable, nonprintable;
-};
-
-static LIST_HEAD(delayed_item_queue_head);
-
-struct delayed_item {
-	void* item;
-	struct list_head node;
 };
 
 static void gather_stats(const char *buf, unsigned long size, struct text_stat *stats)
@@ -504,6 +496,7 @@ static int apply_single_file_filter(const char *path, const char *src, size_t le
 
 #define CAP_CLEAN    (1u<<0)
 #define CAP_SMUDGE   (1u<<1)
+#define CAP_DELAY    (1u<<2)
 
 struct cmd2process {
 	struct subprocess_entry subprocess; /* must be the first member! */
@@ -541,7 +534,8 @@ static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 	if (err)
 		goto done;
 
-	err = packet_writel(process->in, "capability=clean", "capability=smudge", NULL);
+	err = packet_writel(process->in,
+		"capability=clean", "capability=smudge", "capability=delay", NULL);
 
 	for (;;) {
 		cap_buf = packet_read_line(process->out, NULL);
@@ -557,6 +551,8 @@ static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 			entry->supported_capabilities |= CAP_CLEAN;
 		} else if (!strcmp(cap_name, "smudge")) {
 			entry->supported_capabilities |= CAP_SMUDGE;
+		} else if (!strcmp(cap_name, "delay")) {
+			entry->supported_capabilities |= CAP_DELAY;
 		} else {
 			warning(
 				"external filter '%s' requested unsupported filter capability '%s'",
@@ -573,11 +569,36 @@ done:
 	return err;
 }
 
+static void handle_filter_error(const struct strbuf *filter_status,
+				struct cmd2process *entry,
+				const unsigned int wanted_capability) {
+	if (!strcmp(filter_status->buf, "error")) {
+		/* The filter signaled a problem with the file. */
+	} else if (!strcmp(filter_status->buf, "abort") && wanted_capability) {
+		/*
+		 * The filter signaled a permanent problem. Don't try to filter
+		 * files with the same command for the lifetime of the current
+		 * Git process.
+		 */
+		 entry->supported_capabilities &= ~wanted_capability;
+	} else {
+		/*
+		 * Something went wrong with the protocol filter.
+		 * Force shutdown and restart if another blob requires filtering.
+		 */
+		error("external filter '%s' failed", entry->subprocess.cmd);
+		subprocess_stop(&subprocess_map, &entry->subprocess);
+		free(entry);
+	}
+}
+
 static int apply_multi_file_filter(const char *path, const char *src, size_t len,
-				   int fd, struct strbuf *dst, int *delayed, const char *cmd,
-				   const unsigned int wanted_capability)
+				   int fd, struct strbuf *dst, const char *cmd,
+				   const unsigned int wanted_capability,
+				   struct delayed_checkout *dco)
 {
 	int err;
+	int can_delay = 0;
 	struct cmd2process *entry;
 	struct child_process *process;
 	struct strbuf nbuf = STRBUF_INIT;
@@ -632,6 +653,14 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 	if (err)
 		goto done;
 
+	if (CAP_DELAY & entry->supported_capabilities &&
+	    dco && dco->state == CE_CAN_DELAY) {
+		can_delay = 1;
+		err = packet_write_fmt_gently(process->in, "can-delay=1\n");
+		if (err)
+			goto done;
+	}
+
 	err = packet_flush_gently(process->in);
 	if (err)
 		goto done;
@@ -647,17 +676,77 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 	if (err)
 		goto done;
 
-	if (delayed && !strcmp(filter_status.buf, "delayed")) {
-		*delayed = 1;
-		goto done;
+	if (can_delay && !strcmp(filter_status.buf, "delayed")) {
+		dco->state = CE_DELAYED;
+		string_list_insert(&dco->filters, cmd);
+		string_list_insert(&dco->paths, path);
+	} else {
+		/* The filter got the blob and wants to send us a response. */
+		err = strcmp(filter_status.buf, "success");
+		if (err)
+			goto done;
+
+		err = read_packetized_to_strbuf(process->out, &nbuf) < 0;
+		if (err)
+			goto done;
+
+		err = subprocess_read_status(process->out, &filter_status);
+		if (err)
+			goto done;
+
+		err = strcmp(filter_status.buf, "success");
 	}
-	err = strcmp(filter_status.buf, "success");
+
+done:
+	sigchain_pop(SIGPIPE);
+
+	if (err)
+		handle_filter_error(&filter_status, entry, wanted_capability);
+	else
+		strbuf_swap(dst, &nbuf);
+	strbuf_release(&nbuf);
+	return !err;
+}
+
+
+int async_query_available_blobs(const char *cmd, struct string_list *delayed_paths)
+{
+	int err;
+	char *line;
+	struct cmd2process *entry;
+	struct child_process *process;
+	struct strbuf filter_status = STRBUF_INIT;
+
+	assert(subprocess_map_initialized);
+	entry = (struct cmd2process *)subprocess_find_entry(&subprocess_map, cmd);
+	if (!entry) {
+		error("external filter '%s' is not available anymore although "
+		      "not all paths have been filtered", cmd);
+		return 0;
+	}
+	process = &entry->subprocess.process;
+	sigchain_push(SIGPIPE, SIG_IGN);
+
+	err = packet_write_fmt_gently(
+		process->in, "command=list_available_blobs\n");
 	if (err)
 		goto done;
 
-	err = read_packetized_to_strbuf(process->out, &nbuf) < 0;
+	err = packet_flush_gently(process->in);
 	if (err)
 		goto done;
+
+	for (;;) {
+		const char* pre = "pathname=";
+		const int pre_len = strlen(pre);
+		line = packet_read_line(process->out, NULL);
+		if (!line)
+			break;
+		err = strlen(line) <= pre_len || strncmp(line, pre, pre_len);
+		if (err)
+			goto done;
+		string_list_insert(delayed_paths, xstrdup(line+pre_len));
+	}
 
 	err = subprocess_read_status(process->out, &filter_status);
 	if (err)
@@ -668,29 +757,8 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 done:
 	sigchain_pop(SIGPIPE);
 
-	if (err) {
-		if (!strcmp(filter_status.buf, "error")) {
-			/* The filter signaled a problem with the file. */
-		} else if (!strcmp(filter_status.buf, "abort")) {
-			/*
-			 * The filter signaled a permanent problem. Don't try to filter
-			 * files with the same command for the lifetime of the current
-			 * Git process.
-			 */
-			 entry->supported_capabilities &= ~wanted_capability;
-		} else {
-			/*
-			 * Something went wrong with the protocol filter.
-			 * Force shutdown and restart if another blob requires filtering.
-			 */
-			error("external filter '%s' failed", cmd);
-			subprocess_stop(&subprocess_map, &entry->subprocess);
-			free(entry);
-		}
-	} else {
-		strbuf_swap(dst, &nbuf);
-	}
-	strbuf_release(&nbuf);
+	if (err)
+		handle_filter_error(&filter_status, entry, 0);
 	return !err;
 }
 
@@ -704,8 +772,9 @@ static struct convert_driver {
 } *user_convert, **user_convert_tail;
 
 static int apply_filter(const char *path, const char *src, size_t len,
-			int fd, struct strbuf *dst, int *delayed,
-			struct convert_driver *drv, const unsigned int wanted_capability)
+			int fd, struct strbuf *dst, struct convert_driver *drv,
+			const unsigned int wanted_capability,
+			struct delayed_checkout *dco)
 {
 	const char *cmd = NULL;
 
@@ -723,7 +792,8 @@ static int apply_filter(const char *path, const char *src, size_t len,
 	if (cmd && *cmd)
 		return apply_single_file_filter(path, src, len, fd, dst, cmd);
 	else if (drv->process && *drv->process)
-		return apply_multi_file_filter(path, src, len, fd, dst, delayed, drv->process, wanted_capability);
+		return apply_multi_file_filter(path, src, len, fd, dst,
+			drv->process, wanted_capability, dco);
 
 	return 0;
 }
@@ -1064,7 +1134,7 @@ int would_convert_to_git_filter_fd(const char *path)
 	if (!ca.drv->required)
 		return 0;
 
-	return apply_filter(path, NULL, 0, -1, NULL, NULL, ca.drv, CAP_CLEAN);
+	return apply_filter(path, NULL, 0, -1, NULL, ca.drv, CAP_CLEAN, NULL);
 }
 
 const char *get_convert_attr_ascii(const char *path)
@@ -1101,7 +1171,7 @@ int convert_to_git(const char *path, const char *src, size_t len,
 
 	convert_attrs(&ca, path);
 
-	ret |= apply_filter(path, src, len, -1, dst, NULL, ca.drv, CAP_CLEAN);
+	ret |= apply_filter(path, src, len, -1, dst, ca.drv, CAP_CLEAN, NULL);
 	if (!ret && ca.drv && ca.drv->required)
 		die("%s: clean filter '%s' failed", path, ca.drv->name);
 
@@ -1126,7 +1196,7 @@ void convert_to_git_filter_fd(const char *path, int fd, struct strbuf *dst,
 	assert(ca.drv);
 	assert(ca.drv->clean || ca.drv->process);
 
-	if (!apply_filter(path, NULL, 0, fd, dst, NULL, ca.drv, CAP_CLEAN))
+	if (!apply_filter(path, NULL, 0, fd, dst, ca.drv, CAP_CLEAN, NULL))
 		die("%s: clean filter '%s' failed", path, ca.drv->name);
 
 	crlf_to_git(path, dst->buf, dst->len, dst, ca.crlf_action, checksafe);
@@ -1134,8 +1204,8 @@ void convert_to_git_filter_fd(const char *path, int fd, struct strbuf *dst,
 }
 
 static int convert_to_working_tree_internal(const char *path, const char *src,
-					    size_t len, struct strbuf *dst, int *delayed,
-					    int normalizing)
+					    size_t len, struct strbuf *dst,
+					    int normalizing, struct delayed_checkout *dco)
 {
 	int ret = 0, ret_filter = 0;
 	struct conv_attrs ca;
@@ -1160,7 +1230,8 @@ static int convert_to_working_tree_internal(const char *path, const char *src,
 		}
 	}
 
-	ret_filter = apply_filter(path, src, len, -1, dst, delayed, ca.drv, CAP_SMUDGE);
+	ret_filter = apply_filter(
+		path, src, len, -1, dst, ca.drv, CAP_SMUDGE, dco);
 	if (!ret_filter && ca.drv && ca.drv->required)
 		die("%s: smudge filter %s failed", path, ca.drv->name);
 
@@ -1168,42 +1239,20 @@ static int convert_to_working_tree_internal(const char *path, const char *src,
 }
 
 int async_convert_to_working_tree(const char *path, const char *src,
-								  size_t len, struct strbuf *dst, void *item)
+				  size_t len, struct strbuf *dst,
+				  void *dco)
 {
-	int delayed = 0;
-	struct delayed_item *delayed_item;
-	if (convert_to_working_tree_internal(path, src, len, dst, &delayed, 0)) {
-		if (delayed) {
-			delayed_item = xmalloc(sizeof(*delayed_item));
-			delayed_item->item = item;
-			list_add_tail(&delayed_item->node, &delayed_item_queue_head);
-			return ASYNC_FILTER_DELAYED;
-		}
-		return ASYNC_FILTER_SUCCESS;
-	}
-	return ASYNC_FILTER_FAIL;
-}
-
-void* async_filter_finish(void)
-{
-	struct delayed_item *head;
-	if (!list_empty(&delayed_item_queue_head)) {
-		head = list_first_entry(&delayed_item_queue_head,
-			struct delayed_item, node);
-		list_del(&head->node);
-		return head->item;
-	}
-	return NULL;
+	return convert_to_working_tree_internal(path, src, len, dst, 0, dco);
 }
 
 int convert_to_working_tree(const char *path, const char *src, size_t len, struct strbuf *dst)
 {
-	return convert_to_working_tree_internal(path, src, len, dst, NULL, 0);
+	return convert_to_working_tree_internal(path, src, len, dst, 0, NULL);
 }
 
 int renormalize_buffer(const char *path, const char *src, size_t len, struct strbuf *dst)
 {
-	int ret = convert_to_working_tree_internal(path, src, len, dst, NULL, 1);
+	int ret = convert_to_working_tree_internal(path, src, len, dst, 1, NULL);
 	if (ret) {
 		src = dst->buf;
 		len = dst->len;
