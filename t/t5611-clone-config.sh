@@ -51,7 +51,8 @@ test_expect_success 'clone -c remote.origin.fetch=<refspec> works' '
 	git update-ref refs/leave/out refs/heads/master &&
 	git clone -c "remote.origin.fetch=+refs/grab/*:refs/grab/*" . child &&
 	git -C child for-each-ref --format="%(refname)" >actual &&
-	cat >expect <<-EOF &&
+
+	cat >expect <<-\EOF &&
 	refs/grab/it
 	refs/heads/master
 	refs/remotes/origin/HEAD
@@ -64,7 +65,8 @@ test_expect_success 'git -c remote.origin.fetch=<refspec> clone works' '
 	rm -rf child &&
 	git -c "remote.origin.fetch=+refs/grab/*:refs/grab/*" clone . child &&
 	git -C child for-each-ref --format="%(refname)" >actual &&
-	cat >expect <<-EOF &&
+
+	cat >expect <<-\EOF &&
 	refs/grab/it
 	refs/heads/master
 	refs/remotes/origin/HEAD
@@ -80,7 +82,8 @@ test_expect_success 'clone -c remote.<remote>.fetch=<refspec> --origin=<name>' '
 		-c "remote.origin.fetch=+refs/leave/*:refs/leave/*" \
 		. child &&
 	git -C child for-each-ref --format="%(refname)" >actual &&
-	cat >expect <<-EOF &&
+
+	cat >expect <<-\EOF &&
 	refs/grab/it
 	refs/heads/master
 	refs/remotes/upstream/HEAD

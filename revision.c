@@ -19,7 +19,6 @@
 #include "dir.h"
 #include "cache-tree.h"
 #include "bisect.h"
-#include "worktree.h"
 
 volatile show_early_output_fn_t show_early_output;
 
@@ -1134,7 +1133,6 @@ struct all_refs_cb {
 	int warned_bad_reflog;
 	struct rev_info *all_revs;
 	const char *name_for_errormsg;
-	struct ref_store *refs;
 };
 
 int ref_excluded(struct string_list *ref_excludes, const char *path)
@@ -1170,7 +1168,6 @@ static void init_all_refs_cb(struct all_refs_cb *cb, struct rev_info *revs,
 {
 	cb->all_revs = revs;
 	cb->all_flags = flags;
-	cb->refs = NULL;
 }
 
 void clear_ref_exclusion(struct string_list **ref_excludes_p)
@@ -1191,19 +1188,12 @@ void add_ref_exclusion(struct string_list **ref_excludes_p, const char *exclude)
 	string_list_append(*ref_excludes_p, exclude);
 }
 
-static void handle_refs(struct ref_store *refs,
-			struct rev_info *revs, unsigned flags,
-			int (*for_each)(struct ref_store *, each_ref_fn, void *))
+static void handle_refs(const char *submodule, struct rev_info *revs, unsigned flags,
+		int (*for_each)(const char *, each_ref_fn, void *))
 {
 	struct all_refs_cb cb;
-
-	if (!refs) {
-		/* this could happen with uninitialized submodules */
-		return;
-	}
-
 	init_all_refs_cb(&cb, revs, flags);
-	for_each(refs, handle_one_ref, &cb);
+	for_each(submodule, handle_one_ref, &cb);
 }
 
 static void handle_one_reflog_commit(struct object_id *oid, void *cb_data)
@@ -1239,28 +1229,8 @@ static int handle_one_reflog(const char *path, const struct object_id *oid,
 	struct all_refs_cb *cb = cb_data;
 	cb->warned_bad_reflog = 0;
 	cb->name_for_errormsg = path;
-	refs_for_each_reflog_ent(cb->refs, path,
-				 handle_one_reflog_ent, cb_data);
+	for_each_reflog_ent(path, handle_one_reflog_ent, cb_data);
 	return 0;
-}
-
-static void add_other_reflogs_to_pending(struct all_refs_cb *cb)
-{
-	struct worktree **worktrees, **p;
-
-	worktrees = get_worktrees(0);
-	for (p = worktrees; *p; p++) {
-		struct worktree *wt = *p;
-
-		if (wt->is_current)
-			continue;
-
-		cb->refs = get_worktree_ref_store(wt);
-		refs_for_each_reflog(cb->refs,
-				     handle_one_reflog,
-				     cb);
-	}
-	free_worktrees(worktrees);
 }
 
 void add_reflogs_to_pending(struct rev_info *revs, unsigned flags)
@@ -1269,11 +1239,7 @@ void add_reflogs_to_pending(struct rev_info *revs, unsigned flags)
 
 	cb.all_revs = revs;
 	cb.all_flags = flags;
-	cb.refs = get_main_ref_store();
 	for_each_reflog(handle_one_reflog, &cb);
-
-	if (!revs->single_worktree)
-		add_other_reflogs_to_pending(&cb);
 }
 
 static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
@@ -1297,13 +1263,13 @@ static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
 
 }
 
-static void do_add_index_objects_to_pending(struct rev_info *revs,
-					    struct index_state *istate)
+void add_index_objects_to_pending(struct rev_info *revs, unsigned flags)
 {
 	int i;
 
-	for (i = 0; i < istate->cache_nr; i++) {
-		struct cache_entry *ce = istate->cache[i];
+	read_cache();
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
 		struct blob *blob;
 
 		if (S_ISGITLINK(ce->ce_mode))
@@ -1316,37 +1282,11 @@ static void do_add_index_objects_to_pending(struct rev_info *revs,
 					     ce->ce_mode, ce->name);
 	}
 
-	if (istate->cache_tree) {
+	if (active_cache_tree) {
 		struct strbuf path = STRBUF_INIT;
-		add_cache_tree(istate->cache_tree, revs, &path);
+		add_cache_tree(active_cache_tree, revs, &path);
 		strbuf_release(&path);
 	}
-}
-
-void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
-{
-	struct worktree **worktrees, **p;
-
-	read_cache();
-	do_add_index_objects_to_pending(revs, &the_index);
-
-	if (revs->single_worktree)
-		return;
-
-	worktrees = get_worktrees(0);
-	for (p = worktrees; *p; p++) {
-		struct worktree *wt = *p;
-		struct index_state istate = { NULL };
-
-		if (wt->is_current)
-			continue; /* current index already taken care of */
-
-		if (read_index_from(&istate,
-				    worktree_git_path(wt, "index")) > 0)
-			do_add_index_objects_to_pending(revs, &istate);
-		discard_index(&istate);
-	}
-	free_worktrees(worktrees);
 }
 
 static int add_parents_only(struct rev_info *revs, const char *arg_, int flags,
@@ -1845,16 +1785,13 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--author-date-order")) {
 		revs->sort_order = REV_SORT_BY_AUTHOR_DATE;
 		revs->topo_order = 1;
-	} else if (skip_prefix(arg, "--early-output", &optarg)) {
-		int count = 100;
-		switch (*optarg) {
-		case '=':
-			count = atoi(optarg + 1);
-			/* Fallthrough */
-		case 0:
-			revs->topo_order = 1;
-			revs->early_output = count;
-		}
+	} else if (!strcmp(arg, "--early-output")) {
+		revs->early_output = 100;
+		revs->topo_order = 1;
+	} else if (skip_prefix(arg, "--early-output=", &optarg)) {
+		if (strtoul_ui(optarg, 10, &revs->early_output) < 0)
+			die("'%s': not a non-negative integer", optarg);
+		revs->topo_order = 1;
 	} else if (!strcmp(arg, "--parents")) {
 		revs->rewrite_parents = 1;
 		revs->print_parents = 1;
@@ -1983,14 +1920,12 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->show_signature = 1;
 	} else if (!strcmp(arg, "--no-show-signature")) {
 		revs->show_signature = 0;
-	} else if (skip_prefix(arg, "--show-linear-break", &optarg)) {
-		switch (*optarg) {
-		case '=':
-			revs->break_bar = xstrdup(optarg + 1);
-			break;
-		case 0:
-			revs->break_bar = "                    ..........";
-		}
+	} else if (!strcmp(arg, "--show-linear-break")) {
+		revs->break_bar = "                    ..........";
+		revs->track_linear = 1;
+		revs->track_first_time = 1;
+	} else if (skip_prefix(arg, "--show-linear-break=", &optarg)) {
+		revs->break_bar = xstrdup(optarg);
 		revs->track_linear = 1;
 		revs->track_first_time = 1;
 	} else if (skip_prefix(arg, "--show-notes=", &optarg) ||
@@ -1998,12 +1933,10 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		struct strbuf buf = STRBUF_INIT;
 		revs->show_notes = 1;
 		revs->show_notes_given = 1;
-		if (starts_with(arg, "--show-notes=")) {
-			if (revs->notes_opt.use_default_notes < 0)
-				revs->notes_opt.use_default_notes = 1;
-			strbuf_addstr(&buf, optarg);
-		} else
-			strbuf_addstr(&buf, optarg);
+		if (starts_with(arg, "--show-notes=") &&
+		    revs->notes_opt.use_default_notes < 0)
+			revs->notes_opt.use_default_notes = 1;
+		strbuf_addstr(&buf, optarg);
 		expand_notes_ref(&buf);
 		string_list_append(&revs->notes_opt.extra_notes_refs,
 				   strbuf_detach(&buf, NULL));
@@ -2138,25 +2071,23 @@ void parse_revision_opt(struct rev_info *revs, struct parse_opt_ctx_t *ctx,
 	ctx->argc -= n;
 }
 
-static int for_each_bisect_ref(struct ref_store *refs, each_ref_fn fn,
-			       void *cb_data, const char *term)
-{
+static int for_each_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data, const char *term) {
 	struct strbuf bisect_refs = STRBUF_INIT;
 	int status;
 	strbuf_addf(&bisect_refs, "refs/bisect/%s", term);
-	status = refs_for_each_ref_in(refs, bisect_refs.buf, fn, cb_data);
+	status = for_each_fullref_in_submodule(submodule, bisect_refs.buf, fn, cb_data, 0);
 	strbuf_release(&bisect_refs);
 	return status;
 }
 
-static int for_each_bad_bisect_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
+static int for_each_bad_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_bisect_ref(refs, fn, cb_data, term_bad);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_bad);
 }
 
-static int for_each_good_bisect_ref(struct ref_store *refs, each_ref_fn fn, void *cb_data)
+static int for_each_good_bisect_ref(const char *submodule, each_ref_fn fn, void *cb_data)
 {
-	return for_each_bisect_ref(refs, fn, cb_data, term_good);
+	return for_each_bisect_ref(submodule, fn, cb_data, term_good);
 }
 
 static int handle_revision_pseudo_opt(const char *submodule,
@@ -2165,20 +2096,7 @@ static int handle_revision_pseudo_opt(const char *submodule,
 {
 	const char *arg = argv[0];
 	const char *optarg;
-	struct ref_store *refs;
 	int argcount;
-
-	if (submodule) {
-		/*
-		 * We need some something like get_submodule_worktrees()
-		 * before we can go through all worktrees of a submodule,
-		 * .e.g with adding all HEADs from --all, which is not
-		 * supported right now, so stick to single worktree.
-		 */
-		assert(revs->single_worktree != 0);
-		refs = get_submodule_ref_store(submodule);
-	} else
-		refs = get_main_ref_store();
 
 	/*
 	 * NOTE!
@@ -2191,29 +2109,22 @@ static int handle_revision_pseudo_opt(const char *submodule,
 	 * register it in the list at the top of handle_revision_opt.
 	 */
 	if (!strcmp(arg, "--all")) {
-		handle_refs(refs, revs, *flags, refs_for_each_ref);
-		handle_refs(refs, revs, *flags, refs_head_ref);
-		if (!revs->single_worktree) {
-			struct all_refs_cb cb;
-
-			init_all_refs_cb(&cb, revs, *flags);
-			other_head_refs(handle_one_ref, &cb);
-		}
+		handle_refs(submodule, revs, *flags, for_each_ref_submodule);
+		handle_refs(submodule, revs, *flags, head_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--branches")) {
-		handle_refs(refs, revs, *flags, refs_for_each_branch_ref);
+		handle_refs(submodule, revs, *flags, for_each_branch_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--bisect")) {
 		read_bisect_terms(&term_bad, &term_good);
-		handle_refs(refs, revs, *flags, for_each_bad_bisect_ref);
-		handle_refs(refs, revs, *flags ^ (UNINTERESTING | BOTTOM),
-			    for_each_good_bisect_ref);
+		handle_refs(submodule, revs, *flags, for_each_bad_bisect_ref);
+		handle_refs(submodule, revs, *flags ^ (UNINTERESTING | BOTTOM), for_each_good_bisect_ref);
 		revs->bisect = 1;
 	} else if (!strcmp(arg, "--tags")) {
-		handle_refs(refs, revs, *flags, refs_for_each_tag_ref);
+		handle_refs(submodule, revs, *flags, for_each_tag_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if (!strcmp(arg, "--remotes")) {
-		handle_refs(refs, revs, *flags, refs_for_each_remote_ref);
+		handle_refs(submodule, revs, *flags, for_each_remote_ref_submodule);
 		clear_ref_exclusion(&revs->ref_excludes);
 	} else if ((argcount = parse_long_opt("glob", argv, &optarg))) {
 		struct all_refs_cb cb;
@@ -2260,8 +2171,6 @@ static int handle_revision_pseudo_opt(const char *submodule,
 			return error("invalid argument to --no-walk");
 	} else if (!strcmp(arg, "--do-walk")) {
 		revs->no_walk = 0;
-	} else if (!strcmp(arg, "--single-worktree")) {
-		revs->single_worktree = 1;
 	} else {
 		return 0;
 	}

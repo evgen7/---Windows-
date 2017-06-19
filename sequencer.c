@@ -1,4 +1,5 @@
 #include "cache.h"
+#include "config.h"
 #include "lockfile.h"
 #include "sequencer.h"
 #include "dir.h"
@@ -1212,8 +1213,7 @@ struct todo_list {
 static void todo_list_release(struct todo_list *todo_list)
 {
 	strbuf_release(&todo_list->buf);
-	free(todo_list->items);
-	todo_list->items = NULL;
+	FREE_AND_NULL(todo_list->items);
 	todo_list->nr = todo_list->alloc = 0;
 }
 
@@ -2464,7 +2464,7 @@ int sequencer_make_script(int keep_empty, FILE *out,
 }
 
 
-int transform_todo_ids(int shorten_sha1s)
+int transform_todo_ids(int shorten_ids)
 {
 	const char *todo_file = rebase_path_todo();
 	struct todo_list todo_list = TODO_LIST_INIT;
@@ -2484,7 +2484,7 @@ int transform_todo_ids(int shorten_sha1s)
 	res = parse_insn_buffer(todo_list.buf.buf, &todo_list);
 	if (res) {
 		todo_list_release(&todo_list);
-		return error(_("unusable instruction sheet: '%s'"), todo_file);
+		return error(_("unusable todo list: '%s'"), todo_file);
 	}
 
 	out = fopen(todo_file, "w");
@@ -2503,7 +2503,7 @@ int transform_todo_ids(int shorten_sha1s)
 		if (item->command >= TODO_EXEC && item->command != TODO_DROP)
 			fwrite(p, eol - bol, 1, out);
 		else {
-			const char *sha1 = shorten_sha1s ?
+			const char *id = shorten_ids ?
 				short_commit_name(item->commit) :
 				oid_to_hex(&item->commit->object.oid);
 			int len;
@@ -2512,7 +2512,7 @@ int transform_todo_ids(int shorten_sha1s)
 			len = strcspn(p, " \t"); /* length of command */
 
 			fprintf(out, "%.*s %s %.*s\n",
-				len, p, sha1, item->arg_len, item->arg);
+				len, p, id, item->arg_len, item->arg);
 		}
 	}
 	fclose(out);
@@ -2762,9 +2762,9 @@ static int subject2item_cmp(const struct subject2item_entry *a,
 }
 
 /*
- * Rearrange the todo list that has both "pick sha1 msg" and "pick sha1
- * fixup!/squash! msg" in it so that the latter is put immediately after the
- * former, and change "pick" to "fixup"/"squash".
+ * Rearrange the todo list that has both "pick commit-id msg" and "pick
+ * commit-id fixup!/squash! msg" in it so that the latter is put immediately
+ * after the former, and change "pick" to "fixup"/"squash".
  *
  * Note that if the config has specified a custom instruction format, each log
  * message will have to be retrieved from the commit (as the oneline in the

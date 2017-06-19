@@ -32,6 +32,9 @@ OPTIONS
 --branch::
 	Show the branch and tracking info even in short-format.
 
+--show-stash::
+	Show the number of entries currently stashed away.
+
 --in-progress::
 	When showing branch and tracking info in short-format,
 	show in-progress information (BISECTING, MERGING etc.), too.

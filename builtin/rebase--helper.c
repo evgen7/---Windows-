@@ -1,5 +1,6 @@
 #include "builtin.h"
 #include "cache.h"
+#include "config.h"
 #include "parse-options.h"
 #include "sequencer.h"
 
@@ -25,9 +26,9 @@ int cmd_rebase__helper(int argc, const char **argv, const char *prefix)
 				ABORT),
 		OPT_CMDMODE(0, "make-script", &command,
 			N_("make rebase script"), MAKE_SCRIPT),
-		OPT_CMDMODE(0, "shorten-sha1s", &command,
+		OPT_CMDMODE(0, "shorten-ids", &command,
 			N_("shorten SHA-1s in the todo list"), SHORTEN_SHA1S),
-		OPT_CMDMODE(0, "expand-sha1s", &command,
+		OPT_CMDMODE(0, "expand-ids", &command,
 			N_("expand SHA-1s in the todo list"), EXPAND_SHA1S),
 		OPT_CMDMODE(0, "check-todo-list", &command,
 			N_("check the todo list"), CHECK_TODO_LIST),

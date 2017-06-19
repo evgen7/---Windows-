@@ -204,13 +204,6 @@ void strbuf_addbuf(struct strbuf *sb, const struct strbuf *sb2)
 	strbuf_setlen(sb, sb->len + sb2->len);
 }
 
-void strbuf_adddup(struct strbuf *sb, size_t pos, size_t len)
-{
-	strbuf_grow(sb, len);
-	memcpy(sb->buf + sb->len, sb->buf + pos, len);
-	strbuf_setlen(sb, sb->len + len);
-}
-
 void strbuf_addchars(struct strbuf *sb, int c, size_t n)
 {
 	strbuf_grow(sb, n);
@@ -799,32 +792,33 @@ void strbuf_addftime(struct strbuf *sb, const char *fmt, const struct tm *tm,
 	 * There is no portable way to pass timezone information to
 	 * strftime, so we handle %z and %Z here.
 	 */
-	if (tz_name) {
-		for (;;) {
-			const char *percent = strchrnul(fmt, '%');
-			strbuf_add(&munged_fmt, fmt, percent - fmt);
-			if (!*percent)
-				break;
-			fmt = percent + 1;
-			switch (*fmt) {
-			case '%':
-				strbuf_addstr(&munged_fmt, "%%");
-				fmt++;
-				break;
-			case 'z':
-				strbuf_addf(&munged_fmt, "%+05d", tz_offset);
-				fmt++;
-				break;
-			case 'Z':
+	for (;;) {
+		const char *percent = strchrnul(fmt, '%');
+		strbuf_add(&munged_fmt, fmt, percent - fmt);
+		if (!*percent)
+			break;
+		fmt = percent + 1;
+		switch (*fmt) {
+		case '%':
+			strbuf_addstr(&munged_fmt, "%%");
+			fmt++;
+			break;
+		case 'z':
+			strbuf_addf(&munged_fmt, "%+05d", tz_offset);
+			fmt++;
+			break;
+		case 'Z':
+			if (tz_name) {
 				strbuf_addstr(&munged_fmt, tz_name);
 				fmt++;
 				break;
-			default:
-				strbuf_addch(&munged_fmt, '%');
 			}
+			/* FALLTHROUGH */
+		default:
+			strbuf_addch(&munged_fmt, '%');
 		}
-		fmt = munged_fmt.buf;
 	}
+	fmt = munged_fmt.buf;
 
 	strbuf_grow(sb, hint);
 	len = strftime(sb->buf + sb->len, sb->alloc - sb->len, fmt, tm);
@@ -837,8 +831,6 @@ void strbuf_addftime(struct strbuf *sb, const char *fmt, const struct tm *tm,
 		 * output contains at least one character, and then drop the extra
 		 * character before returning.
 		 */
-		if (fmt != munged_fmt.buf)
-			strbuf_addstr(&munged_fmt, fmt);
 		strbuf_addch(&munged_fmt, ' ');
 		while (!len) {
 			hint *= 2;

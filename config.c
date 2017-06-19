@@ -214,7 +214,6 @@ static int include_by_gitdir(const struct config_options *opts,
 	struct strbuf pattern = STRBUF_INIT;
 	int ret = 0, prefix;
 	const char *git_dir;
-	int already_tried_absolute = 0;
 
 	if (opts->git_dir)
 		git_dir = opts->git_dir;
@@ -227,7 +226,6 @@ static int include_by_gitdir(const struct config_options *opts,
 	strbuf_add(&pattern, cond, cond_len);
 	prefix = prepare_include_condition_pattern(&pattern);
 
-again:
 	if (prefix < 0)
 		goto done;
 
@@ -247,20 +245,6 @@ again:
 	ret = !wildmatch(pattern.buf + prefix, text.buf + prefix,
 			 icase ? WM_CASEFOLD : 0, NULL);
 
-	if (!ret && !already_tried_absolute) {
-		/*
-		 * We've tried e.g. matching gitdir:~/work, but if
-		 * ~/work is a symlink to /mnt/storage/work
-		 * strbuf_realpath() will expand it, so the rule won't
-		 * match. Let's match against a
-		 * strbuf_add_absolute_path() version of the path,
-		 * which'll do the right thing
-		 */
-		strbuf_reset(&text);
-		strbuf_add_absolute_path(&text, git_dir);
-		already_tried_absolute = 1;
-		goto again;
-	}
 done:
 	strbuf_release(&pattern);
 	strbuf_release(&text);
@@ -1248,13 +1232,8 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
-	if (!strcmp(var, "core.fsmonitor")) {
-		core_fsmonitor = git_config_bool(var, value);
-		return 0;
-	}
-
 	/* Add other config variables here and to Documentation/config.txt. */
-	return 0;
+	return platform_core_config(var, value);
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1443,7 +1422,7 @@ int git_config_from_file(config_fn_t fn, const char *filename, void *data)
 	int ret = -1;
 	FILE *f;
 
-	f = fopen_or_warn(filename, "r");
+	f = fopen(filename, "r");
 	if (f) {
 		flockfile(f);
 		ret = do_config_from_file(fn, CONFIG_ORIGIN_FILE, filename, filename, f, data);
@@ -1986,7 +1965,7 @@ int git_config_get_expiry(const char *key, const char **output)
 	if (ret)
 		return ret;
 	if (strcmp(*output, "now")) {
-		timestamp_t now = approxidate("now");
+		unsigned long now = approxidate("now");
 		if (approxidate(*output) >= now)
 			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
 	}
@@ -2661,9 +2640,6 @@ int git_config_rename_section_in_file(const char *config_filename,
 	}
 
 	if (!(config_file = fopen(config_filename, "rb"))) {
-		ret = warn_on_fopen_errors(config_filename);
-		if (ret)
-			goto out;
 		/* no config file means nothing to rename, no error */
 		goto commit_and_out;
 	}

@@ -229,7 +229,7 @@ static struct commit *fake_working_tree_commit(struct diff_options *opt,
 		if (strbuf_read(&buf, 0, 0) < 0)
 			die_errno("failed to read from stdin");
 	}
-	convert_to_git(path, buf.buf, buf.len, &buf, 0);
+	convert_to_git(&the_index, path, buf.buf, buf.len, &buf, 0);
 	origin->file.ptr = buf.buf;
 	origin->file.size = buf.len;
 	pretend_sha1_file(buf.buf, buf.len, OBJ_BLOB, origin->blob_oid.hash);
@@ -314,8 +314,7 @@ static void fill_origin_blob(struct diff_options *opt,
 static void drop_origin_blob(struct blame_origin *o)
 {
 	if (o->file.ptr) {
-		free(o->file.ptr);
-		o->file.ptr = NULL;
+		FREE_AND_NULL(o->file.ptr);
 	}
 }
 

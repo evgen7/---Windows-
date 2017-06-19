@@ -12,7 +12,7 @@
 # To enable this hook, rename this file to "query-fsmonitor"
 
 # check the hook interface version
-if [ $1 -eq 1 ]
+if [ "$1" -eq 1 ]
 then
 	# convert nanoseconds to seconds
 	time_t=$(($2/1000000000))
@@ -21,18 +21,34 @@ else
 	exit 1;
 fi
 
-# Convert unix style paths to escaped Windows style paths
+# Convert unix style paths to what Watchman expects
 case "$(uname -s)" in
 MINGW*|MSYS_NT*)
-  GIT_WORK_TREE="$(cygpath -aw "$PWD" | sed 's,\\,\\\\,g')"
+  GIT_WORK_TREE="$(cygpath -aw "$PWD" | sed 's,\\,/,g')"
   ;;
 *)
   GIT_WORK_TREE="$PWD"
   ;;
 esac
 
-# Query Watchman for all the changes since the requested time
-echo "[\"query\", \"$GIT_WORK_TREE\", {\"since\": $time_t, \"fields\":[\"name\"]}]" | \
+# In the query expression below we're asking for names of files that
+# changed since $time_t but were not transient (ie created after
+# $time_t but no longer exist).
+#
+# To accomplish this, we're using the "since" generator to use the
+# recency index to select candidate nodes and "fields" to limit the
+# output to file names only. Then we're using the "expression" term to
+# further constrain the results.
+#
+# The category of transient files that we want to ignore will have a
+# creation clock (cclock) newer than $time_t value and will also not
+# currently exist.
+
+echo  "[\"query\", \"$GIT_WORK_TREE\", { \
+	\"since\": $time_t, \
+	\"fields\": [\"name\"], \
+	\"expression\": [\"not\", [\"allof\", [\"since\", $time_t, \"cclock\"], [\"not\", \"exists\"]]] \
+	}]" | \
 	watchman -j |
 	perl -0666 -e '
 		use strict;

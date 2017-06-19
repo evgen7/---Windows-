@@ -264,12 +264,6 @@ static inline void strbuf_addstr(struct strbuf *sb, const char *s)
 extern void strbuf_addbuf(struct strbuf *sb, const struct strbuf *sb2);
 
 /**
- * Copy part of the buffer from a given position till a given length to the
- * end of the buffer.
- */
-extern void strbuf_adddup(struct strbuf *sb, size_t pos, size_t len);
-
-/**
  * This function can be used to expand a format string containing
  * placeholders. To that end, it parses the string and calls the specified
  * function for every percent sign found.
@@ -339,10 +333,11 @@ __attribute__((format (printf,2,0)))
 extern void strbuf_vaddf(struct strbuf *sb, const char *fmt, va_list ap);
 
 /**
- * Add the time specified by `tm`, as formatted by `strftime`.  `tz_offset`
- * and `tz_name` are used to expand %z and %Z internally, unless `tz_name`
- * is NULL.  `tz_offset` is in decimal hhmm format, e.g. -600 means six
- * hours west of Greenwich.
+ * Add the time specified by `tm`, as formatted by `strftime`.
+ * `tz_name` is used to expand %Z internally unless it's NULL.
+ * `tz_offset` is in decimal hhmm format, e.g. -600 means six hours west
+ * of Greenwich, and it's used to expand %z internally.  However, tokens
+ * with modifiers (e.g. %Ez) are passed to `strftime`.
  */
 extern void strbuf_addftime(struct strbuf *sb, const char *fmt,
 			    const struct tm *tm, int tz_offset,
