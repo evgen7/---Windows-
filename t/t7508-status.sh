@@ -32,17 +32,6 @@ test_expect_success 'commit -h in broken repository' '
 	test_i18ngrep "[Uu]sage" broken/usage
 '
 
-test_expect_success 'create upstream branch' '
-	git checkout -b upstream &&
-	test_commit upstream1 &&
-	test_commit upstream2 &&
-	# leave the first commit on master as root because several
-	# tests depend on this case; for our upstream we only
-	# care about commit counts anyway, so a totally divergent
-	# history is OK
-	git checkout --orphan master
-'
-
 test_expect_success 'setup' '
 	: >tracked &&
 	: >modified &&
@@ -64,9 +53,7 @@ test_expect_success 'setup' '
 	echo 1 >dir1/modified &&
 	echo 2 >dir2/modified &&
 	echo 3 >dir2/added &&
-	git add dir2/added &&
-
-	git branch --set-upstream-to=upstream
+	git add dir2/added
 '
 
 test_expect_success 'status (1)' '
@@ -88,10 +75,6 @@ EOF
 test_expect_success 'status --column' '
 	cat >expect <<\EOF &&
 # On branch master
-# Your branch and '\''upstream'\'' have diverged,
-# and have 1 and 2 different commits each, respectively.
-#   (use "git pull" to merge the remote branch into yours)
-#
 # Changes to be committed:
 #   (use "git reset HEAD <file>..." to unstage)
 #
@@ -122,10 +105,6 @@ test_expect_success 'status --column status.displayCommentPrefix=false' '
 
 cat >expect <<\EOF
 # On branch master
-# Your branch and 'upstream' have diverged,
-# and have 1 and 2 different commits each, respectively.
-#   (use "git pull" to merge the remote branch into yours)
-#
 # Changes to be committed:
 #   (use "git reset HEAD <file>..." to unstage)
 #
@@ -199,9 +178,6 @@ test_expect_success 'commit ignores status.displayCommentPrefix=false in COMMIT_
 
 cat >expect <<\EOF
 On branch master
-Your branch and 'upstream' have diverged,
-and have 1 and 2 different commits each, respectively.
-
 Changes to be committed:
 	new file:   dir2/added
 
@@ -272,10 +248,6 @@ test_expect_success 'status with gitignore' '
 
 	cat >expect <<\EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -341,10 +313,6 @@ test_expect_success 'status with gitignore (nothing untracked)' '
 
 	cat >expect <<\EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -380,7 +348,7 @@ output*
 EOF
 
 cat >expect <<\EOF
-## master...upstream [ahead 1, behind 2]
+## master
  M dir1/modified
 A  dir2/added
 ?? dir1/untracked
@@ -414,10 +382,6 @@ test_expect_success 'setup dir3' '
 test_expect_success 'status -uno' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -444,9 +408,6 @@ test_expect_success 'status (status.showUntrackedFiles no)' '
 test_expect_success 'status -uno (advice.statusHints false)' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-
 Changes to be committed:
 	new file:   dir2/added
 
@@ -478,10 +439,6 @@ test_expect_success 'status -s (status.showUntrackedFiles no)' '
 test_expect_success 'status -unormal' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -536,10 +493,6 @@ test_expect_success 'status -s (status.showUntrackedFiles normal)' '
 test_expect_success 'status -uall' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -599,10 +552,6 @@ test_expect_success 'status -s (status.showUntrackedFiles all)' '
 test_expect_success 'status with relative paths' '
 	cat >expect <<\EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -661,19 +610,13 @@ test_expect_success 'status --porcelain ignores relative paths setting' '
 test_expect_success 'setup unique colors' '
 
 	git config status.color.untracked blue &&
-	git config status.color.branch green &&
-	git config status.color.localBranch yellow &&
-	git config status.color.remoteBranch cyan
+	git config status.color.branch green
 
 '
 
 test_expect_success 'status with color.ui' '
 	cat >expect <<\EOF &&
 On branch <GREEN>master<RESET>
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -732,7 +675,7 @@ test_expect_success 'status -s with color.status' '
 '
 
 cat >expect <<\EOF
-## <YELLOW>master<RESET>...<CYAN>upstream<RESET> [ahead <YELLOW>1<RESET>, behind <CYAN>2<RESET>]
+## <GREEN>master<RESET>
  <RED>M<RESET> dir1/modified
 <GREEN>A<RESET>  dir2/added
 <BLUE>??<RESET> dir1/untracked
@@ -783,7 +726,7 @@ test_expect_success 'status --porcelain respects -b' '
 
 	git status --porcelain -b >output &&
 	{
-		echo "## master...upstream [ahead 1, behind 2]" &&
+		echo "## master" &&
 		cat expect
 	} >tmp &&
 	mv tmp expect &&
@@ -796,10 +739,6 @@ test_expect_success 'status --porcelain respects -b' '
 test_expect_success 'status without relative paths' '
 	cat >expect <<\EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -846,10 +785,6 @@ test_expect_success 'status -s without relative paths' '
 test_expect_success 'dry-run of partial commit excluding new file in index' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -890,10 +825,6 @@ test_expect_success 'setup status submodule summary' '
 test_expect_success 'status submodule summary is disabled by default' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -950,10 +881,6 @@ head=$(cd sm && git rev-parse --short=7 --verify HEAD)
 test_expect_success 'status submodule summary' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 1 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1012,10 +939,6 @@ test_expect_success 'status -s submodule summary' '
 test_expect_success 'status submodule summary (clean submodule): commit' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes not staged for commit:
   (use "git add <file>..." to update what will be committed)
   (use "git checkout -- <file>..." to discard changes in working directory)
@@ -1062,10 +985,6 @@ test_expect_success 'status -z implies porcelain' '
 test_expect_success 'commit --dry-run submodule summary (--amend)' '
 	cat >expect <<EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD^1 <file>..." to unstage)
 
@@ -1119,10 +1038,6 @@ touch .gitmodules
 test_expect_success '--ignore-submodules=untracked suppresses submodules with untracked content' '
 	cat > expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1231,10 +1146,6 @@ test_expect_success '.git/config ignore=dirty suppresses submodules with modifie
 test_expect_success "--ignore-submodules=untracked doesn't suppress submodules with modified content" '
 	cat > expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1291,10 +1202,6 @@ head2=$(cd sm && git commit -q -m "2nd commit" foo && git rev-parse --short=7 --
 test_expect_success "--ignore-submodules=untracked doesn't suppress submodule summary" '
 	cat > expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1375,10 +1282,6 @@ test_expect_success ".git/config ignore=dirty doesn't suppress submodule summary
 
 cat > expect << EOF
 ; On branch master
-; Your branch and 'upstream' have diverged,
-; and have 2 and 2 different commits each, respectively.
-;   (use "git pull" to merge the remote branch into yours)
-;
 ; Changes to be committed:
 ;   (use "git reset HEAD <file>..." to unstage)
 ;
@@ -1426,10 +1329,6 @@ test_expect_success "status (core.commentchar with two chars with submodule summ
 test_expect_success "--ignore-submodules=all suppresses submodule summary" '
 	cat > expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes not staged for commit:
   (use "git add <file>..." to update what will be committed)
   (use "git checkout -- <file>..." to discard changes in working directory)
@@ -1454,10 +1353,6 @@ EOF
 test_expect_success '.gitmodules ignore=all suppresses unstaged submodule summary' '
 	cat > expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1577,10 +1472,6 @@ test_expect_success 'git commit --dry-run will show a staged but ignored submodu
 	git add sm &&
 	cat >expect << EOF &&
 On branch master
-Your branch and '\''upstream'\'' have diverged,
-and have 2 and 2 different commits each, respectively.
-  (use "git pull" to merge the remote branch into yours)
-
 Changes to be committed:
   (use "git reset HEAD <file>..." to unstage)
 
@@ -1606,51 +1497,6 @@ test_expect_success 'git commit -m will commit a staged but ignored submodule' '
 	 test_i18ngrep ! "^M. sm" output &&
 	git config --remove-section submodule.subname &&
 	git config -f .gitmodules  --remove-section submodule.subname
-'
-
-test_expect_success 'show stash info with "--show-stash"' '
-	git reset --hard &&
-	git stash clear &&
-	echo 1 >file &&
-	git add file &&
-	git stash &&
-	git status >expected_default &&
-	git status --show-stash >expected_with_stash &&
-	test_i18ngrep "^Your stash currently has 1 entry$" expected_with_stash
-'
-
-test_expect_success 'no stash info with "--show-stash --no-show-stash"' '
-	git status --show-stash --no-show-stash >expected_without_stash &&
-	test_cmp expected_default expected_without_stash
-'
-
-test_expect_success '"status.showStash=false" weaker than "--show-stash"' '
-	git -c status.showStash=false status --show-stash >actual &&
-	test_cmp expected_with_stash actual
-'
-
-test_expect_success '"status.showStash=true" weaker than "--no-show-stash"' '
-	git -c status.showStash=true status --no-show-stash >actual &&
-	test_cmp expected_without_stash actual
-'
-
-test_expect_success 'no additionnal info if no stash entries' '
-	git stash clear &&
-	git -c status.showStash=true status >actual &&
-	test_cmp expected_without_stash actual
-'
-
-test_expect_success 'No commits yet should be noted in status output' '
-	git init initial &&
-	(
-		cd initial &&
-		git status >output &&
-		test_i18ngrep "No commits yet" output &&
-		test_commit initial &&
-		git status >output &&
-		test_i18ngrep ! "No commits yet" output &&
-		test_i18ngrep "nothing.*to commit" output
-	)
 '
 
 test_done
