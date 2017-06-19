@@ -6,6 +6,7 @@
  *
  */
 #include "cache.h"
+#include "config.h"
 #include "lockfile.h"
 #include "exec_cmd.h"
 #include "strbuf.h"
@@ -214,11 +215,10 @@ static int include_by_gitdir(const struct config_options *opts,
 	struct strbuf pattern = STRBUF_INIT;
 	int ret = 0, prefix;
 	const char *git_dir;
+	int already_tried_absolute = 0;
 
 	if (opts->git_dir)
 		git_dir = opts->git_dir;
-	else if (have_git_dir())
-		git_dir = get_git_dir();
 	else
 		goto done;
 
@@ -226,6 +226,7 @@ static int include_by_gitdir(const struct config_options *opts,
 	strbuf_add(&pattern, cond, cond_len);
 	prefix = prepare_include_condition_pattern(&pattern);
 
+again:
 	if (prefix < 0)
 		goto done;
 
@@ -245,6 +246,20 @@ static int include_by_gitdir(const struct config_options *opts,
 	ret = !wildmatch(pattern.buf + prefix, text.buf + prefix,
 			 icase ? WM_CASEFOLD : 0, NULL);
 
+	if (!ret && !already_tried_absolute) {
+		/*
+		 * We've tried e.g. matching gitdir:~/work, but if
+		 * ~/work is a symlink to /mnt/storage/work
+		 * strbuf_realpath() will expand it, so the rule won't
+		 * match. Let's match against a
+		 * strbuf_add_absolute_path() version of the path,
+		 * which'll do the right thing
+		 */
+		strbuf_reset(&text);
+		strbuf_add_absolute_path(&text, git_dir);
+		already_tried_absolute = 1;
+		goto again;
+	}
 done:
 	strbuf_release(&pattern);
 	strbuf_release(&text);
@@ -379,8 +394,7 @@ static int git_config_parse_key_1(const char *key, char **store_key, int *basele
 
 out_free_ret_1:
 	if (store_key) {
-		free(*store_key);
-		*store_key = NULL;
+		FREE_AND_NULL(*store_key);
 	}
 	return -CONFIG_INVALID_KEY;
 }
@@ -588,7 +602,8 @@ static int get_value(config_fn_t fn, void *data, struct strbuf *name)
 	 */
 	cf->linenr--;
 	ret = fn(name->buf, value, data);
-	cf->linenr++;
+	if (ret >= 0)
+		cf->linenr++;
 	return ret;
 }
 
@@ -1229,6 +1244,10 @@ static int git_default_core_config(const char *var, const char *value)
 			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
 		else
 			hide_dotfiles = git_config_bool(var, value);
+	}
+
+	if (!strcmp(var, "core.fsmonitor")) {
+		core_fsmonitor = git_config_bool(var, value);
 		return 0;
 	}
 
@@ -1422,7 +1441,7 @@ int git_config_from_file(config_fn_t fn, const char *filename, void *data)
 	int ret = -1;
 	FILE *f;
 
-	f = fopen(filename, "r");
+	f = fopen_or_warn(filename, "r");
 	if (f) {
 		flockfile(f);
 		ret = do_config_from_file(fn, CONFIG_ORIGIN_FILE, filename, filename, f, data);
@@ -1529,10 +1548,8 @@ static int do_git_config_sequence(const struct config_options *opts,
 	char *user_config = expand_user_path("~/.gitconfig", 0);
 	char *repo_config;
 
-	if (opts->git_dir)
-		repo_config = mkpathdup("%s/config", opts->git_dir);
-	else if (have_git_dir())
-		repo_config = git_pathdup("config");
+	if (opts->commondir)
+		repo_config = mkpathdup("%s/config", opts->commondir);
 	else
 		repo_config = NULL;
 
@@ -1563,9 +1580,9 @@ static int do_git_config_sequence(const struct config_options *opts,
 	return ret;
 }
 
-int git_config_with_options(config_fn_t fn, void *data,
-			    struct git_config_source *config_source,
-			    const struct config_options *opts)
+int config_with_options(config_fn_t fn, void *data,
+			struct git_config_source *config_source,
+			const struct config_options *opts)
 {
 	struct config_include_data inc = CONFIG_INCLUDE_INIT;
 
@@ -1596,9 +1613,14 @@ static void git_config_raw(config_fn_t fn, void *data)
 	struct config_options opts = {0};
 
 	opts.respect_includes = 1;
-	if (git_config_with_options(fn, data, NULL, &opts) < 0)
+	if (have_git_dir()) {
+		opts.commondir = get_git_common_dir();
+		opts.git_dir = get_git_dir();
+	}
+
+	if (config_with_options(fn, data, NULL, &opts) < 0)
 		/*
-		 * git_config_with_options() normally returns only
+		 * config_with_options() normally returns only
 		 * zero, as most errors are fatal, and
 		 * non-fatal potential errors are guarded by "if"
 		 * statements that are entered only when no error is
@@ -1637,11 +1659,13 @@ static void configset_iter(struct config_set *cs, config_fn_t fn, void *data)
 void read_early_config(config_fn_t cb, void *data)
 {
 	struct config_options opts = {0};
-	struct strbuf buf = STRBUF_INIT;
+	struct strbuf commondir = STRBUF_INIT;
+	struct strbuf gitdir = STRBUF_INIT;
 
 	opts.respect_includes = 1;
 
-	if (have_git_dir())
+	if (have_git_dir()) {
+		opts.commondir = get_git_common_dir();
 		opts.git_dir = get_git_dir();
 	/*
 	 * When setup_git_directory() was not yet asked to discover the
@@ -1651,12 +1675,15 @@ void read_early_config(config_fn_t cb, void *data)
 	 * notably, the current working directory is still the same after the
 	 * call).
 	 */
-	else if (discover_git_directory(&buf))
-		opts.git_dir = buf.buf;
+	} else if (!discover_git_directory(&commondir, &gitdir)) {
+		opts.commondir = commondir.buf;
+		opts.git_dir = gitdir.buf;
+	}
 
-	git_config_with_options(cb, data, NULL, &opts);
+	config_with_options(cb, data, NULL, &opts);
 
-	strbuf_release(&buf);
+	strbuf_release(&commondir);
+	strbuf_release(&gitdir);
 }
 
 static void git_config_check_init(void);
@@ -1965,7 +1992,7 @@ int git_config_get_expiry(const char *key, const char **output)
 	if (ret)
 		return ret;
 	if (strcmp(*output, "now")) {
-		unsigned long now = approxidate("now");
+		timestamp_t now = approxidate("now");
 		if (approxidate(*output) >= now)
 			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
 	}
@@ -2153,10 +2180,10 @@ static int write_error(const char *filename)
 	return 4;
 }
 
-static int store_write_section(int fd, const char *key)
+static struct strbuf store_create_section(const char *key)
 {
 	const char *dot;
-	int i, success;
+	int i;
 	struct strbuf sb = STRBUF_INIT;
 
 	dot = memchr(key, '.', store.baselen);
@@ -2171,6 +2198,15 @@ static int store_write_section(int fd, const char *key)
 	} else {
 		strbuf_addf(&sb, "[%.*s]\n", store.baselen, key);
 	}
+
+	return sb;
+}
+
+static int store_write_section(int fd, const char *key)
+{
+	int success;
+
+	struct strbuf sb = store_create_section(key);
 
 	success = write_in_full(fd, sb.buf, sb.len) == sb.len;
 	strbuf_release(&sb);
@@ -2613,8 +2649,8 @@ static int section_name_is_ok(const char *name)
 }
 
 /* if new_name == NULL, the section is removed instead */
-int git_config_rename_section_in_file(const char *config_filename,
-				      const char *old_name, const char *new_name)
+static int git_config_copy_or_rename_section_in_file(const char *config_filename,
+				      const char *old_name, const char *new_name, int copy)
 {
 	int ret = 0, remove = 0;
 	char *filename_buf = NULL;
@@ -2623,6 +2659,7 @@ int git_config_rename_section_in_file(const char *config_filename,
 	char buf[1024];
 	FILE *config_file = NULL;
 	struct stat st;
+	struct strbuf copystr = STRBUF_INIT;
 
 	if (new_name && !section_name_is_ok(new_name)) {
 		ret = error("invalid section name: %s", new_name);
@@ -2640,6 +2677,9 @@ int git_config_rename_section_in_file(const char *config_filename,
 	}
 
 	if (!(config_file = fopen(config_filename, "rb"))) {
+		ret = warn_on_fopen_errors(config_filename);
+		if (ret)
+			goto out;
 		/* no config file means nothing to rename, no error */
 		goto commit_and_out;
 	}
@@ -2658,12 +2698,30 @@ int git_config_rename_section_in_file(const char *config_filename,
 	while (fgets(buf, sizeof(buf), config_file)) {
 		int i;
 		int length;
+		int is_section = 0;
 		char *output = buf;
 		for (i = 0; buf[i] && isspace(buf[i]); i++)
 			; /* do nothing */
 		if (buf[i] == '[') {
 			/* it's a section */
-			int offset = section_name_match(&buf[i], old_name);
+			int offset;
+			is_section = 1;
+
+			/*
+			 * When encountering a new section under -c we
+			 * need to flush out any section we're already
+			 * coping and begin anew. There might be
+			 * multiple [branch "$name"] sections.
+			 */
+			if (copystr.len > 0) {
+				if (write_in_full(out_fd, copystr.buf, copystr.len) != copystr.len) {
+					ret = write_error(get_lock_file_path(lock));
+					goto out;
+				}
+				strbuf_reset(&copystr);
+			}
+
+			offset = section_name_match(&buf[i], old_name);
 			if (offset > 0) {
 				ret++;
 				if (new_name == NULL) {
@@ -2671,25 +2729,30 @@ int git_config_rename_section_in_file(const char *config_filename,
 					continue;
 				}
 				store.baselen = strlen(new_name);
-				if (!store_write_section(out_fd, new_name)) {
-					ret = write_error(get_lock_file_path(lock));
-					goto out;
-				}
-				/*
-				 * We wrote out the new section, with
-				 * a newline, now skip the old
-				 * section's length
-				 */
-				output += offset + i;
-				if (strlen(output) > 0) {
+				if (!copy) {
+					if (!store_write_section(out_fd, new_name)) {
+						ret = write_error(get_lock_file_path(lock));
+						goto out;
+					}
+
 					/*
-					 * More content means there's
-					 * a declaration to put on the
-					 * next line; indent with a
-					 * tab
+					 * We wrote out the new section, with
+					 * a newline, now skip the old
+					 * section's length
 					 */
-					output -= 1;
-					output[0] = '\t';
+					output += offset + i;
+					if (strlen(output) > 0) {
+						/*
+						 * More content means there's
+						 * a declaration to put on the
+						 * next line; indent with a
+						 * tab
+						 */
+						output -= 1;
+						output[0] = '\t';
+					}
+				} else {
+					copystr = store_create_section(new_name);
 				}
 			}
 			remove = 0;
@@ -2697,11 +2760,30 @@ int git_config_rename_section_in_file(const char *config_filename,
 		if (remove)
 			continue;
 		length = strlen(output);
+
+		if (!is_section && copystr.len > 0) {
+			strbuf_add(&copystr, output, length);
+		}
+
 		if (write_in_full(out_fd, output, length) != length) {
 			ret = write_error(get_lock_file_path(lock));
 			goto out;
 		}
 	}
+
+	/*
+	 * Copy a trailing section at the end of the config, won't be
+	 * flushed by the usual "flush because we have a new section
+	 * logic in the loop above.
+	 */
+	if (copystr.len > 0) {
+		if (write_in_full(out_fd, copystr.buf, copystr.len) != copystr.len) {
+			ret = write_error(get_lock_file_path(lock));
+			goto out;
+		}
+		strbuf_reset(&copystr);
+	}
+
 	fclose(config_file);
 	config_file = NULL;
 commit_and_out:
@@ -2717,9 +2799,28 @@ out_no_rollback:
 	return ret;
 }
 
+int git_config_rename_section_in_file(const char *config_filename,
+				      const char *old_name, const char *new_name)
+{
+	return git_config_copy_or_rename_section_in_file(config_filename,
+					 old_name, new_name, 0);
+}
+
 int git_config_rename_section(const char *old_name, const char *new_name)
 {
 	return git_config_rename_section_in_file(NULL, old_name, new_name);
+}
+
+int git_config_copy_section_in_file(const char *config_filename,
+				      const char *old_name, const char *new_name)
+{
+	return git_config_copy_or_rename_section_in_file(config_filename,
+					 old_name, new_name, 1);
+}
+
+int git_config_copy_section(const char *old_name, const char *new_name)
+{
+	return git_config_copy_section_in_file(NULL, old_name, new_name);
 }
 
 /*
