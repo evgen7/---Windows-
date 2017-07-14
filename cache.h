@@ -11,8 +11,7 @@
 #include "string-list.h"
 #include "pack-revindex.h"
 #include "hash.h"
-#include "path.h"
-#include "sha1-array.h"
+#include "config.h"
 
 #ifndef platform_SHA_CTX
 /*
@@ -203,7 +202,6 @@ struct cache_entry {
 #define CE_ADDED             (1 << 19)
 
 #define CE_HASHED            (1 << 20)
-#define CE_FSMONITOR_DIRTY   (1 << 21)
 #define CE_WT_REMOVE         (1 << 22) /* remove in work directory */
 #define CE_CONFLICTED        (1 << 23)
 
@@ -327,7 +325,6 @@ static inline unsigned int canon_mode(unsigned int mode)
 #define CACHE_TREE_CHANGED	(1 << 5)
 #define SPLIT_INDEX_ORDERED	(1 << 6)
 #define UNTRACKED_CHANGED	(1 << 7)
-#define FSMONITOR_CHANGED	(1 << 8)
 
 struct split_index;
 struct untracked_cache;
@@ -346,8 +343,6 @@ struct index_state {
 	struct hashmap dir_hash;
 	unsigned char sha1[20];
 	struct untracked_cache *untracked;
-	uint64_t fsmonitor_last_update;
-	struct ewah_bitmap *fsmonitor_dirty;
 };
 
 extern struct index_state the_index;
@@ -468,8 +463,6 @@ static inline enum object_type object_type(unsigned int mode)
  */
 extern const char * const local_repo_env[];
 
-extern void setup_git_env(void);
-
 /*
  * Returns true iff we have a configured git repository (either via
  * setup_git_directory, or in the environment via $GIT_DIR).
@@ -533,15 +526,12 @@ extern void set_git_work_tree(const char *tree);
 
 extern void setup_work_tree(void);
 /*
- * Find the commondir and gitdir of the repository that contains the current
- * working directory, without changing the working directory or other global
- * state. The result is appended to commondir and gitdir.  If the discovered
- * gitdir does not correspond to a worktree, then 'commondir' and 'gitdir' will
- * both have the same result appended to the buffer.  The return value is
- * either 0 upon success and non-zero if no repository was found.
+ * Find GIT_DIR of the repository that contains the current working directory,
+ * without changing the working directory or other global state. The result is
+ * appended to gitdir. The return value is either NULL if no repository was
+ * found, or pointing to the path inside gitdir's buffer.
  */
-extern int discover_git_directory(struct strbuf *commondir,
-				  struct strbuf *gitdir);
+extern const char *discover_git_directory(struct strbuf *gitdir);
 extern const char *setup_git_directory_gently(int *);
 extern const char *setup_git_directory(void);
 extern char *prefix_path(const char *prefix, int len, const char *path);
@@ -598,6 +588,7 @@ extern int daemonize(void);
 /* Initialize and use the cache information */
 struct lock_file;
 extern int read_index(struct index_state *);
+extern void preload_index(struct index_state *, const struct pathspec *pathspec);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
@@ -608,7 +599,6 @@ extern int read_index_unmerged(struct index_state *);
 #define CLOSE_LOCK		(1 << 1)
 extern int write_locked_index(struct index_state *, struct lock_file *lock, unsigned flags);
 extern int discard_index(struct index_state *);
-extern void move_index_extensions(struct index_state *dst, struct index_state *src);
 extern int unmerged_index(const struct index_state *);
 extern int verify_path(const char *path);
 extern int strcmp_offset(const char *s1, const char *s2, size_t *first_change);
@@ -777,7 +767,7 @@ extern int core_apply_sparse_checkout;
 extern int precomposed_unicode;
 extern int protect_hfs;
 extern int protect_ntfs;
-extern int core_fsmonitor;
+extern int git_db_env, git_index_env, git_graft_env, git_common_dir_env;
 
 /*
  * Include broken refs in all ref iterations, which will
@@ -793,14 +783,6 @@ extern int ref_paranoia;
  */
 extern char comment_line_char;
 extern int auto_comment_line_char;
-
-/* Windows only */
-enum hide_dotfiles_type {
-	HIDE_DOTFILES_FALSE = 0,
-	HIDE_DOTFILES_TRUE,
-	HIDE_DOTFILES_DOTGITONLY
-};
-extern enum hide_dotfiles_type hide_dotfiles;
 
 enum log_refs_config {
 	LOG_REFS_UNSET = -1,
@@ -900,6 +882,64 @@ extern void check_repository_format(void);
 #define TYPE_CHANGED    0x0040
 
 /*
+ * Return a statically allocated filename, either generically (mkpath), in
+ * the repository directory (git_path), or in a submodule's repository
+ * directory (git_path_submodule). In all cases, note that the result
+ * may be overwritten by another call to _any_ of the functions. Consider
+ * using the safer "dup" or "strbuf" formats below (in some cases, the
+ * unsafe versions have already been removed).
+ */
+extern const char *mkpath(const char *fmt, ...) __attribute__((format (printf, 1, 2)));
+extern const char *git_path(const char *fmt, ...) __attribute__((format (printf, 1, 2)));
+extern const char *git_common_path(const char *fmt, ...) __attribute__((format (printf, 1, 2)));
+
+extern char *mksnpath(char *buf, size_t n, const char *fmt, ...)
+	__attribute__((format (printf, 3, 4)));
+extern void strbuf_git_path(struct strbuf *sb, const char *fmt, ...)
+	__attribute__((format (printf, 2, 3)));
+extern void strbuf_git_common_path(struct strbuf *sb, const char *fmt, ...)
+	__attribute__((format (printf, 2, 3)));
+extern char *git_path_buf(struct strbuf *buf, const char *fmt, ...)
+	__attribute__((format (printf, 2, 3)));
+extern int strbuf_git_path_submodule(struct strbuf *sb, const char *path,
+				     const char *fmt, ...)
+	__attribute__((format (printf, 3, 4)));
+extern char *git_pathdup(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
+extern char *mkpathdup(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
+extern char *git_pathdup_submodule(const char *path, const char *fmt, ...)
+	__attribute__((format (printf, 2, 3)));
+
+extern void report_linked_checkout_garbage(void);
+
+/*
+ * You can define a static memoized git path like:
+ *
+ *    static GIT_PATH_FUNC(git_path_foo, "FOO");
+ *
+ * or use one of the global ones below.
+ */
+#define GIT_PATH_FUNC(func, filename) \
+	const char *func(void) \
+	{ \
+		static char *ret; \
+		if (!ret) \
+			ret = git_pathdup(filename); \
+		return ret; \
+	}
+
+const char *git_path_cherry_pick_head(void);
+const char *git_path_revert_head(void);
+const char *git_path_squash_msg(void);
+const char *git_path_merge_msg(void);
+const char *git_path_merge_rr(void);
+const char *git_path_merge_mode(void);
+const char *git_path_merge_head(void);
+const char *git_path_fetch_head(void);
+const char *git_path_shallow(void);
+
+/*
  * Return the name of the file in the local object database that would
  * be used to store a loose object with the specified sha1.  The
  * return value is a pointer to a statically allocated buffer that is
@@ -977,13 +1017,6 @@ static inline void hashcpy(unsigned char *sha_dst, const unsigned char *sha_src)
 static inline void oidcpy(struct object_id *dst, const struct object_id *src)
 {
 	hashcpy(dst->hash, src->hash);
-}
-
-static inline struct object_id *oiddup(const struct object_id *src)
-{
-	struct object_id *dst = xmalloc(sizeof(struct object_id));
-	oidcpy(dst, src);
-	return dst;
 }
 
 static inline void hashclr(unsigned char *hash)
@@ -1165,12 +1198,13 @@ extern char *xdg_config_home(const char *filename);
  */
 extern char *xdg_cache_home(const char *filename);
 
-extern void *read_sha1_file_extended(const unsigned char *sha1,
-				     enum object_type *type,
-				     unsigned long *size, int lookup_replace);
+/* object replacement */
+#define LOOKUP_REPLACE_OBJECT 1
+#define LOOKUP_UNKNOWN_OBJECT 2
+extern void *read_sha1_file_extended(const unsigned char *sha1, enum object_type *type, unsigned long *size, unsigned flag);
 static inline void *read_sha1_file(const unsigned char *sha1, enum object_type *type, unsigned long *size)
 {
-	return read_sha1_file_extended(sha1, type, size, 1);
+	return read_sha1_file_extended(sha1, type, size, LOOKUP_REPLACE_OBJECT);
 }
 
 /*
@@ -1190,6 +1224,13 @@ static inline const unsigned char *lookup_replace_object(const unsigned char *sh
 	if (!check_replace_refs)
 		return sha1;
 	return do_lookup_replace_object(sha1);
+}
+
+static inline const unsigned char *lookup_replace_object_extended(const unsigned char *sha1, unsigned flag)
+{
+	if (!(flag & LOOKUP_REPLACE_OBJECT))
+		return sha1;
+	return lookup_replace_object(sha1);
 }
 
 /* Read and unpack a sha1 file into memory, write memory to a sha1 file */
@@ -1228,10 +1269,15 @@ int read_loose_object(const char *path,
 		      void **contents);
 
 /*
- * Convenience for sha1_object_info_extended() with a NULL struct
- * object_info. OBJECT_INFO_SKIP_CACHED is automatically set; pass
- * nonzero flags to also set other flags.
+ * Return true iff we have an object named sha1, whether local or in
+ * an alternate object database, and whether packed or loose.  This
+ * function does not respect replace references.
+ *
+ * If the QUICK flag is set, do not re-check the pack directory
+ * when we cannot find the object (this means we may give a false
+ * negative answer if another process is simultaneously repacking).
  */
+#define HAS_SHA1_QUICK 0x1
 extern int has_sha1_file_with_flags(const unsigned char *sha1, int flags);
 static inline int has_sha1_file(const unsigned char *sha1)
 {
@@ -1288,37 +1334,38 @@ struct object_context {
 	 */
 	struct strbuf symlink_path;
 	/*
-	 * If GET_OID_RECORD_PATH is set, this will record path (if any)
+	 * If GET_SHA1_RECORD_PATH is set, this will record path (if any)
 	 * found when resolving the name. The caller is responsible for
 	 * releasing the memory.
 	 */
 	char *path;
 };
 
-#define GET_OID_QUIETLY           01
-#define GET_OID_COMMIT            02
-#define GET_OID_COMMITTISH        04
-#define GET_OID_TREE             010
-#define GET_OID_TREEISH          020
-#define GET_OID_BLOB             040
-#define GET_OID_FOLLOW_SYMLINKS 0100
-#define GET_OID_RECORD_PATH     0200
-#define GET_OID_ONLY_TO_DIE    04000
+#define GET_SHA1_QUIETLY           01
+#define GET_SHA1_COMMIT            02
+#define GET_SHA1_COMMITTISH        04
+#define GET_SHA1_TREE             010
+#define GET_SHA1_TREEISH          020
+#define GET_SHA1_BLOB             040
+#define GET_SHA1_FOLLOW_SYMLINKS 0100
+#define GET_SHA1_RECORD_PATH     0200
+#define GET_SHA1_ONLY_TO_DIE    04000
 
-#define GET_OID_DISAMBIGUATORS \
-	(GET_OID_COMMIT | GET_OID_COMMITTISH | \
-	GET_OID_TREE | GET_OID_TREEISH | \
-	GET_OID_BLOB)
+#define GET_SHA1_DISAMBIGUATORS \
+	(GET_SHA1_COMMIT | GET_SHA1_COMMITTISH | \
+	GET_SHA1_TREE | GET_SHA1_TREEISH | \
+	GET_SHA1_BLOB)
+
+extern int get_sha1(const char *str, unsigned char *sha1);
+extern int get_sha1_commit(const char *str, unsigned char *sha1);
+extern int get_sha1_committish(const char *str, unsigned char *sha1);
+extern int get_sha1_tree(const char *str, unsigned char *sha1);
+extern int get_sha1_treeish(const char *str, unsigned char *sha1);
+extern int get_sha1_blob(const char *str, unsigned char *sha1);
+extern void maybe_die_on_misspelt_object_name(const char *name, const char *prefix);
+extern int get_sha1_with_context(const char *str, unsigned flags, unsigned char *sha1, struct object_context *oc);
 
 extern int get_oid(const char *str, struct object_id *oid);
-extern int get_oid_commit(const char *str, struct object_id *oid);
-extern int get_oid_committish(const char *str, struct object_id *oid);
-extern int get_oid_tree(const char *str, struct object_id *oid);
-extern int get_oid_treeish(const char *str, struct object_id *oid);
-extern int get_oid_blob(const char *str, struct object_id *oid);
-extern void maybe_die_on_misspelt_object_name(const char *name, const char *prefix);
-extern int get_oid_with_context(const char *str, unsigned flags, struct object_id *oid, struct object_context *oc);
-
 
 typedef int each_abbrev_fn(const struct object_id *oid, void *);
 extern int for_each_abbrev(const char *prefix, each_abbrev_fn, void *);
@@ -1432,18 +1479,18 @@ struct date_mode {
 #define DATE_MODE(t) date_mode_from_type(DATE_##t)
 struct date_mode *date_mode_from_type(enum date_mode_type type);
 
-const char *show_date(timestamp_t time, int timezone, const struct date_mode *mode);
-void show_date_relative(timestamp_t time, int tz, const struct timeval *now,
+const char *show_date(unsigned long time, int timezone, const struct date_mode *mode);
+void show_date_relative(unsigned long time, int tz, const struct timeval *now,
 			struct strbuf *timebuf);
 int parse_date(const char *date, struct strbuf *out);
-int parse_date_basic(const char *date, timestamp_t *timestamp, int *offset);
-int parse_expiry_date(const char *date, timestamp_t *timestamp);
+int parse_date_basic(const char *date, unsigned long *timestamp, int *offset);
+int parse_expiry_date(const char *date, unsigned long *timestamp);
 void datestamp(struct strbuf *out);
 #define approxidate(s) approxidate_careful((s), NULL)
-timestamp_t approxidate_careful(const char *, int *);
-timestamp_t approxidate_relative(const char *date, const struct timeval *now);
+unsigned long approxidate_careful(const char *, int *);
+unsigned long approxidate_relative(const char *date, const struct timeval *now);
 void parse_date_format(const char *format, struct date_mode *mode);
-int date_overflows(timestamp_t date);
+int date_overflows(unsigned long date);
 
 #define IDENT_STRICT	       1
 #define IDENT_NO_DATE	       2
@@ -1496,7 +1543,6 @@ struct checkout {
 	struct index_state *istate;
 	const char *base_dir;
 	int base_dir_len;
-	struct delayed_checkout *delayed_checkout;
 	unsigned force:1,
 		 quiet:1,
 		 not_new:1,
@@ -1506,8 +1552,6 @@ struct checkout {
 
 #define TEMPORARY_FILENAME_LENGTH 25
 extern int checkout_entry(struct cache_entry *ce, const struct checkout *state, char *topath);
-extern void enable_delayed_checkout(struct checkout *state);
-extern int finish_delayed_checkout(struct checkout *state);
 
 struct cache_def {
 	struct strbuf path;
@@ -1534,16 +1578,6 @@ extern struct alternate_object_database {
 	/* see alt_scratch_buf() */
 	struct strbuf scratch;
 	size_t base_len;
-
-	/*
-	 * Used to store the results of readdir(3) calls when searching
-	 * for unique abbreviated hashes.  This cache is never
-	 * invalidated, thus it's racy and not necessarily accurate.
-	 * That's fine for its purpose; don't use it for tasks requiring
-	 * greater accuracy!
-	 */
-	char loose_objects_subdir_seen[256];
-	struct oid_array loose_objects_cache;
 
 	char path[FLEX_ARRAY];
 } *alt_odb_list;
@@ -1760,15 +1794,9 @@ typedef int each_loose_object_fn(const struct object_id *oid,
 typedef int each_loose_cruft_fn(const char *basename,
 				const char *path,
 				void *data);
-typedef int each_loose_subdir_fn(unsigned int nr,
+typedef int each_loose_subdir_fn(int nr,
 				 const char *path,
 				 void *data);
-int for_each_file_in_obj_subdir(unsigned int subdir_nr,
-				struct strbuf *path,
-				each_loose_object_fn obj_cb,
-				each_loose_cruft_fn cruft_cb,
-				each_loose_subdir_fn subdir_cb,
-				void *data);
 int for_each_loose_file_in_objdir(const char *path,
 				  each_loose_object_fn obj_cb,
 				  each_loose_cruft_fn cruft_cb,
@@ -1800,7 +1828,6 @@ struct object_info {
 	off_t *disk_sizep;
 	unsigned char *delta_base_sha1;
 	struct strbuf *typename;
-	void **contentp;
 
 	/* Response */
 	enum {
@@ -1832,14 +1859,6 @@ struct object_info {
  */
 #define OBJECT_INFO_INIT {NULL}
 
-/* Invoke lookup_replace_object() on the given hash */
-#define OBJECT_INFO_LOOKUP_REPLACE 1
-/* Allow reading from a loose object file of unknown/bogus type */
-#define OBJECT_INFO_ALLOW_UNKNOWN_TYPE 2
-/* Do not check cached storage */
-#define OBJECT_INFO_SKIP_CACHED 4
-/* Do not retry packed storage after checking packed and loose storage */
-#define OBJECT_INFO_QUICK 8
 extern int sha1_object_info_extended(const unsigned char *, struct object_info *, unsigned flags);
 extern int packed_object_info(struct packed_git *pack, off_t offset, struct object_info *);
 
@@ -1960,8 +1979,6 @@ void shift_tree_by(const struct object_id *, const struct object_id *, struct ob
 #define WS_TRAILING_SPACE      (WS_BLANK_AT_EOL|WS_BLANK_AT_EOF)
 #define WS_DEFAULT_RULE (WS_TRAILING_SPACE|WS_SPACE_BEFORE_TAB|8)
 #define WS_TAB_WIDTH_MASK        077
-/* All WS_* -- when extended, adapt diff.c emit_symbol */
-#define WS_RULE_MASK           07777
 extern unsigned whitespace_rule_cfg;
 extern unsigned whitespace_rule(const char *);
 extern unsigned parse_whitespace_rule(const char *);
@@ -1973,8 +1990,7 @@ extern int ws_blank_line(const char *line, int len, unsigned ws_rule);
 #define ws_tab_width(rule)     ((rule) & WS_TAB_WIDTH_MASK)
 
 /* ls-files */
-void overlay_tree_on_index(struct index_state *istate,
-			   const char *tree_name, const char *prefix);
+void overlay_tree_on_cache(const char *tree_name, const char *prefix);
 
 char *alias_lookup(const char *alias);
 int split_cmdline(char *cmdline, const char ***argv);
@@ -1993,8 +2009,8 @@ struct commit_list;
 int try_merge_command(const char *strategy, size_t xopts_nr,
 		const char **xopts, struct commit_list *common,
 		const char *head_arg, struct commit_list *remotes);
-int checkout_fast_forward(const struct object_id *from,
-			  const struct object_id *to,
+int checkout_fast_forward(const unsigned char *from,
+			  const unsigned char *to,
 			  int overwrite_ignore);
 
 

@@ -5,10 +5,7 @@
  *
  * Copyright (C) Linus Torvalds, 2005
  */
-#define NO_THE_INDEX_COMPATIBILITY_MACROS
 #include "cache.h"
-#include "repository.h"
-#include "config.h"
 #include "quote.h"
 #include "dir.h"
 #include "builtin.h"
@@ -34,8 +31,10 @@ static int line_terminator = '\n';
 static int debug_mode;
 static int show_eol;
 static int recurse_submodules;
+static struct argv_array submodule_options = ARGV_ARRAY_INIT;
 
 static const char *prefix;
+static const char *super_prefix;
 static int max_prefix_len;
 static int prefix_len;
 static struct pathspec pathspec;
@@ -54,17 +53,17 @@ static const char *tag_modified = "";
 static const char *tag_skip_worktree = "";
 static const char *tag_resolve_undo = "";
 
-static void write_eolinfo(const struct index_state *istate,
-			  const struct cache_entry *ce, const char *path)
+static void write_eolinfo(const struct cache_entry *ce, const char *path)
 {
-	if (show_eol) {
+	if (!show_eol)
+		return;
+	else {
 		struct stat st;
 		const char *i_txt = "";
 		const char *w_txt = "";
 		const char *a_txt = get_convert_attr_ascii(path);
 		if (ce && S_ISREG(ce->ce_mode))
-			i_txt = get_cached_convert_stats_ascii(istate,
-							       ce->name);
+			i_txt = get_cached_convert_stats_ascii(ce->name);
 		if (!lstat(path, &st) && S_ISREG(st.st_mode))
 			w_txt = get_wt_convert_stats_ascii(path);
 		printf("i/%-5s w/%-5s attr/%-17s\t", i_txt, w_txt, a_txt);
@@ -74,80 +73,54 @@ static void write_eolinfo(const struct index_state *istate,
 static void write_name(const char *name)
 {
 	/*
+	 * Prepend the super_prefix to name to construct the full_name to be
+	 * written.
+	 */
+	struct strbuf full_name = STRBUF_INIT;
+	if (super_prefix) {
+		strbuf_addstr(&full_name, super_prefix);
+		strbuf_addstr(&full_name, name);
+		name = full_name.buf;
+	}
+
+	/*
 	 * With "--full-name", prefix_len=0; this caller needs to pass
 	 * an empty string in that case (a NULL is good for "").
 	 */
 	write_name_quoted_relative(name, prefix_len ? prefix : NULL,
 				   stdout, line_terminator);
-}
 
-static const char *get_tag(const struct cache_entry *ce, const char *tag)
-{
-	static char alttag[4];
-
-	if (tag && *tag && show_valid_bit && (ce->ce_flags & CE_VALID)) {
-		memcpy(alttag, tag, 3);
-
-		if (isalpha(tag[0])) {
-			alttag[0] = tolower(tag[0]);
-		} else if (tag[0] == '?') {
-			alttag[0] = '!';
-		} else {
-			alttag[0] = 'v';
-			alttag[1] = tag[0];
-			alttag[2] = ' ';
-			alttag[3] = 0;
-		}
-
-		tag = alttag;
-	}
-
-	return tag;
-}
-
-static void print_debug(const struct cache_entry *ce)
-{
-	if (debug_mode) {
-		const struct stat_data *sd = &ce->ce_stat_data;
-
-		printf("  ctime: %d:%d\n", sd->sd_ctime.sec, sd->sd_ctime.nsec);
-		printf("  mtime: %d:%d\n", sd->sd_mtime.sec, sd->sd_mtime.nsec);
-		printf("  dev: %d\tino: %d\n", sd->sd_dev, sd->sd_ino);
-		printf("  uid: %d\tgid: %d\n", sd->sd_uid, sd->sd_gid);
-		printf("  size: %d\tflags: %x\n", sd->sd_size, ce->ce_flags);
-	}
+	strbuf_release(&full_name);
 }
 
 static void show_dir_entry(const char *tag, struct dir_entry *ent)
 {
 	int len = max_prefix_len;
 
-	if (len > ent->len)
+	if (len >= ent->len)
 		die("git ls-files: internal error - directory entry not superset of prefix");
 
 	if (!dir_path_match(ent, &pathspec, len, ps_matched))
 		return;
 
 	fputs(tag, stdout);
-	write_eolinfo(NULL, NULL, ent->name);
+	write_eolinfo(NULL, ent->name);
 	write_name(ent->name);
 }
 
-static void show_other_files(const struct index_state *istate,
-			     const struct dir_struct *dir)
+static void show_other_files(struct dir_struct *dir)
 {
 	int i;
 
 	for (i = 0; i < dir->nr; i++) {
 		struct dir_entry *ent = dir->entries[i];
-		if (!index_name_is_other(istate, ent->name, ent->len))
+		if (!cache_name_is_other(ent->name, ent->len))
 			continue;
 		show_dir_entry(tag_other, ent);
 	}
 }
 
-static void show_killed_files(const struct index_state *istate,
-			      const struct dir_struct *dir)
+static void show_killed_files(struct dir_struct *dir)
 {
 	int i;
 	for (i = 0; i < dir->nr; i++) {
@@ -161,29 +134,29 @@ static void show_killed_files(const struct index_state *istate,
 				/* If ent->name is prefix of an entry in the
 				 * cache, it will be killed.
 				 */
-				pos = index_name_pos(istate, ent->name, ent->len);
+				pos = cache_name_pos(ent->name, ent->len);
 				if (0 <= pos)
 					die("BUG: killed-file %.*s not found",
 						ent->len, ent->name);
 				pos = -pos - 1;
-				while (pos < istate->cache_nr &&
-				       ce_stage(istate->cache[pos]))
+				while (pos < active_nr &&
+				       ce_stage(active_cache[pos]))
 					pos++; /* skip unmerged */
-				if (istate->cache_nr <= pos)
+				if (active_nr <= pos)
 					break;
 				/* pos points at a name immediately after
 				 * ent->name in the cache.  Does it expect
 				 * ent->name to be a directory?
 				 */
-				len = ce_namelen(istate->cache[pos]);
+				len = ce_namelen(active_cache[pos]);
 				if ((ent->len < len) &&
-				    !strncmp(istate->cache[pos]->name,
+				    !strncmp(active_cache[pos]->name,
 					     ent->name, ent->len) &&
-				    istate->cache[pos]->name[ent->len] == '/')
+				    active_cache[pos]->name[ent->len] == '/')
 					killed = 1;
 				break;
 			}
-			if (0 <= index_name_pos(istate, ent->name, sp - ent->name)) {
+			if (0 <= cache_name_pos(ent->name, sp - ent->name)) {
 				/* If any of the leading directories in
 				 * ent->name is registered in the cache,
 				 * ent->name will be killed.
@@ -197,41 +170,100 @@ static void show_killed_files(const struct index_state *istate,
 	}
 }
 
-static void show_files(struct repository *repo, struct dir_struct *dir);
-
-static void show_submodule(struct repository *superproject,
-			   struct dir_struct *dir, const char *path)
+/*
+ * Compile an argv_array with all of the options supported by --recurse_submodules
+ */
+static void compile_submodule_options(const char **argv,
+				      const struct dir_struct *dir,
+				      int show_tag)
 {
-	struct repository submodule;
+	if (line_terminator == '\0')
+		argv_array_push(&submodule_options, "-z");
+	if (show_tag)
+		argv_array_push(&submodule_options, "-t");
+	if (show_valid_bit)
+		argv_array_push(&submodule_options, "-v");
+	if (show_cached)
+		argv_array_push(&submodule_options, "--cached");
+	if (show_eol)
+		argv_array_push(&submodule_options, "--eol");
+	if (debug_mode)
+		argv_array_push(&submodule_options, "--debug");
 
-	if (repo_submodule_init(&submodule, superproject, path))
-		return;
-
-	if (repo_read_index(&submodule) < 0)
-		die("index file corrupt");
-
-	repo_read_gitmodules(&submodule);
-
-	show_files(&submodule, dir);
-
-	repo_clear(&submodule);
+	/* Add Pathspecs */
+	argv_array_push(&submodule_options, "--");
+	for (; *argv; argv++)
+		argv_array_push(&submodule_options, *argv);
 }
 
-static void show_ce(struct repository *repo, struct dir_struct *dir,
-		    const struct cache_entry *ce, const char *fullname,
-		    const char *tag)
+/**
+ * Recursively call ls-files on a submodule
+ */
+static void show_gitlink(const struct cache_entry *ce)
 {
-	if (max_prefix_len > strlen(fullname))
+	struct child_process cp = CHILD_PROCESS_INIT;
+	int status;
+	char *dir;
+
+	prepare_submodule_repo_env(&cp.env_array);
+	argv_array_push(&cp.env_array, GIT_DIR_ENVIRONMENT);
+
+	if (prefix_len)
+		argv_array_pushf(&cp.env_array, "%s=%s",
+				 GIT_TOPLEVEL_PREFIX_ENVIRONMENT,
+				 prefix);
+	argv_array_pushf(&cp.args, "--super-prefix=%s%s/",
+			 super_prefix ? super_prefix : "",
+			 ce->name);
+	argv_array_push(&cp.args, "ls-files");
+	argv_array_push(&cp.args, "--recurse-submodules");
+
+	/* add supported options */
+	argv_array_pushv(&cp.args, submodule_options.argv);
+
+	cp.git_cmd = 1;
+	dir = mkpathdup("%s/%s", get_git_work_tree(), ce->name);
+	cp.dir = dir;
+	status = run_command(&cp);
+	free(dir);
+	if (status)
+		exit(status);
+}
+
+static void show_ce_entry(const char *tag, const struct cache_entry *ce)
+{
+	struct strbuf name = STRBUF_INIT;
+	int len = max_prefix_len;
+	if (super_prefix)
+		strbuf_addstr(&name, super_prefix);
+	strbuf_addstr(&name, ce->name);
+
+	if (len >= ce_namelen(ce))
 		die("git ls-files: internal error - cache entry not superset of prefix");
 
 	if (recurse_submodules && S_ISGITLINK(ce->ce_mode) &&
-	    is_submodule_active(repo, ce->name)) {
-		show_submodule(repo, dir, ce->name);
-	} else if (match_pathspec(&pathspec, fullname, strlen(fullname),
-				  max_prefix_len, ps_matched,
+	    submodule_path_match(&pathspec, name.buf, ps_matched)) {
+		show_gitlink(ce);
+	} else if (match_pathspec(&pathspec, name.buf, name.len,
+				  len, ps_matched,
 				  S_ISDIR(ce->ce_mode) ||
 				  S_ISGITLINK(ce->ce_mode))) {
-		tag = get_tag(ce, tag);
+		if (tag && *tag && show_valid_bit &&
+		    (ce->ce_flags & CE_VALID)) {
+			static char alttag[4];
+			memcpy(alttag, tag, 3);
+			if (isalpha(tag[0]))
+				alttag[0] = tolower(tag[0]);
+			else if (tag[0] == '?')
+				alttag[0] = '!';
+			else {
+				alttag[0] = 'v';
+				alttag[1] = tag[0];
+				alttag[2] = ' ';
+				alttag[3] = 0;
+			}
+			tag = alttag;
+		}
 
 		if (!show_stage) {
 			fputs(tag, stdout);
@@ -242,20 +274,30 @@ static void show_ce(struct repository *repo, struct dir_struct *dir,
 			       find_unique_abbrev(ce->oid.hash, abbrev),
 			       ce_stage(ce));
 		}
-		write_eolinfo(repo->index, ce, fullname);
-		write_name(fullname);
-		print_debug(ce);
+		write_eolinfo(ce, ce->name);
+		write_name(ce->name);
+		if (debug_mode) {
+			const struct stat_data *sd = &ce->ce_stat_data;
+
+			printf("  ctime: %d:%d\n", sd->sd_ctime.sec, sd->sd_ctime.nsec);
+			printf("  mtime: %d:%d\n", sd->sd_mtime.sec, sd->sd_mtime.nsec);
+			printf("  dev: %d\tino: %d\n", sd->sd_dev, sd->sd_ino);
+			printf("  uid: %d\tgid: %d\n", sd->sd_uid, sd->sd_gid);
+			printf("  size: %d\tflags: %x\n", sd->sd_size, ce->ce_flags);
+		}
 	}
+
+	strbuf_release(&name);
 }
 
-static void show_ru_info(const struct index_state *istate)
+static void show_ru_info(void)
 {
 	struct string_list_item *item;
 
-	if (!istate->resolve_undo)
+	if (!the_index.resolve_undo)
 		return;
 
-	for_each_string_list_item(item, istate->resolve_undo) {
+	for_each_string_list_item(item, the_index.resolve_undo) {
 		const char *path = item->string;
 		struct resolve_undo_info *ui = item->util;
 		int i, len;
@@ -277,129 +319,88 @@ static void show_ru_info(const struct index_state *istate)
 	}
 }
 
-static int ce_excluded(struct dir_struct *dir, struct index_state *istate,
-		       const char *fullname, const struct cache_entry *ce)
+static int ce_excluded(struct dir_struct *dir, const struct cache_entry *ce)
 {
 	int dtype = ce_to_dtype(ce);
-	return is_excluded(dir, istate, fullname, &dtype);
+	return is_excluded(dir, ce->name, &dtype);
 }
 
-static void construct_fullname(struct strbuf *out, const struct repository *repo,
-			       const struct cache_entry *ce)
-{
-	strbuf_reset(out);
-	if (repo->submodule_prefix)
-		strbuf_addstr(out, repo->submodule_prefix);
-	strbuf_addstr(out, ce->name);
-}
-
-static void show_files(struct repository *repo, struct dir_struct *dir)
+static void show_files(struct dir_struct *dir)
 {
 	int i;
-	struct strbuf fullname = STRBUF_INIT;
 
 	/* For cached/deleted files we don't need to even do the readdir */
 	if (show_others || show_killed) {
 		if (!show_others)
 			dir->flags |= DIR_COLLECT_KILLED_ONLY;
-		fill_directory(dir, repo->index, &pathspec);
+		fill_directory(dir, &pathspec);
 		if (show_others)
-			show_other_files(repo->index, dir);
+			show_other_files(dir);
 		if (show_killed)
-			show_killed_files(repo->index, dir);
+			show_killed_files(dir);
 	}
 	if (show_cached || show_stage) {
-		for (i = 0; i < repo->index->cache_nr; i++) {
-			const struct cache_entry *ce = repo->index->cache[i];
-
-			construct_fullname(&fullname, repo, ce);
-
+		for (i = 0; i < active_nr; i++) {
+			const struct cache_entry *ce = active_cache[i];
 			if ((dir->flags & DIR_SHOW_IGNORED) &&
-			    !ce_excluded(dir, repo->index, fullname.buf, ce))
+			    !ce_excluded(dir, ce))
 				continue;
 			if (show_unmerged && !ce_stage(ce))
 				continue;
 			if (ce->ce_flags & CE_UPDATE)
 				continue;
-			show_ce(repo, dir, ce, fullname.buf,
-				ce_stage(ce) ? tag_unmerged :
-				(ce_skip_worktree(ce) ? tag_skip_worktree :
-				 tag_cached));
+			show_ce_entry(ce_stage(ce) ? tag_unmerged :
+				(ce_skip_worktree(ce) ? tag_skip_worktree : tag_cached), ce);
 		}
 	}
 	if (show_deleted || show_modified) {
-		for (i = 0; i < repo->index->cache_nr; i++) {
-			const struct cache_entry *ce = repo->index->cache[i];
+		for (i = 0; i < active_nr; i++) {
+			const struct cache_entry *ce = active_cache[i];
 			struct stat st;
 			int err;
-
-			construct_fullname(&fullname, repo, ce);
-
 			if ((dir->flags & DIR_SHOW_IGNORED) &&
-			    !ce_excluded(dir, repo->index, fullname.buf, ce))
+			    !ce_excluded(dir, ce))
 				continue;
 			if (ce->ce_flags & CE_UPDATE)
 				continue;
 			if (ce_skip_worktree(ce))
 				continue;
-			err = lstat(fullname.buf, &st);
+			err = lstat(ce->name, &st);
 			if (show_deleted && err)
-				show_ce(repo, dir, ce, fullname.buf, tag_removed);
-			if (show_modified && ie_modified(repo->index, ce, &st, 0))
-				show_ce(repo, dir, ce, fullname.buf, tag_modified);
+				show_ce_entry(tag_removed, ce);
+			if (show_modified && ce_modified(ce, &st, 0))
+				show_ce_entry(tag_modified, ce);
 		}
 	}
-
-	strbuf_release(&fullname);
 }
 
 /*
  * Prune the index to only contain stuff starting with "prefix"
  */
-static void prune_index(struct index_state *istate,
-			const char *prefix, size_t prefixlen)
+static void prune_cache(const char *prefix, size_t prefixlen)
 {
 	int pos;
 	unsigned int first, last;
 
 	if (!prefix)
 		return;
-	pos = index_name_pos(istate, prefix, prefixlen);
+	pos = cache_name_pos(prefix, prefixlen);
 	if (pos < 0)
 		pos = -pos-1;
 	first = pos;
-	last = istate->cache_nr;
+	last = active_nr;
 	while (last > first) {
 		int next = (last + first) >> 1;
-		const struct cache_entry *ce = istate->cache[next];
+		const struct cache_entry *ce = active_cache[next];
 		if (!strncmp(ce->name, prefix, prefixlen)) {
 			first = next+1;
 			continue;
 		}
 		last = next;
 	}
-	memmove(istate->cache, istate->cache + pos,
+	memmove(active_cache, active_cache + pos,
 		(last - pos) * sizeof(struct cache_entry *));
-	istate->cache_nr = last - pos;
-}
-
-static int get_common_prefix_len(const char *common_prefix)
-{
-	int common_prefix_len;
-
-	if (!common_prefix)
-		return 0;
-
-	common_prefix_len = strlen(common_prefix);
-
-	/*
-	 * If the prefix has a trailing slash, strip it so that submodules wont
-	 * be pruned from the index.
-	 */
-	if (common_prefix[common_prefix_len - 1] == '/')
-		common_prefix_len--;
-
-	return common_prefix_len;
+	active_nr = last - pos;
 }
 
 /*
@@ -410,24 +411,23 @@ static int get_common_prefix_len(const char *common_prefix)
  * that were given from the command line.  We are not
  * going to write this index out.
  */
-void overlay_tree_on_index(struct index_state *istate,
-			   const char *tree_name, const char *prefix)
+void overlay_tree_on_cache(const char *tree_name, const char *prefix)
 {
 	struct tree *tree;
-	struct object_id oid;
+	unsigned char sha1[20];
 	struct pathspec pathspec;
 	struct cache_entry *last_stage0 = NULL;
 	int i;
 
-	if (get_oid(tree_name, &oid))
+	if (get_sha1(tree_name, sha1))
 		die("tree-ish %s not found.", tree_name);
-	tree = parse_tree_indirect(&oid);
+	tree = parse_tree_indirect(sha1);
 	if (!tree)
 		die("bad tree-ish %s", tree_name);
 
 	/* Hoist the unmerged entries up to stage #3 to make room */
-	for (i = 0; i < istate->cache_nr; i++) {
-		struct cache_entry *ce = istate->cache[i];
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
 		if (!ce_stage(ce))
 			continue;
 		ce->ce_flags |= CE_STAGEMASK;
@@ -440,11 +440,11 @@ void overlay_tree_on_index(struct index_state *istate,
 			       PATHSPEC_PREFER_CWD, prefix, matchbuf);
 	} else
 		memset(&pathspec, 0, sizeof(pathspec));
-	if (read_tree(tree, 1, &pathspec, istate))
+	if (read_tree(tree, 1, &pathspec))
 		die("unable to read tree entries %s", tree_name);
 
-	for (i = 0; i < istate->cache_nr; i++) {
-		struct cache_entry *ce = istate->cache[i];
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
 		switch (ce_stage(ce)) {
 		case 0:
 			last_stage0 = ce;
@@ -575,9 +575,10 @@ int cmd_ls_files(int argc, const char **argv, const char *cmd_prefix)
 	prefix = cmd_prefix;
 	if (prefix)
 		prefix_len = strlen(prefix);
+	super_prefix = get_super_prefix();
 	git_config(git_default_config, NULL);
 
-	if (repo_read_index(the_repository) < 0)
+	if (read_cache() < 0)
 		die("index file corrupt");
 
 	argc = parse_options(argc, argv, prefix, builtin_ls_files_options,
@@ -611,7 +612,7 @@ int cmd_ls_files(int argc, const char **argv, const char *cmd_prefix)
 		setup_work_tree();
 
 	if (recurse_submodules)
-		repo_read_gitmodules(the_repository);
+		compile_submodule_options(argv, &dir, show_tag);
 
 	if (recurse_submodules &&
 	    (show_stage || show_deleted || show_others || show_unmerged ||
@@ -623,24 +624,20 @@ int cmd_ls_files(int argc, const char **argv, const char *cmd_prefix)
 		    "--error-unmatch");
 
 	parse_pathspec(&pathspec, 0,
-		       PATHSPEC_PREFER_CWD,
+		       PATHSPEC_PREFER_CWD |
+		       PATHSPEC_STRIP_SUBMODULE_SLASH_CHEAP,
 		       prefix, argv);
 
 	/*
 	 * Find common prefix for all pathspec's
 	 * This is used as a performance optimization which unfortunately cannot
-	 * be done when recursing into submodules because when a pathspec is
-	 * given which spans repository boundaries you can't simply remove the
-	 * submodule entry because the pathspec may match something inside the
-	 * submodule.
+	 * be done when recursing into submodules
 	 */
 	if (recurse_submodules)
 		max_prefix = NULL;
 	else
 		max_prefix = common_prefix(&pathspec);
-	max_prefix_len = get_common_prefix_len(max_prefix);
-
-	prune_index(the_repository->index, max_prefix, max_prefix_len);
+	max_prefix_len = max_prefix ? strlen(max_prefix) : 0;
 
 	/* Treat unmatching pathspec elements as errors */
 	if (pathspec.nr && error_unmatch)
@@ -654,6 +651,7 @@ int cmd_ls_files(int argc, const char **argv, const char *cmd_prefix)
 	      show_killed || show_modified || show_resolve_undo))
 		show_cached = 1;
 
+	prune_cache(max_prefix, max_prefix_len);
 	if (with_tree) {
 		/*
 		 * Basic sanity check; show-stages and show-unmerged
@@ -661,13 +659,11 @@ int cmd_ls_files(int argc, const char **argv, const char *cmd_prefix)
 		 */
 		if (show_stage || show_unmerged)
 			die("ls-files --with-tree is incompatible with -s or -u");
-		overlay_tree_on_index(the_repository->index, with_tree, max_prefix);
+		overlay_tree_on_cache(with_tree, max_prefix);
 	}
-
-	show_files(the_repository, &dir);
-
+	show_files(&dir);
 	if (show_resolve_undo)
-		show_ru_info(the_repository->index);
+		show_ru_info();
 
 	if (ps_matched) {
 		int bad;
