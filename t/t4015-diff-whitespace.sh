@@ -986,7 +986,7 @@ test_expect_success 'detect moved code, complete file' '
 	git mv test.c main.c &&
 	test_config color.diff.oldMoved "normal red" &&
 	test_config color.diff.newMoved "normal green" &&
-	git diff HEAD --color-moved --no-renames | test_decode_color >actual &&
+	git diff HEAD --color-moved=zebra --no-renames | test_decode_color >actual &&
 	cat >expected <<-\EOF &&
 	<BOLD>diff --git a/main.c b/main.c<RESET>
 	<BOLD>new file mode 100644<RESET>
@@ -1015,7 +1015,11 @@ test_expect_success 'detect moved code, complete file' '
 	test_cmp expected actual
 '
 
-test_expect_success 'detect moved code, inside file' '
+test_expect_success 'detect malicious moved code, inside file' '
+	test_config color.diff.oldMoved "normal red" &&
+	test_config color.diff.newMoved "normal green" &&
+	test_config color.diff.oldMovedAlternative "blue" &&
+	test_config color.diff.newMovedAlternative "yellow" &&
 	git reset --hard &&
 	cat <<-\EOF >main.c &&
 		#include<stdio.h>
@@ -1073,9 +1077,9 @@ test_expect_success 'detect moved code, inside file' '
 
 		int secure_foo(struct user *u)
 		{
+			foo(u);
 			if (!u->is_allowed_foo)
 				return;
-			foo(u);
 		}
 
 		int another_function()
@@ -1083,11 +1087,56 @@ test_expect_success 'detect moved code, inside file' '
 			bar();
 		}
 	EOF
+	git diff HEAD --no-renames --color-moved=zebra| test_decode_color >actual &&
+	cat <<-\EOF >expected &&
+	<BOLD>diff --git a/main.c b/main.c<RESET>
+	<BOLD>index 27a619c..7cf9336 100644<RESET>
+	<BOLD>--- a/main.c<RESET>
+	<BOLD>+++ b/main.c<RESET>
+	<CYAN>@@ -5,13 +5,6 @@<RESET> <RESET>printf("Hello ");<RESET>
+	 printf("World\n");<RESET>
+	 }<RESET>
+	 <RESET>
+	<BRED>-int secure_foo(struct user *u)<RESET>
+	<BRED>-{<RESET>
+	<BLUE>-if (!u->is_allowed_foo)<RESET>
+	<BLUE>-return;<RESET>
+	<BRED>-foo(u);<RESET>
+	<BLUE>-}<RESET>
+	<BLUE>-<RESET>
+	 int main()<RESET>
+	 {<RESET>
+	 foo();<RESET>
+	<BOLD>diff --git a/test.c b/test.c<RESET>
+	<BOLD>index 1dc1d85..2bedec9 100644<RESET>
+	<BOLD>--- a/test.c<RESET>
+	<BOLD>+++ b/test.c<RESET>
+	<CYAN>@@ -4,6 +4,13 @@<RESET> <RESET>int bar()<RESET>
+	 printf("Hello World, but different\n");<RESET>
+	 }<RESET>
+	 <RESET>
+	<BGREEN>+<RESET><BGREEN>int secure_foo(struct user *u)<RESET>
+	<BGREEN>+<RESET><BGREEN>{<RESET>
+	<YELLOW>+<RESET><YELLOW>foo(u);<RESET>
+	<BGREEN>+<RESET><BGREEN>if (!u->is_allowed_foo)<RESET>
+	<BGREEN>+<RESET><BGREEN>return;<RESET>
+	<YELLOW>+<RESET><YELLOW>}<RESET>
+	<YELLOW>+<RESET>
+	 int another_function()<RESET>
+	 {<RESET>
+	 bar();<RESET>
+	EOF
+
+	test_cmp expected actual
+'
+
+test_expect_success 'plain moved code, inside file' '
 	test_config color.diff.oldMoved "normal red" &&
 	test_config color.diff.newMoved "normal green" &&
-	test_config color.diff.oldMovedAlternative "bold red" &&
-	test_config color.diff.newMovedAlternative "bold green" &&
-	git diff HEAD --no-renames --color-moved| test_decode_color >actual &&
+	test_config color.diff.oldMovedAlternative "blue" &&
+	test_config color.diff.newMovedAlternative "yellow" &&
+	# needs previous test as setup
+	git diff HEAD --no-renames --color-moved=plain| test_decode_color >actual &&
 	cat <<-\EOF >expected &&
 	<BOLD>diff --git a/main.c b/main.c<RESET>
 	<BOLD>index 27a619c..7cf9336 100644<RESET>
@@ -1108,7 +1157,7 @@ test_expect_success 'detect moved code, inside file' '
 	 {<RESET>
 	 foo();<RESET>
 	<BOLD>diff --git a/test.c b/test.c<RESET>
-	<BOLD>index 1dc1d85..e34eb69 100644<RESET>
+	<BOLD>index 1dc1d85..2bedec9 100644<RESET>
 	<BOLD>--- a/test.c<RESET>
 	<BOLD>+++ b/test.c<RESET>
 	<CYAN>@@ -4,6 +4,13 @@<RESET> <RESET>int bar()<RESET>
@@ -1117,9 +1166,9 @@ test_expect_success 'detect moved code, inside file' '
 	 <RESET>
 	<BGREEN>+<RESET><BGREEN>int secure_foo(struct user *u)<RESET>
 	<BGREEN>+<RESET><BGREEN>{<RESET>
+	<BGREEN>+<RESET><BGREEN>foo(u);<RESET>
 	<BGREEN>+<RESET><BGREEN>if (!u->is_allowed_foo)<RESET>
 	<BGREEN>+<RESET><BGREEN>return;<RESET>
-	<BGREEN>+<RESET><BGREEN>foo(u);<RESET>
 	<BGREEN>+<RESET><BGREEN>}<RESET>
 	<BGREEN>+<RESET>
 	 int another_function()<RESET>
@@ -1130,7 +1179,7 @@ test_expect_success 'detect moved code, inside file' '
 	test_cmp expected actual
 '
 
-test_expect_success 'detect permutations inside moved code' '
+test_expect_success 'detect permutations inside moved code -- dimmed_zebra' '
 	git reset --hard &&
 	cat <<-\EOF >lines.txt &&
 		line 1
@@ -1174,73 +1223,53 @@ test_expect_success 'detect permutations inside moved code' '
 	test_config color.diff.newMoved "cyan" &&
 	test_config color.diff.oldMovedAlternative "blue" &&
 	test_config color.diff.newMovedAlternative "yellow" &&
-
-
-	git diff HEAD --no-renames --color-moved=nobounds| test_decode_color >actual &&
-	cat <<-\EOF >expected &&
-		<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
-		<BOLD>index 47ea9c3..ba96a38 100644<RESET>
-		<BOLD>--- a/lines.txt<RESET>
-		<BOLD>+++ b/lines.txt<RESET>
-		<CYAN>@@ -1,16 +1,16 @@<RESET>
-		<MAGENTA>-line 1<RESET>
-		<MAGENTA>-line 2<RESET>
-		<MAGENTA>-line 3<RESET>
-		 line 4<RESET>
-		 line 5<RESET>
-		 line 6<RESET>
-		 line 7<RESET>
-		 line 8<RESET>
-		 line 9<RESET>
-		<CYAN>+<RESET><CYAN>line 1<RESET>
-		<CYAN>+<RESET><CYAN>line 2<RESET>
-		<CYAN>+<RESET><CYAN>line 3<RESET>
-		<CYAN>+<RESET><CYAN>line 14<RESET>
-		<CYAN>+<RESET><CYAN>line 15<RESET>
-		<CYAN>+<RESET><CYAN>line 16<RESET>
-		 line 10<RESET>
-		 line 11<RESET>
-		 line 12<RESET>
-		 line 13<RESET>
-		<MAGENTA>-line 14<RESET>
-		<MAGENTA>-line 15<RESET>
-		<MAGENTA>-line 16<RESET>
-	EOF
-	test_cmp expected actual &&
-
-	git diff HEAD --no-renames --color-moved=adjacentbounds| test_decode_color >actual &&
+	test_config color.diff.oldMovedDimmed "normal magenta" &&
+	test_config color.diff.newMovedDimmed "normal cyan" &&
+	test_config color.diff.oldMovedAlternativeDimmed "normal blue" &&
+	test_config color.diff.newMovedAlternativeDimmed "normal yellow" &&
+	git diff HEAD --no-renames --color-moved=dimmed_zebra| test_decode_color >actual &&
 	cat <<-\EOF >expected &&
 	<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
 	<BOLD>index 47ea9c3..ba96a38 100644<RESET>
 	<BOLD>--- a/lines.txt<RESET>
 	<BOLD>+++ b/lines.txt<RESET>
 	<CYAN>@@ -1,16 +1,16 @@<RESET>
-	<MAGENTA>-line 1<RESET>
-	<MAGENTA>-line 2<RESET>
-	<MAGENTA>-line 3<RESET>
+	<BMAGENTA>-line 1<RESET>
+	<BMAGENTA>-line 2<RESET>
+	<BMAGENTA>-line 3<RESET>
 	 line 4<RESET>
 	 line 5<RESET>
 	 line 6<RESET>
 	 line 7<RESET>
 	 line 8<RESET>
 	 line 9<RESET>
-	<CYAN>+<RESET><CYAN>line 1<RESET>
-	<CYAN>+<RESET><CYAN>line 2<RESET>
-	<YELLOW>+<RESET><YELLOW>line 3<RESET>
+	<BCYAN>+<RESET><BCYAN>line 1<RESET>
+	<BCYAN>+<RESET><BCYAN>line 2<RESET>
+	<CYAN>+<RESET><CYAN>line 3<RESET>
 	<YELLOW>+<RESET><YELLOW>line 14<RESET>
-	<CYAN>+<RESET><CYAN>line 15<RESET>
-	<CYAN>+<RESET><CYAN>line 16<RESET>
+	<BYELLOW>+<RESET><BYELLOW>line 15<RESET>
+	<BYELLOW>+<RESET><BYELLOW>line 16<RESET>
 	 line 10<RESET>
 	 line 11<RESET>
 	 line 12<RESET>
 	 line 13<RESET>
-	<MAGENTA>-line 14<RESET>
-	<MAGENTA>-line 15<RESET>
-	<MAGENTA>-line 16<RESET>
+	<BMAGENTA>-line 14<RESET>
+	<BMAGENTA>-line 15<RESET>
+	<BMAGENTA>-line 16<RESET>
 	EOF
-	test_cmp expected actual &&
+	test_cmp expected actual
+'
 
-	test_config diff.colorMoved alternate &&
+test_expect_success 'cmd option assumes configured colored-moved' '
+	test_config color.diff.oldMoved "magenta" &&
+	test_config color.diff.newMoved "cyan" &&
+	test_config color.diff.oldMovedAlternative "blue" &&
+	test_config color.diff.newMovedAlternative "yellow" &&
+	test_config color.diff.oldMovedDimmed "normal magenta" &&
+	test_config color.diff.newMovedDimmed "normal cyan" &&
+	test_config color.diff.oldMovedAlternativeDimmed "normal blue" &&
+	test_config color.diff.newMovedAlternativeDimmed "normal yellow" &&
+	test_config diff.colorMoved zebra &&
 	git diff HEAD --no-renames --color-moved| test_decode_color >actual &&
 	cat <<-\EOF >expected &&
 	<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
@@ -1271,43 +1300,10 @@ test_expect_success 'detect permutations inside moved code' '
 	<MAGENTA>-line 15<RESET>
 	<MAGENTA>-line 16<RESET>
 	EOF
-	test_cmp expected actual &&
-
-	test_config diff.colorMoved allbounds &&
-	git diff HEAD --no-renames --color-moved| test_decode_color >actual &&
-	cat <<-\EOF >expected &&
-	<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
-	<BOLD>index 47ea9c3..ba96a38 100644<RESET>
-	<BOLD>--- a/lines.txt<RESET>
-	<BOLD>+++ b/lines.txt<RESET>
-	<CYAN>@@ -1,16 +1,16 @@<RESET>
-	<BLUE>-line 1<RESET>
-	<MAGENTA>-line 2<RESET>
-	<BLUE>-line 3<RESET>
-	 line 4<RESET>
-	 line 5<RESET>
-	 line 6<RESET>
-	 line 7<RESET>
-	 line 8<RESET>
-	 line 9<RESET>
-	<YELLOW>+<RESET><YELLOW>line 1<RESET>
-	<CYAN>+<RESET><CYAN>line 2<RESET>
-	<YELLOW>+<RESET><YELLOW>line 3<RESET>
-	<YELLOW>+<RESET><YELLOW>line 14<RESET>
-	<CYAN>+<RESET><CYAN>line 15<RESET>
-	<YELLOW>+<RESET><YELLOW>line 16<RESET>
-	 line 10<RESET>
-	 line 11<RESET>
-	 line 12<RESET>
-	 line 13<RESET>
-	<BLUE>-line 14<RESET>
-	<MAGENTA>-line 15<RESET>
-	<BLUE>-line 16<RESET>
-	EOF
 	test_cmp expected actual
 '
 
-test_expect_success 'move detection does not mess up colored words' '
+test_expect_success 'no effect from --color-moved with --word-diff' '
 	cat <<-\EOF >text.txt &&
 	Lorem Ipsum is simply dummy text of the printing and typesetting industry.
 	EOF
@@ -1319,6 +1315,71 @@ test_expect_success 'move detection does not mess up colored words' '
 	git diff --color-moved --word-diff >actual &&
 	git diff --word-diff >expect &&
 	test_cmp expect actual
+'
+
+test_expect_success 'move detection ignoring whitespace ' '
+	git reset --hard &&
+	cat <<\EOF >lines.txt &&
+line 1
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+EOF
+	git add lines.txt &&
+	git commit -m "add poetry" &&
+	cat <<\EOF >lines.txt &&
+	line 5
+	line 6
+	line 7
+line 1
+line 2
+line 3
+line 4
+EOF
+	test_config color.diff.oldMoved "magenta" &&
+	test_config color.diff.newMoved "cyan" &&
+	git diff HEAD --no-renames --color-moved| test_decode_color >actual &&
+	cat <<-\EOF >expected &&
+	<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
+	<BOLD>index 734156d..eb89ead 100644<RESET>
+	<BOLD>--- a/lines.txt<RESET>
+	<BOLD>+++ b/lines.txt<RESET>
+	<CYAN>@@ -1,7 +1,7 @@<RESET>
+	<GREEN>+<RESET>	<GREEN>line 5<RESET>
+	<GREEN>+<RESET>	<GREEN>line 6<RESET>
+	<GREEN>+<RESET>	<GREEN>line 7<RESET>
+	 line 1<RESET>
+	 line 2<RESET>
+	 line 3<RESET>
+	 line 4<RESET>
+	<RED>-line 5<RESET>
+	<RED>-line 6<RESET>
+	<RED>-line 7<RESET>
+	EOF
+	test_cmp expected actual &&
+
+	git diff HEAD --no-renames -w --color-moved| test_decode_color >actual &&
+	cat <<-\EOF >expected &&
+	<BOLD>diff --git a/lines.txt b/lines.txt<RESET>
+	<BOLD>index 734156d..eb89ead 100644<RESET>
+	<BOLD>--- a/lines.txt<RESET>
+	<BOLD>+++ b/lines.txt<RESET>
+	<CYAN>@@ -1,7 +1,7 @@<RESET>
+	<CYAN>+<RESET>	<CYAN>line 5<RESET>
+	<CYAN>+<RESET>	<CYAN>line 6<RESET>
+	<CYAN>+<RESET>	<CYAN>line 7<RESET>
+	 line 1<RESET>
+	 line 2<RESET>
+	 line 3<RESET>
+	 line 4<RESET>
+	<MAGENTA>-line 5<RESET>
+	<MAGENTA>-line 6<RESET>
+	<MAGENTA>-line 7<RESET>
+	EOF
+	test_cmp expected actual
 '
 
 test_expect_success 'move detection with submodules' '

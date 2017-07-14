@@ -230,6 +230,9 @@ static struct packed_ref_cache *read_packed_refs(const char *packed_refs_file)
 		const char *refname;
 		const char *traits;
 
+		if (!line.len || line.buf[line.len - 1] != '\n')
+			die("unterminated line in %s: %s", packed_refs_file, line.buf);
+
 		if (skip_prefix(line.buf, "# pack-refs with:", &traits)) {
 			if (strstr(traits, " fully-peeled "))
 				peeled = PEELED_FULLY;
@@ -267,6 +270,7 @@ static struct packed_ref_cache *read_packed_refs(const char *packed_refs_file)
 			 */
 			last->flag |= REF_KNOWS_PEELED;
 		} else {
+			strbuf_setlen(&line, line.len - 1);
 			die("unexpected line in %s: %s", packed_refs_file, line.buf);
 		}
 	}

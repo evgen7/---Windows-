@@ -513,13 +513,22 @@ static struct hashmap subprocess_map;
 
 static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 {
-	int err;
+	int err, i;
 	struct cmd2process *entry = (struct cmd2process *)subprocess;
 	struct string_list cap_list = STRING_LIST_INIT_NODUP;
 	char *cap_buf;
 	const char *cap_name;
 	struct child_process *process = &subprocess->process;
 	const char *cmd = subprocess->cmd;
+
+	static const struct {
+		const char *name;
+		unsigned int cap;
+	} known_caps[] = {
+		{ "clean",  CAP_CLEAN  },
+		{ "smudge", CAP_SMUDGE },
+		{ "delay",  CAP_DELAY  },
+	};
 
 	sigchain_push(SIGPIPE, SIG_IGN);
 
@@ -539,8 +548,15 @@ static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 	if (err)
 		goto done;
 
-	err = packet_writel(process->in,
-		"capability=clean", "capability=smudge", "capability=delay", NULL);
+	for (i = 0; i < ARRAY_SIZE(known_caps); ++i) {
+		err = packet_write_fmt_gently(
+			process->in, "capability=%s\n", known_caps[i].name);
+		if (err)
+			goto done;
+	}
+	err = packet_flush_gently(process->in);
+	if (err)
+		goto done;
 
 	for (;;) {
 		cap_buf = packet_read_line(process->out, NULL);
@@ -552,18 +568,15 @@ static int start_multi_file_filter_fn(struct subprocess_entry *subprocess)
 			continue;
 
 		cap_name = cap_list.items[1].string;
-		if (!strcmp(cap_name, "clean")) {
-			entry->supported_capabilities |= CAP_CLEAN;
-		} else if (!strcmp(cap_name, "smudge")) {
-			entry->supported_capabilities |= CAP_SMUDGE;
-		} else if (!strcmp(cap_name, "delay")) {
-			entry->supported_capabilities |= CAP_DELAY;
-		} else {
-			warning(
-				"external filter '%s' requested unsupported filter capability '%s'",
-				cmd, cap_name
-			);
-		}
+		i = ARRAY_SIZE(known_caps) - 1;
+		while (i >= 0 && strcmp(cap_name, known_caps[i].name))
+			i--;
+
+		if (i >= 0)
+			entry->supported_capabilities |= known_caps[i].cap;
+		else
+			warning("external filter '%s' requested unsupported filter capability '%s'",
+			cmd, cap_name);
 
 		string_list_clear(&cap_list, 0);
 	}
@@ -577,9 +590,9 @@ done:
 static void handle_filter_error(const struct strbuf *filter_status,
 				struct cmd2process *entry,
 				const unsigned int wanted_capability) {
-	if (!strcmp(filter_status->buf, "error")) {
-		/* The filter signaled a problem with the file. */
-	} else if (!strcmp(filter_status->buf, "abort") && wanted_capability) {
+	if (!strcmp(filter_status->buf, "error"))
+		; /* The filter signaled a problem with the file. */
+	else if (!strcmp(filter_status->buf, "abort") && wanted_capability) {
 		/*
 		 * The filter signaled a permanent problem. Don't try to filter
 		 * files with the same command for the lifetime of the current
@@ -612,7 +625,7 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 
 	if (!subprocess_map_initialized) {
 		subprocess_map_initialized = 1;
-		hashmap_init(&subprocess_map, (hashmap_cmp_fn) cmd2process_cmp, 0);
+		hashmap_init(&subprocess_map, cmd2process_cmp, NULL, 0);
 		entry = NULL;
 	} else {
 		entry = (struct cmd2process *)subprocess_find_entry(&subprocess_map, cmd);
@@ -631,12 +644,12 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 	}
 	process = &entry->subprocess.process;
 
-	if (!(wanted_capability & entry->supported_capabilities))
+	if (!(entry->supported_capabilities & wanted_capability))
 		return 0;
 
-	if (CAP_CLEAN & wanted_capability)
+	if (wanted_capability & CAP_CLEAN)
 		filter_type = "clean";
-	else if (CAP_SMUDGE & wanted_capability)
+	else if (wanted_capability & CAP_SMUDGE)
 		filter_type = "smudge";
 	else
 		die("unexpected filter type");
@@ -658,7 +671,7 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 	if (err)
 		goto done;
 
-	if (CAP_DELAY & entry->supported_capabilities &&
+	if ((entry->supported_capabilities & CAP_DELAY) &&
 	    dco && dco->state == CE_CAN_DELAY) {
 		can_delay = 1;
 		err = packet_write_fmt_gently(process->in, "can-delay=1\n");
@@ -682,7 +695,6 @@ static int apply_multi_file_filter(const char *path, const char *src, size_t len
 		goto done;
 
 	if (can_delay && !strcmp(filter_status.buf, "delayed")) {
-		dco->state = CE_DELAYED;
 		string_list_insert(&dco->filters, cmd);
 		string_list_insert(&dco->paths, path);
 	} else {
@@ -714,7 +726,7 @@ done:
 }
 
 
-int async_query_available_blobs(const char *cmd, struct string_list *delayed_paths)
+int async_query_available_blobs(const char *cmd, struct string_list *available_paths)
 {
 	int err;
 	char *line;
@@ -741,16 +753,12 @@ int async_query_available_blobs(const char *cmd, struct string_list *delayed_pat
 	if (err)
 		goto done;
 
-	for (;;) {
-		const char* pre = "pathname=";
-		const int pre_len = strlen(pre);
-		line = packet_read_line(process->out, NULL);
-		if (!line)
-			break;
-		err = strlen(line) <= pre_len || strncmp(line, pre, pre_len);
-		if (err)
-			goto done;
-		string_list_insert(delayed_paths, xstrdup(line+pre_len));
+	while ((line = packet_read_line(process->out, NULL))) {
+		const char *path;
+		if (skip_prefix(line, "pathname=", &path))
+			string_list_insert(available_paths, xstrdup(path));
+		else
+			; /* ignore unknown keys */
 	}
 
 	err = subprocess_read_status(process->out, &filter_status);
@@ -789,9 +797,9 @@ static int apply_filter(const char *path, const char *src, size_t len,
 	if (!dst)
 		return 1;
 
-	if ((CAP_CLEAN & wanted_capability) && !drv->process && drv->clean)
+	if ((wanted_capability & CAP_CLEAN) && !drv->process && drv->clean)
 		cmd = drv->clean;
-	else if ((CAP_SMUDGE & wanted_capability) && !drv->process && drv->smudge)
+	else if ((wanted_capability & CAP_SMUDGE) && !drv->process && drv->smudge)
 		cmd = drv->smudge;
 
 	if (cmd && *cmd)

@@ -372,11 +372,14 @@ static int cmd_log_walk(struct rev_info *rev)
 			 */
 			rev->max_count++;
 		if (!rev->reflog_info) {
-			/* we allow cycles in reflog ancestry */
+			/*
+			 * We may show a given commit multiple times when
+			 * walking the reflogs.
+			 */
 			free_commit_buffer(commit);
+			free_commit_list(commit->parents);
+			commit->parents = NULL;
 		}
-		free_commit_list(commit->parents);
-		commit->parents = NULL;
 		if (saved_nrl < rev->diffopt.needed_rename_limit)
 			saved_nrl = rev->diffopt.needed_rename_limit;
 		if (rev->diffopt.degraded_cc_to_c)
@@ -484,8 +487,8 @@ static int show_blob_object(const struct object_id *oid, struct rev_info *rev, c
 	    !DIFF_OPT_TST(&rev->diffopt, ALLOW_TEXTCONV))
 		return stream_blob_to_fd(1, oid, NULL, 0);
 
-	if (get_sha1_with_context(obj_name, GET_SHA1_RECORD_PATH,
-				  oidc.hash, &obj_context))
+	if (get_oid_with_context(obj_name, GET_OID_RECORD_PATH,
+				 &oidc, &obj_context))
 		die(_("Not a valid object name %s"), obj_name);
 	if (!obj_context.path ||
 	    !textconv_object(obj_context.path, obj_context.mode, &oidc, 1, &buf, &size)) {
@@ -1308,7 +1311,7 @@ static struct commit *get_base_commit(const char *base_commit,
 
 		if (rev_nr % 2)
 			rev[i] = rev[2 * i];
-		rev_nr = (rev_nr + 1) / 2;
+		rev_nr = DIV_ROUND_UP(rev_nr, 2);
 	}
 
 	if (!in_merge_bases(base, rev[0]))

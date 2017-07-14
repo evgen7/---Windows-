@@ -794,8 +794,20 @@ static struct ref_iterator *files_ref_iterator_begin(
 	loose_iter = cache_ref_iterator_begin(get_loose_ref_cache(refs),
 					      prefix, 1);
 
-	packed_iter = refs_ref_iterator_begin(refs->packed_ref_store,
-					      prefix, 0, 0);
+	/*
+	 * The packed-refs file might contain broken references, for
+	 * example an old version of a reference that points at an
+	 * object that has since been garbage-collected. This is OK as
+	 * long as there is a corresponding loose reference that
+	 * overrides it, and we don't want to emit an error message in
+	 * this case. So ask the packed_ref_store for all of its
+	 * references, and (if needed) do our own check for broken
+	 * ones in files_ref_iterator_advance(), after we have merged
+	 * the packed and loose references.
+	 */
+	packed_iter = refs_ref_iterator_begin(
+			refs->packed_ref_store, prefix, 0,
+			DO_FOR_EACH_INCLUDE_BROKEN);
 
 	iter->iter0 = overlay_ref_iterator_begin(loose_iter, packed_iter);
 	iter->flags = flags;

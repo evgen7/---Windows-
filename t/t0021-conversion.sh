@@ -720,7 +720,7 @@ test_expect_success PERL 'delayed checkout in process filter' '
 		cp "$TEST_ROOT/test.o" test-delay20.a &&
 		cp "$TEST_ROOT/test.o" test-delay10.b &&
 		git add . &&
-		git commit -m "test commit 1"
+		git commit -m "test commit"
 	) &&
 
 	S=$(file_size "$TEST_ROOT/test.o") &&
@@ -773,6 +773,48 @@ test_expect_success PERL 'delayed checkout in process filter' '
 		test_cmp_committed_rot13 "$TEST_ROOT/test.o" test-delay20.a &&
 		test_cmp_committed_rot13 "$TEST_ROOT/test.o" test-delay10.b
 	)
+'
+
+test_expect_success PERL 'missing file in delayed checkout' '
+	test_config_global filter.bug.process "rot13-filter.pl bug.log clean smudge delay" &&
+	test_config_global filter.bug.required true &&
+
+	rm -rf repo &&
+	mkdir repo &&
+	(
+		cd repo &&
+		git init &&
+		echo "*.a filter=bug" >.gitattributes &&
+		cp "$TEST_ROOT/test.o" missing-delay.a
+		git add . &&
+		git commit -m "test commit"
+	) &&
+
+	rm -rf repo-cloned &&
+	test_must_fail git clone repo repo-cloned 2>git-stderr.log &&
+	cat git-stderr.log &&
+	grep "error: .missing-delay\.a. was not filtered properly" git-stderr.log
+'
+
+test_expect_success PERL 'invalid file in delayed checkout' '
+	test_config_global filter.bug.process "rot13-filter.pl bug.log clean smudge delay" &&
+	test_config_global filter.bug.required true &&
+
+	rm -rf repo &&
+	mkdir repo &&
+	(
+		cd repo &&
+		git init &&
+		echo "*.a filter=bug" >.gitattributes &&
+		cp "$TEST_ROOT/test.o" invalid-delay.a &&
+		cp "$TEST_ROOT/test.o" unfiltered
+		git add . &&
+		git commit -m "test commit"
+	) &&
+
+	rm -rf repo-cloned &&
+	test_must_fail git clone repo repo-cloned 2>git-stderr.log &&
+	grep "error: external filter .* signaled that .unfiltered. is now available although it has not been delayed earlier" git-stderr.log
 '
 
 test_done

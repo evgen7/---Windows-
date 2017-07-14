@@ -16,9 +16,15 @@ struct dir_entry {
 	char name[FLEX_ARRAY];
 };
 
-static int dir_entry_cmp(const struct dir_entry *e1,
-		const struct dir_entry *e2, const char *name)
+static int dir_entry_cmp(const void *unused_cmp_data,
+			 const void *entry,
+			 const void *entry_or_key,
+			 const void *keydata)
 {
+	const struct dir_entry *e1 = entry;
+	const struct dir_entry *e2 = entry_or_key;
+	const char *name = keydata;
+
 	return e1->namelen != e2->namelen || strncasecmp(e1->name,
 			name ? name : e2->name, e1->namelen);
 }
@@ -107,9 +113,13 @@ static void hash_index_entry(struct index_state *istate, struct cache_entry *ce)
 		add_dir_entry(istate, ce);
 }
 
-static int cache_entry_cmp(const struct cache_entry *ce1,
-		const struct cache_entry *ce2, const void *remove)
+static int cache_entry_cmp(const void *unused_cmp_data,
+			   const void *entry,
+			   const void *entry_or_key,
+			   const void *remove)
 {
+	const struct cache_entry *ce1 = entry;
+	const struct cache_entry *ce2 = entry_or_key;
 	/*
 	 * For remove_name_hash, find the exact entry (pointer equality); for
 	 * index_file_exists, find all entries with matching hash code and
@@ -570,10 +580,8 @@ static void lazy_init_name_hash(struct index_state *istate)
 {
 	if (istate->name_hash_initialized)
 		return;
-	hashmap_init(&istate->name_hash, (hashmap_cmp_fn) cache_entry_cmp,
-			istate->cache_nr);
-	hashmap_init(&istate->dir_hash, (hashmap_cmp_fn) dir_entry_cmp,
-			istate->cache_nr);
+	hashmap_init(&istate->name_hash, cache_entry_cmp, NULL, istate->cache_nr);
+	hashmap_init(&istate->dir_hash, dir_entry_cmp, NULL, istate->cache_nr);
 
 	if (lookup_lazy_params(istate)) {
 		hashmap_disallow_rehash(&istate->dir_hash, 1);

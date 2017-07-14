@@ -28,9 +28,6 @@
 #include "list.h"
 #include "mergesort.h"
 #include "quote.h"
-#include "iterator.h"
-#include "dir-iterator.h"
-#include "sha1-lookup.h"
 
 #define SZ_FMT PRIuMAX
 static inline uintmax_t sz_fmt(size_t s) { return s; }
@@ -1627,72 +1624,6 @@ static const struct packed_git *has_packed_and_bad(const unsigned char *sha1)
 	return NULL;
 }
 
-struct missing_blob_manifest {
-	struct missing_blob_manifest *next;
-	const char *data;
-};
-static struct missing_blob_manifest *missing_blobs;
-static int missing_blobs_initialized;
-
-static void prepare_missing_blobs(void)
-{
-	int ok;
-	char *dirname;
-	struct dir_iterator *iter;
-
-	if (missing_blobs_initialized)
-		return;
-
-	missing_blobs_initialized = 1;
-
-	dirname = xstrfmt("%s/missing", get_object_directory());
-	iter = dir_iterator_begin(dirname);
-
-	while ((ok = dir_iterator_advance(iter)) == ITER_OK) {
-		int fd;
-		const char *data;
-		struct missing_blob_manifest *m;
-		if (!S_ISREG(iter->st.st_mode))
-			continue;
-		fd = git_open(iter->path.buf);
-		data = xmmap(NULL, iter->st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-		close(fd);
-
-		m = xmalloc(sizeof(*m));
-		m->next = missing_blobs;
-		m->data = data;
-		missing_blobs = m;
-	}
-
-	if (ok != ITER_DONE) {
-		/* do something */
-	}
-
-	free(dirname);
-}
-
-int in_missing_blob_manifest(const unsigned char *sha1, unsigned long *size)
-{
-	struct missing_blob_manifest *m;
-	prepare_missing_blobs();
-	for (m = missing_blobs; m; m = m->next) {
-		uint64_t nr_nbo, nr;
-		int result;
-		memcpy(&nr_nbo, m->data, sizeof(nr_nbo));
-		nr = htonll(nr_nbo);
-		result = sha1_entry_pos(m->data, GIT_SHA1_RAWSZ + 8, 8, 0, nr, nr, sha1);
-		if (result >= 0) {
-			if (size) {
-				uint64_t size_nbo;
-				memcpy(&size_nbo, m->data + 8 + result * (GIT_SHA1_RAWSZ + 8) + GIT_SHA1_RAWSZ, sizeof(size_nbo));
-				*size = ntohll(size_nbo);
-			}
-			return 1;
-		}
-	}
-	return 0;
-}
-
 /*
  * With an in-core object data in "map", rehash it to make sure the
  * object name actually matches "sha1" to detect object corruption.
@@ -2033,7 +1964,7 @@ static int parse_sha1_header_extended(const char *hdr, struct object_info *oi,
 	 * we're obtaining the type using '--allow-unknown-type'
 	 * option.
 	 */
-	if ((flags & LOOKUP_UNKNOWN_OBJECT) && (type < 0))
+	if ((flags & OBJECT_INFO_ALLOW_UNKNOWN_TYPE) && (type < 0))
 		type = 0;
 	else if (type < 0)
 		die("invalid object type");
@@ -2071,7 +2002,7 @@ int parse_sha1_header(const char *hdr, unsigned long *sizep)
 	struct object_info oi = OBJECT_INFO_INIT;
 
 	oi.sizep = sizep;
-	return parse_sha1_header_extended(hdr, &oi, LOOKUP_REPLACE_OBJECT);
+	return parse_sha1_header_extended(hdr, &oi, 0);
 }
 
 unsigned long get_size_from_delta(struct packed_git *p,
@@ -2344,7 +2275,8 @@ static int delta_base_cache_key_eq(const struct delta_base_cache_key *a,
 	return a->p == b->p && a->base_offset == b->base_offset;
 }
 
-static int delta_base_cache_hash_cmp(const void *va, const void *vb,
+static int delta_base_cache_hash_cmp(const void *unused_cmp_data,
+				     const void *va, const void *vb,
 				     const void *vkey)
 {
 	const struct delta_base_cache_entry *a = va, *b = vb;
@@ -2429,7 +2361,7 @@ static void add_delta_base_cache(struct packed_git *p, off_t base_offset,
 	list_add_tail(&ent->lru, &delta_base_cache_lru);
 
 	if (!delta_base_cache.cmpfn)
-		hashmap_init(&delta_base_cache, delta_base_cache_hash_cmp, 0);
+		hashmap_init(&delta_base_cache, delta_base_cache_hash_cmp, NULL, 0);
 	hashmap_entry_init(ent, pack_entry_hash(p, base_offset));
 	hashmap_add(&delta_base_cache, ent);
 }
@@ -3013,7 +2945,7 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 
 	if (oi->disk_sizep)
 		*oi->disk_sizep = mapsize;
-	if ((flags & LOOKUP_UNKNOWN_OBJECT)) {
+	if ((flags & OBJECT_INFO_ALLOW_UNKNOWN_TYPE)) {
 		if (unpack_sha1_header_to_strbuf(&stream, map, mapsize, hdr, sizeof(hdr), &hdrbuf) < 0)
 			status = error("unable to unpack %s header with --allow-unknown-type",
 				       sha1_to_hex(sha1));
@@ -3044,105 +2976,62 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 	return (status < 0) ? status : 0;
 }
 
-static char *missing_blob_command;
-static int missing_blob_config(const char *conf_key, const char *value,
-			       void *cb)
-{
-	if (!strcmp(conf_key, "core.missingblobcommand")) {
-		missing_blob_command = xstrdup(value);
-	}
-	return 0;
-}
-
-static void ensure_missing_blob_configured(void)
-{
-	static int configured;
-	if (configured)
-		return;
-
-	git_config(missing_blob_config, NULL);
-	configured = 1;
-}
-
-static void handle_missing_blob(const unsigned char *sha1)
-{
-	struct child_process cp = CHILD_PROCESS_INIT;
-	const char *argv[] = {missing_blob_command, NULL};
-	char input[GIT_MAX_HEXSZ + 1];
-
-	memcpy(input, sha1_to_hex(sha1), 40);
-	input[40] = '\n';
-
-	cp.argv = argv;
-	cp.env = local_repo_env;
-	cp.use_shell = 1;
-
-	if (pipe_command(&cp, input, sizeof(input), NULL, 0, NULL, 0)) {
-		die("failed to load blob %s", sha1_to_hex(sha1));
-	}
-
-	/*
-	 * The command above may have updated packfiles, so update our record
-	 * of them.
-	 */
-	reprepare_packed_git();
-}
-
 int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi, unsigned flags)
 {
-	struct cached_object *co;
+	static struct object_info blank_oi = OBJECT_INFO_INIT;
 	struct pack_entry e;
 	int rtype;
-	const unsigned char *real = lookup_replace_object_extended(sha1, flags);
-	int already_retried = 0;
+	const unsigned char *real = (flags & OBJECT_INFO_LOOKUP_REPLACE) ?
+				    lookup_replace_object(sha1) :
+				    sha1;
 
-	co = find_cached_object(real);
-	if (co) {
-		if (oi->typep)
-			*(oi->typep) = co->type;
-		if (oi->sizep)
-			*(oi->sizep) = co->size;
-		if (oi->disk_sizep)
-			*(oi->disk_sizep) = 0;
-		if (oi->delta_base_sha1)
-			hashclr(oi->delta_base_sha1);
-		if (oi->typename)
-			strbuf_addstr(oi->typename, typename(co->type));
-		if (oi->contentp)
-			*oi->contentp = xmemdupz(co->buf, co->size);
-		oi->whence = OI_CACHED;
-		return 0;
-	}
+	if (!oi)
+		oi = &blank_oi;
 
-retry:
-	if (find_pack_entry(real, &e))
-		goto found_packed;
-
-	/* Most likely it's a loose object. */
-	if (!sha1_loose_object_info(real, oi, flags)) {
-		oi->whence = OI_LOOSE;
-		return 0;
-	}
-
-	/* Not a loose object; someone else may have just packed it. */
-	reprepare_packed_git();
-	if (find_pack_entry(real, &e))
-		goto found_packed;
-
-	/* Try the missing blobs */
-	if (!already_retried) {
-		ensure_missing_blob_configured();
-		if (missing_blob_command &&
-		    in_missing_blob_manifest(real, NULL)) {
-			already_retried = 1;
-			handle_missing_blob(real);
-			goto retry;
+	if (!(flags & OBJECT_INFO_SKIP_CACHED)) {
+		struct cached_object *co = find_cached_object(real);
+		if (co) {
+			if (oi->typep)
+				*(oi->typep) = co->type;
+			if (oi->sizep)
+				*(oi->sizep) = co->size;
+			if (oi->disk_sizep)
+				*(oi->disk_sizep) = 0;
+			if (oi->delta_base_sha1)
+				hashclr(oi->delta_base_sha1);
+			if (oi->typename)
+				strbuf_addstr(oi->typename, typename(co->type));
+			if (oi->contentp)
+				*oi->contentp = xmemdupz(co->buf, co->size);
+			oi->whence = OI_CACHED;
+			return 0;
 		}
 	}
 
-	return -1;
+	if (!find_pack_entry(real, &e)) {
+		/* Most likely it's a loose object. */
+		if (!sha1_loose_object_info(real, oi, flags)) {
+			oi->whence = OI_LOOSE;
+			return 0;
+		}
 
-found_packed:
+		/* Not a loose object; someone else may have just packed it. */
+		if (flags & OBJECT_INFO_QUICK) {
+			return -1;
+		} else {
+			reprepare_packed_git();
+			if (!find_pack_entry(real, &e))
+				return -1;
+		}
+	}
+
+	if (oi == &blank_oi)
+		/*
+		 * We know that the caller doesn't actually need the
+		 * information below, so return early.
+		 */
+		return 0;
+
 	rtype = packed_object_info(e.p, e.offset, oi);
 	if (rtype < 0) {
 		mark_bad_packed_object(e.p, real);
@@ -3168,7 +3057,8 @@ int sha1_object_info(const unsigned char *sha1, unsigned long *sizep)
 
 	oi.typep = &type;
 	oi.sizep = sizep;
-	if (sha1_object_info_extended(sha1, &oi, LOOKUP_REPLACE_OBJECT) < 0)
+	if (sha1_object_info_extended(sha1, &oi,
+				      OBJECT_INFO_LOOKUP_REPLACE) < 0)
 		return -1;
 	return type;
 }
@@ -3224,7 +3114,7 @@ static void *read_object(const unsigned char *sha1, enum object_type *type,
 	oi.sizep = size;
 	oi.contentp = &content;
 
-	if (sha1_object_info_extended(sha1, &oi, 0))
+	if (sha1_object_info_extended(sha1, &oi, 0) < 0)
 		return NULL;
 	return content;
 }
@@ -3237,13 +3127,14 @@ static void *read_object(const unsigned char *sha1, enum object_type *type,
 void *read_sha1_file_extended(const unsigned char *sha1,
 			      enum object_type *type,
 			      unsigned long *size,
-			      unsigned flag)
+			      int lookup_replace)
 {
 	void *data;
 	const struct packed_git *p;
 	const char *path;
 	struct stat st;
-	const unsigned char *repl = lookup_replace_object_extended(sha1, flag);
+	const unsigned char *repl = lookup_replace ? lookup_replace_object(sha1)
+						   : sha1;
 
 	errno = 0;
 	data = read_object(repl, type, size);
@@ -3604,31 +3495,10 @@ int has_sha1_pack(const unsigned char *sha1)
 
 int has_sha1_file_with_flags(const unsigned char *sha1, int flags)
 {
-	struct pack_entry e;
-	int already_retried = 0;
-
 	if (!startup_info->have_repository)
 		return 0;
-retry:
-	if (find_pack_entry(sha1, &e))
-		return 1;
-	if (has_loose_object(sha1))
-		return 1;
-	if (!(flags & HAS_SHA1_QUICK)) {
-		reprepare_packed_git();
-		if (find_pack_entry(sha1, &e))
-			return 1;
-	}
-	if (!already_retried) {
-		ensure_missing_blob_configured();
-		if (missing_blob_command &&
-		    in_missing_blob_manifest(sha1, NULL)) {
-			already_retried = 1;
-			handle_missing_blob(sha1);
-			goto retry;
-		}
-	}
-	return 0;
+	return sha1_object_info_extended(sha1, NULL,
+					 flags | OBJECT_INFO_SKIP_CACHED) >= 0;
 }
 
 int has_object_file(const struct object_id *oid)
@@ -3873,30 +3743,42 @@ void assert_sha1_type(const unsigned char *sha1, enum object_type expect)
 		    typename(expect));
 }
 
-static int for_each_file_in_obj_subdir(int subdir_nr,
-				       struct strbuf *path,
-				       each_loose_object_fn obj_cb,
-				       each_loose_cruft_fn cruft_cb,
-				       each_loose_subdir_fn subdir_cb,
-				       void *data)
+int for_each_file_in_obj_subdir(unsigned int subdir_nr,
+				struct strbuf *path,
+				each_loose_object_fn obj_cb,
+				each_loose_cruft_fn cruft_cb,
+				each_loose_subdir_fn subdir_cb,
+				void *data)
 {
-	size_t baselen = path->len;
-	DIR *dir = opendir(path->buf);
+	size_t origlen, baselen;
+	DIR *dir;
 	struct dirent *de;
 	int r = 0;
 
+	if (subdir_nr > 0xff)
+		BUG("invalid loose object subdirectory: %x", subdir_nr);
+
+	origlen = path->len;
+	strbuf_complete(path, '/');
+	strbuf_addf(path, "%02x", subdir_nr);
+
+	dir = opendir(path->buf);
 	if (!dir) {
-		if (errno == ENOENT)
-			return 0;
-		return error_errno("unable to open %s", path->buf);
+		if (errno != ENOENT)
+			r = error_errno("unable to open %s", path->buf);
+		strbuf_setlen(path, origlen);
+		return r;
 	}
+
+	strbuf_addch(path, '/');
+	baselen = path->len;
 
 	while ((de = readdir(dir))) {
 		if (is_dot_or_dotdot(de->d_name))
 			continue;
 
 		strbuf_setlen(path, baselen);
-		strbuf_addf(path, "/%s", de->d_name);
+		strbuf_addstr(path, de->d_name);
 
 		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2)  {
 			char hex[GIT_MAX_HEXSZ+1];
@@ -3922,9 +3804,11 @@ static int for_each_file_in_obj_subdir(int subdir_nr,
 	}
 	closedir(dir);
 
-	strbuf_setlen(path, baselen);
+	strbuf_setlen(path, baselen - 1); /* chomp the '/' that we added */
 	if (!r && subdir_cb)
 		r = subdir_cb(subdir_nr, path->buf, data);
+
+	strbuf_setlen(path, origlen);
 
 	return r;
 }
@@ -3935,15 +3819,12 @@ int for_each_loose_file_in_objdir_buf(struct strbuf *path,
 			    each_loose_subdir_fn subdir_cb,
 			    void *data)
 {
-	size_t baselen = path->len;
 	int r = 0;
 	int i;
 
 	for (i = 0; i < 256; i++) {
-		strbuf_addf(path, "/%02x", i);
 		r = for_each_file_in_obj_subdir(i, path, obj_cb, cruft_cb,
 						subdir_cb, data);
-		strbuf_setlen(path, baselen);
 		if (r)
 			break;
 	}

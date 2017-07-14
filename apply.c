@@ -211,6 +211,7 @@ struct patch {
 	unsigned ws_rule;
 	int lines_added, lines_deleted;
 	int score;
+	int extension_linenr; /* first line specifying delete/new/rename/copy */
 	unsigned int is_toplevel_relative:1;
 	unsigned int inaccurate_eof:1;
 	unsigned int is_binary:1;
@@ -961,13 +962,12 @@ static int gitdiff_verify_name(struct apply_state *state,
 	}
 
 	if (*name) {
-		int len = strlen(*name);
 		char *another;
 		if (isnull)
 			return error(_("git apply: bad git-diff - expected /dev/null, got %s on line %d"),
 				     *name, state->linenr);
 		another = find_name(state, line, NULL, state->p_value, TERM_TAB);
-		if (!another || memcmp(another, *name, len + 1)) {
+		if (!another || strcmp(another, *name)) {
 			free(another);
 			return error((side == DIFF_NEW_NAME) ?
 			    _("git apply: bad git-diff - inconsistent new filename on line %d") :
@@ -975,8 +975,7 @@ static int gitdiff_verify_name(struct apply_state *state,
 		}
 		free(another);
 	} else {
-		/* expect "/dev/null" */
-		if (memcmp("/dev/null", line, 9) || line[9] != '\n')
+		if (!starts_with(line, "/dev/null\n"))
 			return error(_("git apply: bad git-diff - expected /dev/null on line %d"), state->linenr);
 	}
 
@@ -1001,20 +1000,27 @@ static int gitdiff_newname(struct apply_state *state,
 				   DIFF_NEW_NAME);
 }
 
+static int parse_mode_line(const char *line, int linenr, unsigned int *mode)
+{
+	char *end;
+	*mode = strtoul(line, &end, 8);
+	if (end == line || !isspace(*end))
+		return error(_("invalid mode on line %d: %s"), linenr, line);
+	return 0;
+}
+
 static int gitdiff_oldmode(struct apply_state *state,
 			   const char *line,
 			   struct patch *patch)
 {
-	patch->old_mode = strtoul(line, NULL, 8);
-	return 0;
+	return parse_mode_line(line, state->linenr, &patch->old_mode);
 }
 
 static int gitdiff_newmode(struct apply_state *state,
 			   const char *line,
 			   struct patch *patch)
 {
-	patch->new_mode = strtoul(line, NULL, 8);
-	return 0;
+	return parse_mode_line(line, state->linenr, &patch->new_mode);
 }
 
 static int gitdiff_delete(struct apply_state *state,
@@ -1128,7 +1134,7 @@ static int gitdiff_index(struct apply_state *state,
 	memcpy(patch->new_sha1_prefix, line, len);
 	patch->new_sha1_prefix[len] = 0;
 	if (*ptr == ' ')
-		patch->old_mode = strtoul(ptr+1, NULL, 8);
+		return gitdiff_oldmode(state, ptr + 1, patch);
 	return 0;
 }
 
@@ -1312,6 +1318,18 @@ static char *git_header_name(struct apply_state *state,
 	}
 }
 
+static int check_header_line(struct apply_state *state, struct patch *patch)
+{
+	int extensions = (patch->is_delete == 1) + (patch->is_new == 1) +
+			 (patch->is_rename == 1) + (patch->is_copy == 1);
+	if (extensions > 1)
+		return error(_("inconsistent header lines %d and %d"),
+			     patch->extension_linenr, state->linenr);
+	if (extensions && !patch->extension_linenr)
+		patch->extension_linenr = state->linenr;
+	return 0;
+}
+
 /* Verify that we recognize the lines following a git header */
 static int parse_git_header(struct apply_state *state,
 			    const char *line,
@@ -1377,6 +1395,8 @@ static int parse_git_header(struct apply_state *state,
 				continue;
 			res = p->fn(state, line + oplen, patch);
 			if (res < 0)
+				return -1;
+			if (check_header_line(state, patch))
 				return -1;
 			if (res > 0)
 				return offset;
@@ -1575,7 +1595,8 @@ static int find_header(struct apply_state *state,
 				patch->old_name = xstrdup(patch->def_name);
 				patch->new_name = xstrdup(patch->def_name);
 			}
-			if (!patch->is_delete && !patch->new_name) {
+			if ((!patch->new_name && !patch->is_delete) ||
+			    (!patch->old_name && !patch->is_new)) {
 				error(_("git diff header lacks filename information "
 					     "(line %d)"), state->linenr);
 				return -128;
@@ -2078,7 +2099,7 @@ static int use_patch(struct apply_state *state, struct patch *p)
 	/* See if it matches any of exclude/include rule */
 	for (i = 0; i < state->limit_by_name.nr; i++) {
 		struct string_list_item *it = &state->limit_by_name.items[i];
-		if (!wildmatch(it->string, pathname, 0, NULL))
+		if (!wildmatch(it->string, pathname, 0))
 			return (it->util != NULL);
 	}
 
@@ -3530,7 +3551,7 @@ static int try_threeway(struct apply_state *state,
 	/* Preimage the patch was prepared for */
 	if (patch->is_new)
 		write_sha1_file("", 0, blob_type, pre_oid.hash);
-	else if (get_sha1(patch->old_sha1_prefix, pre_oid.hash) ||
+	else if (get_oid(patch->old_sha1_prefix, &pre_oid) ||
 		 read_blob_object(&buf, &pre_oid, patch->old_mode))
 		return error(_("repository lacks the necessary blob to fall back on 3-way merge."));
 
@@ -4054,7 +4075,7 @@ static int build_fake_ancestor(struct apply_state *state, struct patch *list)
 			else
 				return error(_("sha1 information is lacking or "
 					       "useless for submodule %s"), name);
-		} else if (!get_sha1_blob(patch->old_sha1_prefix, oid.hash)) {
+		} else if (!get_oid_blob(patch->old_sha1_prefix, &oid)) {
 			; /* ok */
 		} else if (!patch->lines_added && !patch->lines_deleted) {
 			/* mode-only change: update the current */

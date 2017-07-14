@@ -133,7 +133,7 @@ static int pack_objects(int fd, struct ref *refs, struct oid_array *extra, struc
 		 * For a normal non-zero exit, we assume pack-objects wrote
 		 * something useful to stderr. For death by signal, though,
 		 * we should mention it to the user. The exception is SIGPIPE
-		 * (141), because that's a normal occurence if the remote end
+		 * (141), because that's a normal occurrence if the remote end
 		 * hangs up (and we'll report that by trying to read the unpack
 		 * status).
 		 */
@@ -248,6 +248,7 @@ static int check_to_send_update(const struct ref *ref, const struct send_pack_ar
 	case REF_STATUS_REJECT_FETCH_FIRST:
 	case REF_STATUS_REJECT_NEEDS_FORCE:
 	case REF_STATUS_REJECT_STALE:
+	case REF_STATUS_REJECT_LAZY_CAS:
 	case REF_STATUS_REJECT_NODELETE:
 		return CHECK_REF_STATUS_REJECTED;
 	case REF_STATUS_UPTODATE:

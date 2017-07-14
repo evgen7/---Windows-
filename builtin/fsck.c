@@ -38,7 +38,6 @@ static int verbose;
 static int show_progress = -1;
 static int show_dangling = 1;
 static int name_objects;
-static int missing_blob_ok;
 #define ERROR_OBJECT 01
 #define ERROR_REACHABLE 02
 #define ERROR_PACK 04
@@ -94,9 +93,6 @@ static int fsck_config(const char *var, const char *value, void *cb)
 		fsck_set_msg_type(&fsck_obj_options, var, value);
 		return 0;
 	}
-
-	if (!strcmp(var, "core.missingblobcommand"))
-		missing_blob_ok = 1;
 
 	return git_default_config(var, value, cb);
 }
@@ -227,9 +223,6 @@ static void check_reachable_object(struct object *obj)
 	if (!(obj->flags & HAS_OBJ)) {
 		if (has_sha1_pack(obj->oid.hash))
 			return; /* it is in pack - forget about it */
-		if (missing_blob_ok && obj->type == OBJ_BLOB &&
-		    in_missing_blob_manifest(obj->oid.hash, NULL))
-			return;
 		printf("missing %s %s\n", printable_type(obj),
 			describe_object(obj));
 		errors_found |= ERROR_REACHABLE;
@@ -544,7 +537,7 @@ static int fsck_cruft(const char *basename, const char *path, void *data)
 	return 0;
 }
 
-static int fsck_subdir(int nr, const char *path, void *progress)
+static int fsck_subdir(unsigned int nr, const char *path, void *progress)
 {
 	display_progress(progress, nr + 1);
 	return 0;
@@ -745,12 +738,12 @@ int cmd_fsck(int argc, const char **argv, const char *prefix)
 	heads = 0;
 	for (i = 0; i < argc; i++) {
 		const char *arg = argv[i];
-		unsigned char sha1[20];
-		if (!get_sha1(arg, sha1)) {
-			struct object *obj = lookup_object(sha1);
+		struct object_id oid;
+		if (!get_oid(arg, &oid)) {
+			struct object *obj = lookup_object(oid.hash);
 
 			if (!obj || !(obj->flags & HAS_OBJ)) {
-				error("%s: object missing", sha1_to_hex(sha1));
+				error("%s: object missing", oid_to_hex(&oid));
 				errors_found |= ERROR_OBJECT;
 				continue;
 			}

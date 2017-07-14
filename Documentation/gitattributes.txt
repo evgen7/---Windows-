@@ -539,13 +539,17 @@ packet:          git< 0000
 
 If the filter supports the "delay" capability then it must support the
 "list_available_blobs" command. If Git sends this command, then the
-filter is expected to return a list of pathnames of blobs that are
-available. The list must be terminated with a flush packet followed
+filter is expected to return a list of pathnames representing blobs
+that have been delayed earlier and are now available.
+The list must be terminated with a flush packet followed
 by a "success" status that is also terminated with a flush packet. If
 no blobs for the delayed paths are available, yet, then the filter is
 expected to block the response until at least one blob becomes
 available. The filter can tell Git that it has no more delayed blobs
-by sending an empty list.
+by sending an empty list. As soon as the filter responds with an empty
+list, Git stops asking. All blobs that Git has not received at this
+point are considered missing and will result in an error.
+
 ------------------------
 packet:          git> command=list_available_blobs
 packet:          git> 0000

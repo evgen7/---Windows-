@@ -33,7 +33,7 @@ test_expect_success setup '
 	git commit -m "related commit"
 '
 
-create_expected_success_am() {
+create_expected_success_am () {
 	cat >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
@@ -44,17 +44,16 @@ create_expected_success_am() {
 	EOF
 }
 
-create_expected_success_interactive() {
-	cr=$(echo . | tr '.' '\015') &&
-	cat >expected <<-EOF
+create_expected_success_interactive () {
+	q_to_cr >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
-	Rebasing (1/2)${cr}Rebasing (2/2)${cr}Successfully rebased and updated refs/heads/rebased-feature-branch.
-	Applied autostash.
+	Rebasing (1/2)QRebasing (2/2)QApplied autostash.
+	Successfully rebased and updated refs/heads/rebased-feature-branch.
 	EOF
 }
 
-create_expected_success_merge() {
+create_expected_success_merge () {
 	cat >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
@@ -89,7 +88,7 @@ create_expected_success_merge() {
 	EOF
 }
 
-create_expected_failure_am() {
+create_expected_failure_am () {
 	cat >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
@@ -102,19 +101,18 @@ create_expected_failure_am() {
 	EOF
 }
 
-create_expected_failure_interactive() {
-	cr=$(echo . | tr '.' '\015') &&
-	cat >expected <<-EOF
+create_expected_failure_interactive () {
+	q_to_cr >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
-	Rebasing (1/2)${cr}Rebasing (2/2)${cr}Successfully rebased and updated refs/heads/rebased-feature-branch.
-	Applying autostash resulted in conflicts.
+	Rebasing (1/2)QRebasing (2/2)QApplying autostash resulted in conflicts.
 	Your changes are safe in the stash.
 	You can run "git stash pop" or "git stash drop" at any time.
+	Successfully rebased and updated refs/heads/rebased-feature-branch.
 	EOF
 }
 
-create_expected_failure_merge() {
+create_expected_failure_merge () {
 	cat >expected <<-EOF
 	$(grep "^Created autostash: [0-9a-f][0-9a-f]*\$" actual)
 	HEAD is now at $(git rev-parse --short feature-branch) third commit
@@ -151,7 +149,7 @@ create_expected_failure_merge() {
 	EOF
 }
 
-testrebase() {
+testrebase () {
 	type=$1
 	dotest=$2
 
@@ -180,7 +178,7 @@ testrebase() {
 		test_when_finished git branch -D rebased-feature-branch &&
 		suffix=${type#\ --} && suffix=${suffix:-am} &&
 		create_expected_success_$suffix &&
-		test_cmp expected actual
+		test_i18ncmp expected actual
 	'
 
 	test_expect_success "rebase$type: dirty index, non-conflicting rebase" '
@@ -277,7 +275,7 @@ testrebase() {
 		test_when_finished git branch -D rebased-feature-branch &&
 		suffix=${type#\ --} && suffix=${suffix:-am} &&
 		create_expected_failure_$suffix &&
-		test_cmp expected actual
+		test_i18ncmp expected actual
 	'
 }
 

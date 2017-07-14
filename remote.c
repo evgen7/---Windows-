@@ -133,8 +133,15 @@ struct remotes_hash_key {
 	int len;
 };
 
-static int remotes_hash_cmp(const struct remote *a, const struct remote *b, const struct remotes_hash_key *key)
+static int remotes_hash_cmp(const void *unused_cmp_data,
+			    const void *entry,
+			    const void *entry_or_key,
+			    const void *keydata)
 {
+	const struct remote *a = entry;
+	const struct remote *b = entry_or_key;
+	const struct remotes_hash_key *key = keydata;
+
 	if (key)
 		return strncmp(a->name, key->str, key->len) || a->name[key->len];
 	else
@@ -144,7 +151,7 @@ static int remotes_hash_cmp(const struct remote *a, const struct remote *b, cons
 static inline void init_remotes_hash(void)
 {
 	if (!remotes_hash.cmpfn)
-		hashmap_init(&remotes_hash, (hashmap_cmp_fn)remotes_hash_cmp, 0);
+		hashmap_init(&remotes_hash, remotes_hash_cmp, NULL, 0);
 }
 
 static struct remote *make_remote(const char *name, int len)
@@ -1091,7 +1098,7 @@ static int try_explicit_object_name(const char *name,
 		return 0;
 	}
 
-	if (get_sha1(name, oid.hash))
+	if (get_oid(name, &oid))
 		return -1;
 
 	if (match) {
@@ -1530,7 +1537,9 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 			     int force_update)
 {
 	struct ref *ref;
+	int allow_lazy_cas = 0;
 
+	git_config_get_bool("push.allowLazyForceWithLease", &allow_lazy_cas);
 	for (ref = remote_refs; ref; ref = ref->next) {
 		int force_ref_update = ref->force || force_update;
 		int reject_reason = 0;
@@ -1557,7 +1566,9 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 		 * branch.
 		 */
 		if (ref->expect_old_sha1) {
-			if (oidcmp(&ref->old_oid, &ref->old_oid_expect))
+			if (!allow_lazy_cas && ref->lazy_cas)
+				reject_reason = REF_STATUS_REJECT_LAZY_CAS;
+			else if (oidcmp(&ref->old_oid, &ref->old_oid_expect))
 				reject_reason = REF_STATUS_REJECT_STALE;
 			else
 				/* If the ref isn't stale then force the update. */
@@ -2307,8 +2318,8 @@ static int parse_push_cas_option(struct push_cas_option *cas, const char *arg, i
 	if (!*colon)
 		entry->use_tracking = 1;
 	else if (!colon[1])
-		hashclr(entry->expect);
-	else if (get_sha1(colon + 1, entry->expect))
+		oidclr(&entry->expect);
+	else if (get_oid(colon + 1, &entry->expect))
 		return error("cannot parse expected object name '%s'", colon + 1);
 	return 0;
 }
@@ -2354,10 +2365,13 @@ static void apply_cas(struct push_cas_option *cas,
 		if (!refname_match(entry->refname, ref->name))
 			continue;
 		ref->expect_old_sha1 = 1;
-		if (!entry->use_tracking)
-			hashcpy(ref->old_oid_expect.hash, cas->entry[i].expect);
-		else if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
-			oidclr(&ref->old_oid_expect);
+		if (!entry->use_tracking) {
+			oidcpy(&ref->old_oid_expect, &entry->expect);
+		} else {
+			ref->lazy_cas = 1;
+			if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
+				oidclr(&ref->old_oid_expect);
+		}
 		return;
 	}
 
@@ -2366,6 +2380,7 @@ static void apply_cas(struct push_cas_option *cas,
 		return;
 
 	ref->expect_old_sha1 = 1;
+	ref->lazy_cas = 1;
 	if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
 		oidclr(&ref->old_oid_expect);
 }

@@ -19,10 +19,15 @@
 #     to process the file and any file after that is processed with the
 #     same command.
 # (5) If data with a pathname that is a key in the DELAY hash is
-#     requested (e.g. 'test-delay10.a') then the filter responds with
+#     requested (e.g. "test-delay10.a") then the filter responds with
 #     a "delay" status and sets the "requested" field in the DELAY hash.
 #     The filter will signal the availability of this object after
 #     "count" (field in DELAY hash) "list_available_blobs" commands.
+# (6) If data with the pathname "missing-delay.a" is processed that the
+#     filter will drop the path from the "list_available_blobs" response.
+# (7) If data with the pathname "invalid-delay.a" is processed that the
+#     filter will add the path "unfiltered" which was not delayed before
+#     to the "list_available_blobs" response.
 #
 
 use strict;
@@ -40,6 +45,8 @@ my %DELAY = (
 	'test-delay11.a' => { "requested" => 0, "count" => 1 },
 	'test-delay20.a' => { "requested" => 0, "count" => 2 },
 	'test-delay10.b' => { "requested" => 0, "count" => 1 },
+	'missing-delay.a' => { "requested" => 0, "count" => 1 },
+	'invalid-delay.a' => { "requested" => 0, "count" => 1 },
 );
 
 sub rot13 {
@@ -124,7 +131,7 @@ print $debug "init handshake complete\n";
 $debug->flush();
 
 while (1) {
-	my ($command) = packet_txt_read() =~ /^command=(.+)$/;
+	my ( $command ) = packet_txt_read() =~ /^command=(.+)$/;
 	print $debug "IN: $command";
 	$debug->flush();
 
@@ -132,10 +139,16 @@ while (1) {
 		# Flush
 		packet_bin_read();
 
-		foreach my $pathname (sort keys %DELAY) {
+		foreach my $pathname ( sort keys %DELAY ) {
 			if ( $DELAY{$pathname}{"requested"} >= 1 ) {
 				$DELAY{$pathname}{"count"} = $DELAY{$pathname}{"count"} - 1;
-				if ($DELAY{$pathname}{"count"} == 0 ) {
+				if ( $pathname eq "invalid-delay.a" ) {
+					# Send Git a pathname that was not delayed earlier
+					packet_txt_write("pathname=unfiltered");
+				}
+				if ( $pathname eq "missing-delay.a" ) {
+					# Do not signal Git that this file is available
+				} elsif ( $DELAY{$pathname}{"count"} == 0 ) {
 					print $debug " $pathname";
 					packet_txt_write("pathname=$pathname");
 				}
@@ -150,7 +163,7 @@ while (1) {
 		packet_flush();
 	}
 	else {
-		my ($pathname) = packet_txt_read() =~ /^pathname=(.+)$/;
+		my ( $pathname ) = packet_txt_read() =~ /^pathname=(.+)$/;
 		print $debug " $pathname";
 		$debug->flush();
 

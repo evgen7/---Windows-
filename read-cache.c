@@ -1892,9 +1892,15 @@ int discard_index(struct index_state *istate)
 {
 	int i;
 
-	unshare_split_index(istate, 1);
-	for (i = 0; i < istate->cache_nr; i++)
+	for (i = 0; i < istate->cache_nr; i++) {
+		if (istate->cache[i]->index &&
+		    istate->split_index &&
+		    istate->split_index->base &&
+		    istate->cache[i]->index <= istate->split_index->base->cache_nr &&
+		    istate->cache[i] == istate->split_index->base->cache[istate->cache[i]->index - 1])
+			continue;
 		free(istate->cache[i]);
+	}
 	resolve_undo_clear_index(istate);
 	istate->cache_nr = 0;
 	istate->cache_changed = 0;
@@ -2447,6 +2453,14 @@ static int write_shared_index(struct index_state *istate,
 	ret = do_write_index(si->base, &temporary_sharedindex, 1);
 	if (ret) {
 		delete_tempfile(&temporary_sharedindex);
+		return ret;
+	}
+	ret = adjust_shared_perm(get_tempfile_path(&temporary_sharedindex));
+	if (ret) {
+		int save_errno = errno;
+		error("cannot fix permission bits on %s", get_tempfile_path(&temporary_sharedindex));
+		delete_tempfile(&temporary_sharedindex);
+		errno = save_errno;
 		return ret;
 	}
 	ret = rename_tempfile(&temporary_sharedindex,

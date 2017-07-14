@@ -919,9 +919,9 @@ static int update_shallow_ref(struct command *cmd, struct shallow_info *si)
  */
 static int head_has_history(void)
 {
-	unsigned char sha1[20];
+	struct object_id oid;
 
-	return !get_sha1("HEAD", sha1);
+	return !get_oid("HEAD", &oid);
 }
 
 static const char *push_to_deploy(unsigned char *sha1,
@@ -1806,7 +1806,7 @@ static const char *unpack_with_sideband(struct shallow_info *si)
 static void prepare_shallow_update(struct command *commands,
 				   struct shallow_info *si)
 {
-	int i, j, k, bitmap_size = (si->ref->nr + 31) / 32;
+	int i, j, k, bitmap_size = DIV_ROUND_UP(si->ref->nr, 32);
 
 	ALLOC_ARRAY(si->used_shallow, si->shallow->nr);
 	assign_shallow_commits_to_refs(si, si->used_shallow, NULL);

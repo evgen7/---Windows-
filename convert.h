@@ -39,11 +39,16 @@ enum eol {
 enum ce_delay_state {
 	CE_NO_DELAY = 0,
 	CE_CAN_DELAY = 1,
-	CE_DELAYED = 2,
-	CE_RETRY = 3
+	CE_RETRY = 2
 };
 
 struct delayed_checkout {
+	/*
+	 * State of the currently processed cache entry. If the state is
+	 * CE_CAN_DELAY, then the filter can delay the current cache entry.
+	 * If the state is CE_RETRY, then this signals the filter that the
+	 * cache entry was requested before.
+	 */
 	enum ce_delay_state state;
 	/* List of filter drivers that signaled delayed blobs. */
 	struct string_list filters;
@@ -66,7 +71,7 @@ extern int convert_to_working_tree(const char *path, const char *src,
 extern int async_convert_to_working_tree(const char *path, const char *src,
 					 size_t len, struct strbuf *dst,
 					 void *dco);
-extern int async_query_available_blobs(const char *cmd, struct string_list *delayed_paths);
+extern int async_query_available_blobs(const char *cmd, struct string_list *available_paths);
 extern int renormalize_buffer(const struct index_state *istate,
 			      const char *path, const char *src, size_t len,
 			      struct strbuf *dst);
