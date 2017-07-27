@@ -116,6 +116,7 @@ int add_files_to_cache(const char *prefix,
 	rev.diffopt.output_format = DIFF_FORMAT_CALLBACK;
 	rev.diffopt.format_callback = update_callback;
 	rev.diffopt.format_callback_data = &data;
+	rev.diffopt.flags |= DIFF_OPT_OVERRIDE_SUBMODULE_CONFIG;
 	rev.max_count = 0; /* do not compare unmerged paths with stage #2 */
 	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
 	return !!data.add_errors;
@@ -437,10 +438,6 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 		       prefix, argv);
 
 	die_path_inside_submodule(&the_index, &pathspec);
-
-	enable_fscache(1);
-	/* We do not really re-read the index, but update the up-to-date flags */
-	preload_index(&the_index, &pathspec);
 
 	if (add_new_files) {
 		int baselen;

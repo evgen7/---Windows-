@@ -4,8 +4,8 @@
 #include "tree-walk.h"
 #include "cache-tree.h"
 
-#ifndef DEBUG_CACHE_TREE
-#define DEBUG_CACHE_TREE 0
+#ifndef DEBUG
+#define DEBUG 0
 #endif
 
 struct cache_tree *cache_tree(void)
@@ -110,7 +110,7 @@ static int do_invalidate_path(struct cache_tree *it, const char *path)
 	int namelen;
 	struct cache_tree_sub *down;
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	fprintf(stderr, "cache-tree invalidate <%s>\n", path);
 #endif
 
@@ -131,9 +131,8 @@ static int do_invalidate_path(struct cache_tree *it, const char *path)
 			 * move 4 and 5 up one place (2 entries)
 			 * 2 = 6 - 3 - 1 = subtree_nr - pos - 1
 			 */
-			memmove(it->down+pos, it->down+pos+1,
-				sizeof(struct cache_tree_sub *) *
-				(it->subtree_nr - pos - 1));
+			MOVE_ARRAY(it->down + pos, it->down + pos + 1,
+				   it->subtree_nr - pos - 1);
 			it->subtree_nr--;
 		}
 		return 1;
@@ -394,7 +393,7 @@ static int update_one(struct cache_tree *it,
 		strbuf_addf(&buffer, "%o %.*s%c", mode, entlen, path + baselen, '\0');
 		strbuf_add(&buffer, sha1, 20);
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 		fprintf(stderr, "cache-tree update-one %o %.*s\n",
 			mode, entlen, path + baselen);
 #endif
@@ -417,7 +416,7 @@ static int update_one(struct cache_tree *it,
 
 	strbuf_release(&buffer);
 	it->entry_count = to_invalidate ? -1 : i - *skip_count;
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	fprintf(stderr, "cache-tree update-one (%d ent, %d subtree) %s\n",
 		it->entry_count, it->subtree_nr,
 		oid_to_hex(&it->oid));
@@ -456,7 +455,7 @@ static void write_one(struct strbuf *buffer, struct cache_tree *it,
 	strbuf_add(buffer, path, pathlen);
 	strbuf_addf(buffer, "%c%d %d\n", 0, it->entry_count, it->subtree_nr);
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	if (0 <= it->entry_count)
 		fprintf(stderr, "cache-tree <%.*s> (%d ent, %d subtree) %s\n",
 			pathlen, path, it->entry_count, it->subtree_nr,
@@ -529,7 +528,7 @@ static struct cache_tree *read_one(const char **buffer, unsigned long *size_p)
 		size -= 20;
 	}
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	if (0 <= it->entry_count)
 		fprintf(stderr, "cache-tree <%s> (%d ent, %d subtree) %s\n",
 			*buffer, it->entry_count, subtree_nr,

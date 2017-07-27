@@ -24,13 +24,10 @@
 #include "cache-tree.h"
 #include "submodule.h"
 #include "submodule-config.h"
-#include "strbuf.h"
-#include "quote.h"
 
 static const char * const git_reset_usage[] = {
 	N_("git reset [--mixed | --soft | --hard | --merge | --keep] [-q] [<commit>]"),
 	N_("git reset [-q] [<tree-ish>] [--] <paths>..."),
-	N_("EXPERIMENTAL: git reset [-q] [--stdin [-z]] [<tree-ish>]"),
 	N_("git reset --patch [<tree-ish>] [--] [<paths>...]"),
 	NULL
 };
@@ -222,8 +219,8 @@ static void parse_args(struct pathspec *pathspec,
 		 * has to be unambiguous. If there is a single argument, it
 		 * can not be a tree
 		 */
-		else if ((!argv[1] && !get_oid_committish(argv[0], &unused)) ||
-			 (argv[1] && !get_oid_treeish(argv[0], &unused))) {
+		else if ((!argv[1] && !get_sha1_committish(argv[0], unused.hash)) ||
+			 (argv[1] && !get_sha1_treeish(argv[0], unused.hash))) {
 			/*
 			 * Ok, argv[0] looks like a commit/tree; it should not
 			 * be a filename.
@@ -280,9 +277,7 @@ static int git_reset_config(const char *var, const char *value, void *cb)
 int cmd_reset(int argc, const char **argv, const char *prefix)
 {
 	int reset_type = NONE, update_ref_status = 0, quiet = 0;
-	int patch_mode = 0, nul_term_line = 0, read_from_stdin = 0, unborn;
-	char **stdin_paths = NULL;
-	int stdin_nr = 0, stdin_alloc = 0;
+	int patch_mode = 0, unborn;
 	const char *rev;
 	struct object_id oid;
 	struct pathspec pathspec;
@@ -304,10 +299,6 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		OPT_BOOL('p', "patch", &patch_mode, N_("select hunks interactively")),
 		OPT_BOOL('N', "intent-to-add", &intent_to_add,
 				N_("record only the fact that removed paths will be added later")),
-		OPT_BOOL('z', NULL, &nul_term_line,
-			N_("EXPERIMENTAL: paths are separated with NUL character")),
-		OPT_BOOL(0, "stdin", &read_from_stdin,
-				N_("EXPERIMENTAL: read paths from <stdin>")),
 		OPT_END()
 	};
 
@@ -319,49 +310,13 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 
 	load_submodule_cache();
 
-	if (read_from_stdin) {
-		strbuf_getline_fn getline_fn = nul_term_line ?
-			strbuf_getline_nul : strbuf_getline_lf;
-		int flags = PATHSPEC_PREFER_FULL;
-		struct strbuf buf = STRBUF_INIT;
-		struct strbuf unquoted = STRBUF_INIT;
-
-		if (patch_mode)
-			die(_("--stdin is incompatible with --patch"));
-
-		if (pathspec.nr)
-			die(_("--stdin is incompatible with path arguments"));
-
-		while (getline_fn(&buf, stdin) != EOF) {
-			if (!nul_term_line && buf.buf[0] == '"') {
-				strbuf_reset(&unquoted);
-				if (unquote_c_style(&unquoted, buf.buf, NULL))
-					die(_("line is badly quoted"));
-				strbuf_swap(&buf, &unquoted);
-			}
-			ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
-			stdin_paths[stdin_nr++] = xstrdup(buf.buf);
-			strbuf_reset(&buf);
-		}
-		strbuf_release(&unquoted);
-		strbuf_release(&buf);
-
-		ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
-		stdin_paths[stdin_nr++] = NULL;
-		flags |= PATHSPEC_LITERAL_PATH;
-		parse_pathspec(&pathspec, 0, flags, prefix,
-			       (const char **)stdin_paths);
-
-	} else if (nul_term_line)
-		die(_("-z requires --stdin"));
-
-	unborn = !strcmp(rev, "HEAD") && get_oid("HEAD", &oid);
+	unborn = !strcmp(rev, "HEAD") && get_sha1("HEAD", oid.hash);
 	if (unborn) {
 		/* reset on unborn branch: treat as reset to empty tree */
 		hashcpy(oid.hash, EMPTY_TREE_SHA1_BIN);
 	} else if (!pathspec.nr) {
 		struct commit *commit;
-		if (get_oid_committish(rev, &oid))
+		if (get_sha1_committish(rev, oid.hash))
 			die(_("Failed to resolve '%s' as a valid revision."), rev);
 		commit = lookup_commit_reference(&oid);
 		if (!commit)
@@ -369,7 +324,7 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		oidcpy(&oid, &commit->object.oid);
 	} else {
 		struct tree *tree;
-		if (get_oid_treeish(rev, &oid))
+		if (get_sha1_treeish(rev, oid.hash))
 			die(_("Failed to resolve '%s' as a valid tree."), rev);
 		tree = parse_tree_indirect(&oid);
 		if (!tree)
@@ -444,12 +399,6 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 	}
 	if (!pathspec.nr)
 		remove_branch_state();
-
-	if (stdin_paths) {
-		while (stdin_nr)
-			free(stdin_paths[--stdin_nr]);
-		free(stdin_paths);
-	}
 
 	return update_ref_status;
 }
