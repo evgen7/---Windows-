@@ -1927,6 +1927,16 @@ void grep_source_init(struct grep_source *gs, enum grep_source_type type,
 	case GREP_SOURCE_FILE:
 		gs->identifier = xstrdup(identifier);
 		break;
+	case GREP_SOURCE_SUBMODULE:
+		if (!identifier) {
+			gs->identifier = NULL;
+			break;
+		}
+		/*
+		 * FALL THROUGH
+		 * If the identifier is non-NULL (in the submodule case) it
+		 * will be a SHA1 that needs to be copied.
+		 */
 	case GREP_SOURCE_OID:
 		gs->identifier = oiddup(identifier);
 		break;
@@ -1949,6 +1959,7 @@ void grep_source_clear_data(struct grep_source *gs)
 	switch (gs->type) {
 	case GREP_SOURCE_FILE:
 	case GREP_SOURCE_OID:
+	case GREP_SOURCE_SUBMODULE:
 		FREE_AND_NULL(gs->buf);
 		gs->size = 0;
 		break;
@@ -2019,6 +2030,8 @@ static int grep_source_load(struct grep_source *gs)
 		return grep_source_load_oid(gs);
 	case GREP_SOURCE_BUF:
 		return gs->buf ? 0 : -1;
+	case GREP_SOURCE_SUBMODULE:
+		break;
 	}
 	die("BUG: invalid grep_source type to load");
 }

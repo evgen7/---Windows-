@@ -275,6 +275,8 @@ static void module_list_active(struct module_list *list)
 	int i;
 	struct module_list active_modules = MODULE_LIST_INIT;
 
+	gitmodules_config();
+
 	for (i = 0; i < list->nr; i++) {
 		const struct cache_entry *ce = list->entries[i];
 
@@ -334,6 +336,9 @@ static void init_submodule(const char *path, const char *prefix, int quiet)
 	const struct submodule *sub;
 	struct strbuf sb = STRBUF_INIT;
 	char *upd = NULL, *url = NULL, *displaypath;
+
+	/* Only loads from .gitmodules, no overlay with .git/config */
+	gitmodules_config();
 
 	if (prefix && get_super_prefix())
 		die("BUG: cannot have prefix and superprefix");
@@ -470,6 +475,7 @@ static int module_name(int argc, const char **argv, const char *prefix)
 	if (argc != 2)
 		usage(_("git submodule--helper name <path>"));
 
+	gitmodules_config();
 	sub = submodule_from_path(&null_oid, argv[1]);
 
 	if (!sub)
@@ -774,8 +780,6 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 					   struct strbuf *out)
 {
 	const struct submodule *sub = NULL;
-	const char *url = NULL;
-	struct submodule_update_strategy update;
 	struct strbuf displaypath_sb = STRBUF_INIT;
 	struct strbuf sb = STRBUF_INIT;
 	const char *displaypath = NULL;
@@ -804,10 +808,9 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 		goto cleanup;
 	}
 
-	update = submodule_strategy_with_config_overlayed(the_repository, sub);
 	if (suc->update.type == SM_UPDATE_NONE
 	    || (suc->update.type == SM_UPDATE_UNSPECIFIED
-		&& update.type == SM_UPDATE_NONE)) {
+		&& sub->update_strategy.type == SM_UPDATE_NONE)) {
 		strbuf_addf(out, _("Skipping submodule '%s'"), displaypath);
 		strbuf_addch(out, '\n');
 		goto cleanup;
@@ -818,11 +821,6 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 		next_submodule_warn_missing(suc, out, displaypath);
 		goto cleanup;
 	}
-
-	strbuf_reset(&sb);
-	strbuf_addf(&sb, "submodule.%s.url", sub->name);
-	if (repo_config_get_string_const(the_repository, sb.buf, &url))
-		url = sub->url;
 
 	strbuf_reset(&sb);
 	strbuf_addf(&sb, "%s/.git", ce->name);
@@ -853,7 +851,7 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 		argv_array_push(&child->args, "--depth=1");
 	argv_array_pushl(&child->args, "--path", sub->path, NULL);
 	argv_array_pushl(&child->args, "--name", sub->name, NULL);
-	argv_array_pushl(&child->args, "--url", url, NULL);
+	argv_array_pushl(&child->args, "--url", sub->url, NULL);
 	if (suc->references.nr) {
 		struct string_list_item *item;
 		for_each_string_list_item(item, &suc->references)
@@ -932,7 +930,7 @@ static int update_clone_task_finished(int result,
 	const struct cache_entry *ce;
 	struct submodule_update_clone *suc = suc_cb;
 
-	int *idxP = idx_task_cb;
+	int *idxP = *(int**)idx_task_cb;
 	int idx = *idxP;
 	free(idxP);
 
@@ -962,19 +960,10 @@ static int update_clone_task_finished(int result,
 	return 0;
 }
 
-static int gitmodules_update_clone_config(const char *var, const char *value,
-					  void *cb)
-{
-	int *max_jobs = cb;
-	if (!strcmp(var, "submodule.fetchjobs"))
-		*max_jobs = parse_submodule_fetchjobs(var, value);
-	return 0;
-}
-
 static int update_clone(int argc, const char **argv, const char *prefix)
 {
 	const char *update = NULL;
-	int max_jobs = 1;
+	int max_jobs = -1;
 	struct string_list_item *item;
 	struct pathspec pathspec;
 	struct submodule_update_clone suc = SUBMODULE_UPDATE_CLONE_INIT;
@@ -1011,9 +1000,6 @@ static int update_clone(int argc, const char **argv, const char *prefix)
 	};
 	suc.prefix = prefix;
 
-	config_from_gitmodules(gitmodules_update_clone_config, &max_jobs);
-	git_config(gitmodules_update_clone_config, &max_jobs);
-
 	argc = parse_options(argc, argv, prefix, module_update_clone_options,
 			     git_submodule_helper_usage, 0);
 
@@ -1026,6 +1012,13 @@ static int update_clone(int argc, const char **argv, const char *prefix)
 
 	if (pathspec.nr)
 		suc.warn_if_uninitialized = 1;
+
+	/* Overlay the parsed .gitmodules file with .git/config */
+	gitmodules_config();
+	git_config(submodule_config, NULL);
+
+	if (max_jobs < 0)
+		max_jobs = parallel_submodules();
 
 	run_processes_parallel(max_jobs,
 			       update_clone_get_next_task,
@@ -1064,22 +1057,17 @@ static int resolve_relative_path(int argc, const char **argv, const char *prefix
 static const char *remote_submodule_branch(const char *path)
 {
 	const struct submodule *sub;
-	const char *branch = NULL;
-	char *key;
+	gitmodules_config();
+	git_config(submodule_config, NULL);
 
 	sub = submodule_from_path(&null_oid, path);
 	if (!sub)
 		return NULL;
 
-	key = xstrfmt("submodule.%s.branch", sub->name);
-	if (repo_config_get_string_const(the_repository, key, &branch))
-		branch = sub->branch;
-	free(key);
-
-	if (!branch)
+	if (!sub->branch)
 		return "master";
 
-	if (!strcmp(branch, ".")) {
+	if (!strcmp(sub->branch, ".")) {
 		unsigned char sha1[20];
 		const char *refname = resolve_ref_unsafe("HEAD", 0, sha1, NULL);
 
@@ -1097,7 +1085,7 @@ static const char *remote_submodule_branch(const char *path)
 		return refname;
 	}
 
-	return branch;
+	return sub->branch;
 }
 
 static int resolve_remote_submodule_branch(int argc, const char **argv,
@@ -1120,28 +1108,9 @@ static int resolve_remote_submodule_branch(int argc, const char **argv,
 static int push_check(int argc, const char **argv, const char *prefix)
 {
 	struct remote *remote;
-	const char *superproject_head;
-	char *head;
-	int detached_head = 0;
-	struct object_id head_oid;
 
-	if (argc < 3)
-		die("submodule--helper push-check requires at least 2 arguments");
-
-	/*
-	 * superproject's resolved head ref.
-	 * if HEAD then the superproject is in a detached head state, otherwise
-	 * it will be the resolved head ref.
-	 */
-	superproject_head = argv[1];
-	argv++;
-	argc--;
-	/* Get the submodule's head ref and determine if it is detached */
-	head = resolve_refdup("HEAD", 0, head_oid.hash, NULL);
-	if (!head)
-		die(_("Failed to resolve HEAD as a valid ref."));
-	if (!strcmp(head, "HEAD"))
-		detached_head = 1;
+	if (argc < 2)
+		die("submodule--helper push-check requires at least 1 argument");
 
 	/*
 	 * The remote must be configured.
@@ -1164,30 +1133,18 @@ static int push_check(int argc, const char **argv, const char *prefix)
 			if (rs->pattern || rs->matching)
 				continue;
 
-			/* LHS must match a single ref */
-			switch (count_refspec_match(rs->src, local_refs, NULL)) {
-			case 1:
-				break;
-			case 0:
-				/*
-				 * If LHS matches 'HEAD' then we need to ensure
-				 * that it matches the same named branch
-				 * checked out in the superproject.
-				 */
-				if (!strcmp(rs->src, "HEAD")) {
-					if (!detached_head &&
-					    !strcmp(head, superproject_head))
-						break;
-					die("HEAD does not match the named branch in the superproject");
-				}
-			default:
+			/*
+			 * LHS must match a single ref
+			 * NEEDSWORK: add logic to special case 'HEAD' once
+			 * working with submodules in a detached head state
+			 * ceases to be the norm.
+			 */
+			if (count_refspec_match(rs->src, local_refs, NULL) != 1)
 				die("src refspec '%s' must name a ref",
 				    rs->src);
-			}
 		}
 		free_refspec(refspec_nr, refspec);
 	}
-	free(head);
 
 	return 0;
 }
@@ -1216,6 +1173,9 @@ static int absorb_git_dirs(int argc, const char **argv, const char *prefix)
 	argc = parse_options(argc, argv, prefix, embed_gitdir_options,
 			     git_submodule_helper_usage, 0);
 
+	gitmodules_config();
+	git_config(submodule_config, NULL);
+
 	if (module_list_compute(argc, argv, prefix, &pathspec, &list) < 0)
 		return 1;
 
@@ -1230,6 +1190,8 @@ static int is_active(int argc, const char **argv, const char *prefix)
 {
 	if (argc != 2)
 		die("submodule--helper is-active takes exactly 1 argument");
+
+	gitmodules_config();
 
 	return !is_submodule_active(the_repository, argv[1]);
 }

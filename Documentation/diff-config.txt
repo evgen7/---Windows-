@@ -200,10 +200,7 @@ diff.algorithm::
 +
 
 diff.wsErrorHighlight::
-	Highlight whitespace errors in the `context`, `old` or `new`
-	lines of the diff.  Multiple values are separated by comma,
-	`none` resets previous values, `default` reset the list to
-	`new` and `all` is a shorthand for `old,new,context`.  The
-	whitespace errors are colored with `color.diff.whitespace`.
-	The command line option `--ws-error-highlight=<kind>`
-	overrides this setting.
+	A comma separated list of `old`, `new`, `context`, that
+	specifies how whitespace errors on lines are highlighted
+	with `color.diff.whitespace`.  Can be overridden by the
+	command line option `--ws-error-highlight=<kind>`

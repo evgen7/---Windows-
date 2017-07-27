@@ -4,9 +4,7 @@
 #include "submodule-config.h"
 
 /* The main repository */
-static struct repository the_repo = {
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &the_index, 0, 0
-};
+static struct repository the_repo;
 struct repository *the_repository = &the_repo;
 
 static char *git_path_from_env(const char *envvar, const char *git_dir,
@@ -237,6 +235,8 @@ int repo_read_index(struct repository *repo)
 {
 	if (!repo->index)
 		repo->index = xcalloc(1, sizeof(*repo->index));
+	else
+		discard_index(repo->index);
 
 	return read_index_from(repo->index, repo->index_file);
 }

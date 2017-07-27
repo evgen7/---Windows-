@@ -68,11 +68,6 @@ static void print_helper_status(struct ref *ref)
 			msg = "stale info";
 			break;
 
-		case REF_STATUS_REJECT_LAZY_CAS:
-			res = "error";
-			msg = "lazy force-with-error";
-			break;
-
 		case REF_STATUS_REJECT_ALREADY_EXISTS:
 			res = "error";
 			msg = "already exists";
