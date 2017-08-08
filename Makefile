@@ -162,6 +162,12 @@ all::
 # algorithm. This is slower, but may detect attempted collision attacks.
 # Takes priority over other *_SHA1 knobs.
 #
+# Define DC_SHA1_EXTERNAL in addition to DC_SHA1 if you want to build / link
+# git with the external sha1collisiondetection library.
+# Without this option, i.e. the default behavior is to build git with its
+# own sha1dc code.  If any extra linker option is required, define them in
+# DC_SHA1_LINK variable in addition.
+#
 # Define DC_SHA1_SUBMODULE in addition to DC_SHA1 to use the
 # sha1collisiondetection shipped as a submodule instead of the
 # non-submodule copy in sha1dc/. This is an experimental option used
@@ -785,6 +791,7 @@ LIB_OBJS += ewah/ewah_rlw.o
 LIB_OBJS += exec_cmd.o
 LIB_OBJS += fetch-pack.o
 LIB_OBJS += fsck.o
+LIB_OBJS += fsmonitor.o
 LIB_OBJS += gettext.o
 LIB_OBJS += gpg-interface.o
 LIB_OBJS += graph.o
@@ -1473,6 +1480,11 @@ ifdef APPLE_COMMON_CRYPTO
 	BASIC_CFLAGS += -DSHA1_APPLE
 else
 	DC_SHA1 := YesPlease
+ifdef DC_SHA1_EXTERNAL
+	LIB_OBJS += sha1dc_git_ext.o
+	BASIC_CFLAGS += -DSHA1_DC -DDC_SHA1_EXTERNAL
+	EXTLIBS += $(DC_SHA1_LINK) -lsha1detectcoll
+else
 ifdef DC_SHA1_SUBMODULE
 	LIB_OBJS += sha1collisiondetection/lib/sha1.o
 	LIB_OBJS += sha1collisiondetection/lib/ubc_check.o
@@ -1489,6 +1501,7 @@ endif
 		-DSHA1DC_CUSTOM_TRAILING_INCLUDE_SHA1_C="\"sha1dc_git.c\"" \
 		-DSHA1DC_CUSTOM_TRAILING_INCLUDE_SHA1_H="\"sha1dc_git.h\"" \
 		-DSHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C="\"git-compat-util.h\""
+endif
 endif
 endif
 endif

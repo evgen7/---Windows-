@@ -70,6 +70,7 @@ static int continue_current_merge;
 static int allow_unrelated_histories;
 static int show_progress = -1;
 static int default_to_upstream = 1;
+static int signoff;
 static const char *sign_commit;
 
 static struct strategy all_strategy[] = {
@@ -233,6 +234,7 @@ static struct option builtin_merge_options[] = {
 	{ OPTION_STRING, 'S', "gpg-sign", &sign_commit, N_("key-id"),
 	  N_("GPG sign commit"), PARSE_OPT_OPTARG, NULL, (intptr_t) "" },
 	OPT_BOOL(0, "overwrite-ignore", &overwrite_ignore, N_("update ignored files (default)")),
+	OPT_BOOL(0, "signoff", &signoff, N_("add Signed-off-by:")),
 	OPT_END()
 };
 
@@ -566,7 +568,7 @@ static int git_merge_config(const char *k, const char *v, void *cb)
 	else if (!strcmp(k, "merge.renormalize"))
 		option_renormalize = git_config_bool(k, v);
 	else if (!strcmp(k, "merge.ff")) {
-		int boolval = git_config_maybe_bool(k, v);
+		int boolval = git_parse_maybe_bool(v);
 		if (0 <= boolval) {
 			fast_forward = boolval ? FF_ALLOW : FF_NO;
 		} else if (v && !strcmp(v, "only")) {
@@ -763,6 +765,8 @@ static void prepare_to_commit(struct commit_list *remoteheads)
 	strbuf_addch(&msg, '\n');
 	if (0 < option_edit)
 		strbuf_commented_addf(&msg, _(merge_editor_comment), comment_line_char);
+	if (signoff)
+		append_signoff(&msg, ignore_non_trailer(msg.buf, msg.len), 0);
 	write_file_buf(git_path_merge_msg(), msg.buf, msg.len);
 	if (run_commit_hook(0 < option_edit, get_index_file(), "prepare-commit-msg",
 			    git_path_merge_msg(), "merge", NULL))
@@ -940,7 +944,7 @@ static int default_edit_option(void)
 		return 0;
 
 	if (e) {
-		int v = git_config_maybe_bool(name, e);
+		int v = git_parse_maybe_bool(e);
 		if (v < 0)
 			die(_("Bad value '%s' in environment '%s'"), e, name);
 		return v;

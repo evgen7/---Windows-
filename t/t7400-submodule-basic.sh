@@ -46,16 +46,6 @@ test_expect_success 'submodule update aborts on missing gitmodules url' '
 	test_must_fail git submodule init
 '
 
-test_expect_success 'configuration parsing' '
-	test_when_finished "rm -f .gitmodules" &&
-	cat >.gitmodules <<-\EOF &&
-	[submodule "s"]
-		path
-		ignore
-	EOF
-	test_must_fail git status
-'
-
 test_expect_success 'setup - repository in init subdirectory' '
 	mkdir init &&
 	(
@@ -1287,6 +1277,12 @@ test_expect_success 'init properly sets the config' '
 	git -C multisuper_clone submodule init -- sub0 sub1 &&
 	git -C multisuper_clone config --get submodule.sub0.active &&
 	test_must_fail git -C multisuper_clone config --get submodule.sub1.active
+'
+
+test_expect_success 'recursive clone respects -q' '
+	test_when_finished "rm -rf multisuper_clone" &&
+	git clone -q --recurse-submodules multisuper multisuper_clone >actual &&
+	test_must_be_empty actual
 '
 
 test_done

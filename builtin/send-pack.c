@@ -68,6 +68,11 @@ static void print_helper_status(struct ref *ref)
 			msg = "stale info";
 			break;
 
+		case REF_STATUS_REJECT_LAZY_CAS:
+			res = "error";
+			msg = "lazy force-with-error";
+			break;
+
 		case REF_STATUS_REJECT_ALREADY_EXISTS:
 			res = "error";
 			msg = "already exists";
@@ -105,7 +110,7 @@ static int send_pack_config(const char *k, const char *v, void *cb)
 	if (!strcmp(k, "push.gpgsign")) {
 		const char *value;
 		if (!git_config_get_value("push.gpgsign", &value)) {
-			switch (git_config_maybe_bool("push.gpgsign", value)) {
+			switch (git_parse_maybe_bool(value)) {
 			case 0:
 				args.push_cert = SEND_PACK_PUSH_CERT_NEVER;
 				break;

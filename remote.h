@@ -89,6 +89,7 @@ struct ref {
 		force:1,
 		forced_update:1,
 		expect_old_sha1:1,
+		lazy_cas:1,
 		deletion:1;
 
 	enum {
@@ -118,6 +119,7 @@ struct ref {
 		REF_STATUS_REJECT_FETCH_FIRST,
 		REF_STATUS_REJECT_NEEDS_FORCE,
 		REF_STATUS_REJECT_STALE,
+		REF_STATUS_REJECT_LAZY_CAS,
 		REF_STATUS_REJECT_SHALLOW,
 		REF_STATUS_UPTODATE,
 		REF_STATUS_REMOTE_REJECT,
@@ -170,6 +172,7 @@ struct ref *ref_remove_duplicates(struct ref *ref_map);
 int valid_fetch_refspec(const char *refspec);
 struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec);
 extern struct refspec *parse_push_refspec(int nr_refspec, const char **refspec);
+void add_and_parse_fetch_refspec(struct remote *remote, const char *refspec);
 
 void free_refspec(int nr_refspec, struct refspec *refspec);
 

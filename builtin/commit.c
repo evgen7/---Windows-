@@ -510,7 +510,7 @@ static int run_status(FILE *fp, const char *index_file, const char *prefix, int 
 	s->index_file = index_file;
 	s->fp = fp;
 	s->nowarn = nowarn;
-	s->is_initial = get_oid(s->reference, &oid) ? 1 : 0;
+	s->is_initial = get_sha1(s->reference, oid.hash) ? 1 : 0;
 	if (!s->is_initial)
 		hashcpy(s->sha1_commit, oid.hash);
 	s->status_format = status_format;
@@ -891,7 +891,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 		if (amend)
 			parent = "HEAD^1";
 
-		if (get_oid(parent, &oid)) {
+		if (get_sha1(parent, oid.hash)) {
 			int i, ita_nr = 0;
 
 			for (i = 0; i < active_nr; i++)
@@ -1333,6 +1333,7 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
+	static int no_lock_index = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1362,6 +1363,8 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
+		OPT_BOOL(0, "no-lock-index", &no_lock_index,
+			 N_("do not lock the index")),
 		OPT_END(),
 	};
 
@@ -1375,6 +1378,11 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
 
+	if (no_lock_index)
+		setenv("GIT_LOCK_INDEX", "false", 1);
+	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
+		no_lock_index = 1;
+
 	handle_untracked_files_arg(&s);
 	if (show_ignored_in_status)
 		s.show_ignored_files = 1;
@@ -1382,12 +1390,13 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
+	enable_fscache(1);
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
-	fd = hold_locked_index(&index_lock, 0);
+	fd = no_lock_index ? -1 : hold_locked_index(&index_lock, 0);
 
-	s.is_initial = get_oid(s.reference, &oid) ? 1 : 0;
+	s.is_initial = get_sha1(s.reference, oid.hash) ? 1 : 0;
 	if (!s.is_initial)
 		hashcpy(s.sha1_commit, oid.hash);
 
@@ -1657,7 +1666,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	status_format = STATUS_FORMAT_NONE; /* Ignore status.short */
 	s.colopts = 0;
 
-	if (get_oid("HEAD", &oid))
+	if (get_sha1("HEAD", oid.hash))
 		current_head = NULL;
 	else {
 		current_head = lookup_commit_or_die(&oid, "HEAD");
