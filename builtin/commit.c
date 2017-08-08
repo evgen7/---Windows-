@@ -1375,7 +1375,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
 		OPT_BOOL(0, "show-ignored-directory", &show_ignored_directory,
-		N_("Only show directories that match an ignore pattern name.")),
+		N_("(EXPERIMENTAL) Only show directories that match an ignore pattern name.")),
 		OPT_END(),
 	};
 
