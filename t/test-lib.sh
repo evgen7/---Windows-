@@ -115,6 +115,7 @@ EDITOR=:
 unset VISUAL EMAIL LANGUAGE COLUMNS $(env | sed -n \
 	-e '/^GIT_TRACE/d' \
 	-e '/^GIT_DEBUG/d' \
+	-e '/^GIT_USE_LOOKUP/d' \
 	-e '/^GIT_TEST/d' \
 	-e '/^GIT_.*_TEST/d' \
 	-e '/^GIT_PROVE/d' \
@@ -1024,6 +1025,9 @@ case $uname_s in
 			/usr/bin/find "$@"
 		}
 	fi
+	sum () {
+		md5sum "$@"
+	}
 	# git sees Windows-style pwd
 	pwd () {
 		builtin pwd -W
