@@ -320,7 +320,8 @@ create_delta(const struct delta_index *index,
 	     unsigned long *delta_size, unsigned long max_size)
 {
 	unsigned int i, val;
-	unsigned long l, outpos, outsize, moff, msize;
+	off_t outpos, moff;
+	size_t l, outsize, msize;
 	int inscnt;
 	const unsigned char *ref_data, *ref_top, *data, *top;
 	unsigned char *out;
@@ -452,6 +453,9 @@ create_delta(const struct delta_index *index,
 			data += msize;
 			moff += msize;
 			msize = left;
+
+			if (moff > 0xffffffff)
+				msize = 0;
 
 			if (msize < 4096) {
 				int j;

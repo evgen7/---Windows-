@@ -63,7 +63,18 @@ struct new_trailer_item {
 	enum trailer_if_missing if_missing;
 };
 
-void process_trailers(const char *file, int in_place, int trim_empty,
+struct process_trailer_options {
+	int in_place;
+	int trim_empty;
+	int only_trailers;
+	int only_input;
+	int normalize;
+};
+
+#define PROCESS_TRAILER_OPTIONS_INIT {0}
+
+void process_trailers(const char *file,
+		      const struct process_trailer_options *opts,
 		      struct list_head *new_trailer_head);
 
 void trailer_info_get(struct trailer_info *info, const char *str);

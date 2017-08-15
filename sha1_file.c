@@ -1228,7 +1228,7 @@ static int in_window(struct pack_window *win, off_t offset)
 unsigned char *use_pack(struct packed_git *p,
 		struct pack_window **w_cursor,
 		off_t offset,
-		unsigned long *left)
+		size_t *left)
 {
 	struct pack_window *win = *w_cursor;
 
@@ -2121,8 +2121,8 @@ int unpack_object_header(struct packed_git *p,
 			 unsigned long *sizep)
 {
 	unsigned char *base;
-	unsigned long left;
-	unsigned long used;
+	size_t left;
+	size_t used;
 	enum object_type type;
 
 	/* use_pack() assures us we have [base, base + 20) available
@@ -2444,6 +2444,9 @@ int packed_object_info(struct packed_git *p, off_t obj_offset,
 			hashclr(oi->delta_base_sha1);
 	}
 
+	oi->whence = in_delta_base_cache(p, obj_offset) ? OI_DBCACHED :
+							  OI_PACKED;
+
 out:
 	unuse_pack(&w_curs);
 	return type;
@@ -2542,8 +2545,8 @@ void *unpack_entry(struct packed_git *p, off_t obj_offset,
 				error("bad packed object CRC for %s",
 				      sha1_to_hex(sha1));
 				mark_bad_packed_object(p, sha1);
-				unuse_pack(&w_curs);
-				return NULL;
+				data = NULL;
+				goto out;
 			}
 		}
 
@@ -2681,6 +2684,7 @@ void *unpack_entry(struct packed_git *p, off_t obj_offset,
 	if (final_size)
 		*final_size = size;
 
+out:
 	unuse_pack(&w_curs);
 
 	if (delta_stack != small_delta_stack)
@@ -2759,7 +2763,6 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 	const uint32_t *level1_ofs = p->index_data;
 	const unsigned char *index = p->index_data;
 	unsigned hi, lo, stride;
-	static int use_lookup = -1;
 	static int debug_lookup = -1;
 
 	if (debug_lookup < 0)
@@ -2789,17 +2792,7 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 		printf("%02x%02x%02x... lo %u hi %u nr %"PRIu32"\n",
 		       sha1[0], sha1[1], sha1[2], lo, hi, p->num_objects);
 
-	if (use_lookup < 0)
-		use_lookup = !!getenv("GIT_USE_LOOKUP");
-	if (use_lookup) {
-		int pos = sha1_entry_pos(index, stride, 0,
-					 lo, hi, p->num_objects, sha1);
-		if (pos < 0)
-			return 0;
-		return nth_packed_object_offset(p, pos);
-	}
-
-	do {
+	while (lo < hi) {
 		unsigned mi = (lo + hi) / 2;
 		int cmp = hashcmp(index + mi * stride, sha1);
 
@@ -2812,7 +2805,7 @@ off_t find_pack_entry_one(const unsigned char *sha1,
 			hi = mi;
 		else
 			lo = mi+1;
-	} while (lo < hi);
+	}
 	return 0;
 }
 
@@ -2973,6 +2966,7 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 	if (oi->sizep == &size_scratch)
 		oi->sizep = NULL;
 	strbuf_release(&hdrbuf);
+	oi->whence = OI_LOOSE;
 	return (status < 0) ? status : 0;
 }
 
@@ -3010,10 +3004,8 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 
 	if (!find_pack_entry(real, &e)) {
 		/* Most likely it's a loose object. */
-		if (!sha1_loose_object_info(real, oi, flags)) {
-			oi->whence = OI_LOOSE;
+		if (!sha1_loose_object_info(real, oi, flags))
 			return 0;
-		}
 
 		/* Not a loose object; someone else may have just packed it. */
 		if (flags & OBJECT_INFO_QUICK) {
@@ -3036,10 +3028,7 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 	if (rtype < 0) {
 		mark_bad_packed_object(e.p, real);
 		return sha1_object_info_extended(real, oi, 0);
-	} else if (in_delta_base_cache(e.p, e.offset)) {
-		oi->whence = OI_DBCACHED;
-	} else {
-		oi->whence = OI_PACKED;
+	} else if (oi->whence == OI_PACKED) {
 		oi->u.packed.offset = e.offset;
 		oi->u.packed.pack = e.p;
 		oi->u.packed.is_delta = (rtype == OBJ_REF_DELTA ||
@@ -3061,30 +3050,6 @@ int sha1_object_info(const unsigned char *sha1, unsigned long *sizep)
 				      OBJECT_INFO_LOOKUP_REPLACE) < 0)
 		return -1;
 	return type;
-}
-
-static void *read_packed_sha1(const unsigned char *sha1,
-			      enum object_type *type, unsigned long *size)
-{
-	struct pack_entry e;
-	void *data;
-
-	if (!find_pack_entry(sha1, &e))
-		return NULL;
-	data = cache_or_unpack_entry(e.p, e.offset, size, type);
-	if (!data) {
-		/*
-		 * We're probably in deep shit, but let's try to fetch
-		 * the required object anyway from another pack or loose.
-		 * This should happen only in the presence of a corrupted
-		 * pack, and is better than failing outright.
-		 */
-		error("failed to read object %s at offset %"PRIuMAX" from %s",
-		      sha1_to_hex(sha1), (uintmax_t)e.offset, e.p->pack_name);
-		mark_bad_packed_object(e.p, sha1);
-		data = read_object(sha1, type, size);
-	}
-	return data;
 }
 
 int pretend_sha1_file(void *buf, unsigned long len, enum object_type type,
@@ -3469,7 +3434,7 @@ int force_object_loose(const unsigned char *sha1, time_t mtime)
 
 	if (has_loose_object(sha1))
 		return 0;
-	buf = read_packed_sha1(sha1, &type, &len);
+	buf = read_object(sha1, &type, &len);
 	if (!buf)
 		return error("cannot read sha1_file for %s", sha1_to_hex(sha1));
 	hdrlen = xsnprintf(hdr, sizeof(hdr), "%s %lu", typename(type), len) + 1;

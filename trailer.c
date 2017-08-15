@@ -159,13 +159,15 @@ static void print_tok_val(FILE *outfile, const char *tok, const char *val)
 		fprintf(outfile, "%s%c %s\n", tok, separators[0], val);
 }
 
-static void print_all(FILE *outfile, struct list_head *head, int trim_empty)
+static void print_all(FILE *outfile, struct list_head *head,
+		      const struct process_trailer_options *opts)
 {
 	struct list_head *pos;
 	struct trailer_item *item;
 	list_for_each(pos, head) {
 		item = list_entry(pos, struct trailer_item, list);
-		if (!trim_empty || strlen(item->value) > 0)
+		if ((!opts->trim_empty || strlen(item->value) > 0) &&
+		    (!opts->only_trailers || item->token))
 			print_tok_val(outfile, item->token, item->value);
 	}
 }
@@ -296,7 +298,8 @@ static void apply_arg_if_exists(struct trailer_item *in_tok,
 			free_arg_item(arg_tok);
 		break;
 	default:
-		break; /* nothing */
+		die("BUG: trailer.c: unhandled value %d",
+		    arg_tok->conf.if_exists);
 	}
 }
 
@@ -318,8 +321,10 @@ static void apply_arg_if_missing(struct list_head *head,
 			list_add_tail(&to_add->list, head);
 		else
 			list_add(&to_add->list, head);
+		break;
 	default:
-		break; /* nothing */
+		die("BUG: trailer.c: unhandled value %d",
+		    arg_tok->conf.if_missing);
 	}
 }
 
@@ -690,13 +695,11 @@ static void add_arg_item(struct list_head *arg_head, char *tok, char *val,
 static void process_command_line_args(struct list_head *arg_head,
 				      struct list_head *new_trailer_head)
 {
-	struct new_trailer_item *tr;
 	struct arg_item *item;
 	struct strbuf tok = STRBUF_INIT;
 	struct strbuf val = STRBUF_INIT;
 	const struct conf_info *conf;
 	struct list_head *pos;
-	const char *string;
 
 	/*
 	 * In command-line arguments, '=' is accepted (in addition to the
@@ -716,20 +719,20 @@ static void process_command_line_args(struct list_head *arg_head,
 
 	/* Add an arg item for each trailer on the command line */
 	list_for_each(pos, new_trailer_head) {
-		int separator_pos;
+		struct new_trailer_item *tr =
+			list_entry(pos, struct new_trailer_item, list);
+		int separator_pos = find_separator(tr->text, cl_separators);
 
-		tr = list_entry(pos, struct new_trailer_item, list);
-		string = tr->text;
-		separator_pos = find_separator(string, cl_separators);
 		if (separator_pos == 0) {
 			struct strbuf sb = STRBUF_INIT;
-			strbuf_addstr(&sb, string);
+			strbuf_addstr(&sb, tr->text);
 			strbuf_trim(&sb);
 			error(_("empty trailer token in trailer '%.*s'"),
 			      (int) sb.len, sb.buf);
 			strbuf_release(&sb);
 		} else {
-			parse_trailer(&tok, &val, &conf, string, separator_pos);
+			parse_trailer(&tok, &val, &conf, tr->text,
+				      separator_pos);
 			add_arg_item(arg_head,
 				     strbuf_detach(&tok, NULL),
 				     strbuf_detach(&val, NULL),
@@ -909,7 +912,35 @@ static int ends_with_blank_line(const char *buf, size_t len)
 	return is_blank_line(buf + ll);
 }
 
+static void normalize_value(struct strbuf *val)
+{
+	struct strbuf out = STRBUF_INIT;
+	size_t i;
+
+	strbuf_grow(&out, val->len);
+	i = 0;
+	while (i < val->len) {
+		char c = val->buf[i++];
+		if (c == '\n') {
+			/* Collapse continuation down to a single space. */
+			while (i < val->len && isspace(val->buf[i]))
+				i++;
+			strbuf_addch(&out, ' ');
+		} else {
+			strbuf_addch(&out, c);
+		}
+	}
+
+	/* Empty lines may have left us with whitespace cruft at the edges */
+	strbuf_trim(&out);
+
+	/* output goes back to val as if we modified it in-place */
+	strbuf_swap(&out, val);
+	strbuf_release(&out);
+}
+
 static int process_input_file(FILE *outfile,
+			      int normalize,
 			      const char *str,
 			      struct list_head *head)
 {
@@ -921,9 +952,10 @@ static int process_input_file(FILE *outfile,
 	trailer_info_get(&info, str);
 
 	/* Print lines before the trailers as is */
-	fwrite(str, 1, info.trailer_start - str, outfile);
+	if (outfile)
+		fwrite(str, 1, info.trailer_start - str, outfile);
 
-	if (!info.blank_line_before_trailer)
+	if (outfile && !info.blank_line_before_trailer)
 		fprintf(outfile, "\n");
 
 	for (i = 0; i < info.trailer_nr; i++) {
@@ -935,12 +967,16 @@ static int process_input_file(FILE *outfile,
 		if (separator_pos >= 1) {
 			parse_trailer(&tok, &val, NULL, trailer,
 				      separator_pos);
+			if (normalize)
+				normalize_value(&val);
 			add_trailer_item(head,
 					 strbuf_detach(&tok, NULL),
 					 strbuf_detach(&val, NULL));
 		} else {
 			strbuf_addstr(&val, trailer);
 			strbuf_strip_suffix(&val, "\n");
+			if (normalize)
+				normalize_value(&val);
 			add_trailer_item(head,
 					 NULL,
 					 strbuf_detach(&val, NULL));
@@ -992,11 +1028,11 @@ static FILE *create_in_place_tempfile(const char *file)
 	return outfile;
 }
 
-void process_trailers(const char *file, int in_place, int trim_empty,
+void process_trailers(const char *file,
+		      const struct process_trailer_options *opts,
 		      struct list_head *new_trailer_head)
 {
 	LIST_HEAD(head);
-	LIST_HEAD(arg_head);
 	struct strbuf sb = STRBUF_INIT;
 	int trailer_end;
 	FILE *outfile = stdout;
@@ -1005,24 +1041,28 @@ void process_trailers(const char *file, int in_place, int trim_empty,
 
 	read_input_file(&sb, file);
 
-	if (in_place)
+	if (opts->in_place)
 		outfile = create_in_place_tempfile(file);
 
 	/* Print the lines before the trailers */
-	trailer_end = process_input_file(outfile, sb.buf, &head);
+	trailer_end = process_input_file(opts->only_trailers ? NULL : outfile,
+					 opts->normalize, sb.buf, &head);
 
-	process_command_line_args(&arg_head, new_trailer_head);
+	if (!opts->only_input) {
+		LIST_HEAD(arg_head);
+		process_command_line_args(&arg_head, new_trailer_head);
+		process_trailers_lists(&head, &arg_head);
+	}
 
-	process_trailers_lists(&head, &arg_head);
-
-	print_all(outfile, &head, trim_empty);
+	print_all(outfile, &head, opts);
 
 	free_all(&head);
 
 	/* Print the lines after the trailers as is */
-	fwrite(sb.buf + trailer_end, 1, sb.len - trailer_end, outfile);
+	if (!opts->only_trailers)
+		fwrite(sb.buf + trailer_end, 1, sb.len - trailer_end, outfile);
 
-	if (in_place)
+	if (opts->in_place)
 		if (rename_tempfile(&trailers_tempfile, file))
 			die_errno(_("could not rename temporary file to %s"), file);
 

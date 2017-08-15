@@ -257,10 +257,10 @@ zebra::
 	Blocks of moved code are detected greedily. The detected blocks are
 	painted using either the 'color.diff.{old,new}Moved' color or
 	'color.diff.{old,new}MovedAlternative'. The change between
-	the two colors indicates that a new block was detected. If there
-	are fewer than 3 adjacent moved lines, they are not marked up
+	the two colors indicates that a new block was detected. If a block
+	has fewer than 3 adjacent moved lines, it is not marked up
 	as moved, but the regular colors 'color.diff.{old,new}' will be
-	used.
+	used instead.
 dimmed_zebra::
 	Similar to 'zebra', but additional dimming of uninteresting parts
 	of moved code is performed. The bordering lines of two adjacent
