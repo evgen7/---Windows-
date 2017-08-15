@@ -58,7 +58,7 @@ PATH="$GIT_BUILD_DIR/$MSVC_DEPS/bin:$PATH"
 
 ################################################################
 # It appears that people try to run tests without building...
-"$GIT_BUILD_DIR/git$X" >/dev/null
+test -n "$GIT_TEST_INSTALLED" || "$GIT_BUILD_DIR/git$X" >/dev/null ||
 if test $? != 1
 then
 	echo >&2 'error: you do not seem to have built git yet.'
@@ -106,6 +106,7 @@ EDITOR=:
 unset VISUAL EMAIL LANGUAGE COLUMNS $(env | sed -n \
 	-e '/^GIT_TRACE/d' \
 	-e '/^GIT_DEBUG/d' \
+	-e '/^GIT_USE_LOOKUP/d' \
 	-e '/^GIT_TEST/d' \
 	-e '/^GIT_.*_TEST/d' \
 	-e '/^GIT_PROVE/d' \
@@ -1022,7 +1023,13 @@ case $uname_s in
 	test_set_prereq NATIVE_CRLF
 	test_set_prereq SED_STRIPS_CR
 	test_set_prereq GREP_STRIPS_CR
-	GIT_TEST_CMP=mingw_test_cmp
+	GIT_TEST_CMP="test-helper --cmp"
+	if ! type iconv >/dev/null 2>&1
+	then
+		iconv () {
+			test-helper --iconv "$@"
+		}
+	fi
 	;;
 *CYGWIN*)
 	test_set_prereq POSIXPERM

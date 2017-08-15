@@ -114,14 +114,13 @@ OPTIONS
 	from the command-line or by following configured `trailer.*`
 	rules.
 
---normalize::
-	Normalize trailer output so that trailers appear exactly one per
-	line, with any existing whitespace continuation folded into a
-	single line.
+--unfold::
+	Remove any whitespace-continuation in trailers, so that each
+	trailer appears on a line by itself with its full content.
 
 --parse::
 	A convenience alias for `--only-trailers --only-input
-	--normalize`.
+	--unfold`.
 
 CONFIGURATION VARIABLES
 -----------------------

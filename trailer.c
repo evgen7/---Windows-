@@ -912,7 +912,7 @@ static int ends_with_blank_line(const char *buf, size_t len)
 	return is_blank_line(buf + ll);
 }
 
-static void normalize_value(struct strbuf *val)
+static void unfold_value(struct strbuf *val)
 {
 	struct strbuf out = STRBUF_INIT;
 	size_t i;
@@ -940,9 +940,9 @@ static void normalize_value(struct strbuf *val)
 }
 
 static int process_input_file(FILE *outfile,
-			      int normalize,
 			      const char *str,
-			      struct list_head *head)
+			      struct list_head *head,
+			      const struct process_trailer_options *opts)
 {
 	struct trailer_info info;
 	struct strbuf tok = STRBUF_INIT;
@@ -952,10 +952,10 @@ static int process_input_file(FILE *outfile,
 	trailer_info_get(&info, str);
 
 	/* Print lines before the trailers as is */
-	if (outfile)
+	if (!opts->only_trailers)
 		fwrite(str, 1, info.trailer_start - str, outfile);
 
-	if (outfile && !info.blank_line_before_trailer)
+	if (!opts->only_trailers && !info.blank_line_before_trailer)
 		fprintf(outfile, "\n");
 
 	for (i = 0; i < info.trailer_nr; i++) {
@@ -967,16 +967,14 @@ static int process_input_file(FILE *outfile,
 		if (separator_pos >= 1) {
 			parse_trailer(&tok, &val, NULL, trailer,
 				      separator_pos);
-			if (normalize)
-				normalize_value(&val);
+			if (opts->unfold)
+				unfold_value(&val);
 			add_trailer_item(head,
 					 strbuf_detach(&tok, NULL),
 					 strbuf_detach(&val, NULL));
-		} else {
+		} else if (!opts->only_trailers) {
 			strbuf_addstr(&val, trailer);
 			strbuf_strip_suffix(&val, "\n");
-			if (normalize)
-				normalize_value(&val);
 			add_trailer_item(head,
 					 NULL,
 					 strbuf_detach(&val, NULL));
@@ -1045,8 +1043,7 @@ void process_trailers(const char *file,
 		outfile = create_in_place_tempfile(file);
 
 	/* Print the lines before the trailers */
-	trailer_end = process_input_file(opts->only_trailers ? NULL : outfile,
-					 opts->normalize, sb.buf, &head);
+	trailer_end = process_input_file(outfile, sb.buf, &head, opts);
 
 	if (!opts->only_input) {
 		LIST_HEAD(arg_head);
@@ -1118,4 +1115,50 @@ void trailer_info_release(struct trailer_info *info)
 	for (i = 0; i < info->trailer_nr; i++)
 		free(info->trailers[i]);
 	free(info->trailers);
+}
+
+static void format_trailer_info(struct strbuf *out,
+				const struct trailer_info *info,
+				const struct process_trailer_options *opts)
+{
+	int i;
+
+	/* If we want the whole block untouched, we can take the fast path. */
+	if (!opts->only_trailers && !opts->unfold) {
+		strbuf_add(out, info->trailer_start,
+			   info->trailer_end - info->trailer_start);
+		return;
+	}
+
+	for (i = 0; i < info->trailer_nr; i++) {
+		char *trailer = info->trailers[i];
+		int separator_pos = find_separator(trailer, separators);
+
+		if (separator_pos >= 1) {
+			struct strbuf tok = STRBUF_INIT;
+			struct strbuf val = STRBUF_INIT;
+
+			parse_trailer(&tok, &val, NULL, trailer, separator_pos);
+			if (opts->unfold)
+				unfold_value(&val);
+
+			strbuf_addf(out, "%s: %s\n", tok.buf, val.buf);
+			strbuf_release(&tok);
+			strbuf_release(&val);
+
+		} else if (!opts->only_trailers) {
+			strbuf_addstr(out, trailer);
+		}
+	}
+
+}
+
+void format_trailers_from_commit(struct strbuf *out, const char *msg,
+				 const struct process_trailer_options *opts)
+{
+	struct trailer_info info;
+
+	trailer_info_get(&info, msg);
+	format_trailer_info(out, &info, opts);
+	trailer_info_release(&info);
 }

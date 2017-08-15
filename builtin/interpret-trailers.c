@@ -79,7 +79,7 @@ static int parse_opt_parse(const struct option *opt, const char *arg,
 	struct process_trailer_options *v = opt->value;
 	v->only_trailers = 1;
 	v->only_input = 1;
-	v->normalize = 1;
+	v->unfold = 1;
 	return 0;
 }
 
@@ -101,7 +101,7 @@ int cmd_interpret_trailers(int argc, const char **argv, const char *prefix)
 
 		OPT_BOOL(0, "only-trailers", &opts.only_trailers, N_("output only the trailers")),
 		OPT_BOOL(0, "only-input", &opts.only_input, N_("do not apply config rules")),
-		OPT_BOOL(0, "normalize", &opts.normalize, N_("normalize trailer formatting")),
+		OPT_BOOL(0, "unfold", &opts.unfold, N_("join whitespace-continued values")),
 		{ OPTION_CALLBACK, 0, "parse", &opts, NULL, N_("set parsing options"),
 			PARSE_OPT_NOARG | PARSE_OPT_NONEG, parse_opt_parse },
 		OPT_CALLBACK(0, "trailer", &trailers, N_("trailer"),

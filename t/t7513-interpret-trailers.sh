@@ -1396,7 +1396,7 @@ test_expect_success 'only input' '
 	test_cmp expected actual
 '
 
-test_expect_success 'normalize' '
+test_expect_success 'unfold' '
 	cat >expected <<-\EOF &&
 		foo: continued across several lines
 	EOF
@@ -1413,7 +1413,7 @@ test_expect_success 'normalize' '
 		_____lines
 		___
 	EOF
-	git interpret-trailers --only-trailers --only-input --normalize >actual &&
+	git interpret-trailers --only-trailers --only-input --unfold >actual &&
 	test_cmp expected actual
 '
 

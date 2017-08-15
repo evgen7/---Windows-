@@ -858,19 +858,28 @@ static int shrink_potential_moved_blocks(struct moved_entry **pmb,
 /*
  * If o->color_moved is COLOR_MOVED_PLAIN, this function does nothing.
  *
- * Otherwise, if the last block has fewer lines than
- * COLOR_MOVED_MIN_BLOCK_LENGTH, unset DIFF_SYMBOL_MOVED_LINE on all lines in
- * that block.
+ * Otherwise, if the last block has fewer non-space characters than
+ * COLOR_MOVED_MIN_NON_SPACE_COUNT, unset DIFF_SYMBOL_MOVED_LINE on all lines
+ * in that block.
  *
  * The last block consists of the (n - block_length)'th line up to but not
  * including the nth line.
  */
 static void adjust_last_block(struct diff_options *o, int n, int block_length)
 {
-	int i;
-	if (block_length >= COLOR_MOVED_MIN_BLOCK_LENGTH ||
-	    o->color_moved == COLOR_MOVED_PLAIN)
+	int i, non_space_count = 0;
+	if (o->color_moved == COLOR_MOVED_PLAIN)
 		return;
+	for (i = 1; i < block_length + 1; i++) {
+		const char *c = o->emitted_symbols->buf[n - i].line;
+		for (; *c; c++) {
+			if (isspace(*c))
+				continue;
+			non_space_count++;
+			if (non_space_count >= COLOR_MOVED_MIN_NON_SPACE_COUNT)
+				return;
+		}
+	}
 	for (i = 1; i < block_length + 1; i++)
 		o->emitted_symbols->buf[n - i].flags &= ~DIFF_SYMBOL_MOVED_LINE;
 }

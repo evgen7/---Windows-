@@ -1097,10 +1097,10 @@ test_expect_success 'detect malicious moved code, inside file' '
 	 printf("World\n");<RESET>
 	 }<RESET>
 	 <RESET>
-	<RED>-int secure_foo(struct user *u)<RESET>
-	<RED>-{<RESET>
-	<RED>-if (!u->is_allowed_foo)<RESET>
-	<RED>-return;<RESET>
+	<BRED>-int secure_foo(struct user *u)<RESET>
+	<BRED>-{<RESET>
+	<BLUE>-if (!u->is_allowed_foo)<RESET>
+	<BLUE>-return;<RESET>
 	<RED>-foo(u);<RESET>
 	<RED>-}<RESET>
 	<RED>-<RESET>
@@ -1115,11 +1115,11 @@ test_expect_success 'detect malicious moved code, inside file' '
 	 printf("Hello World, but different\n");<RESET>
 	 }<RESET>
 	 <RESET>
-	<GREEN>+<RESET><GREEN>int secure_foo(struct user *u)<RESET>
-	<GREEN>+<RESET><GREEN>{<RESET>
+	<BGREEN>+<RESET><BGREEN>int secure_foo(struct user *u)<RESET>
+	<BGREEN>+<RESET><BGREEN>{<RESET>
 	<GREEN>+<RESET><GREEN>foo(u);<RESET>
-	<GREEN>+<RESET><GREEN>if (!u->is_allowed_foo)<RESET>
-	<GREEN>+<RESET><GREEN>return;<RESET>
+	<BGREEN>+<RESET><BGREEN>if (!u->is_allowed_foo)<RESET>
+	<BGREEN>+<RESET><BGREEN>return;<RESET>
 	<GREEN>+<RESET><GREEN>}<RESET>
 	<GREEN>+<RESET>
 	 int another_function()<RESET>
@@ -1382,7 +1382,7 @@ EOF
 	test_cmp expected actual
 '
 
-test_expect_success '--color-moved block at end of diff output respects MIN_BLOCK_LENGTH' '
+test_expect_success '--color-moved block at end of diff output respects MIN_NON_SPACE_COUNT' '
 	git reset --hard &&
 	>bar &&
 	cat <<-\EOF >foo &&
@@ -1417,13 +1417,12 @@ test_expect_success '--color-moved block at end of diff output respects MIN_BLOC
 	test_cmp expected actual
 '
 
-test_expect_success '--color-moved treats adjacent blocks as separate for MIN_BLOCK_LENGTH' '
+test_expect_success '--color-moved respects MIN_NON_SPACE_COUNT' '
 	git reset --hard &&
 	cat <<-\EOF >foo &&
-	line1
+	nine chars
 	irrelevant_line
-	line2
-	line3
+	ten chars__
 	EOF
 	>bar &&
 	git add foo bar &&
@@ -1433,9 +1432,49 @@ test_expect_success '--color-moved treats adjacent blocks as separate for MIN_BL
 	irrelevant_line
 	EOF
 	cat <<-\EOF >bar &&
-	line2
-	line3
-	line1
+	ten chars__
+	nine chars
+	EOF
+
+	git diff HEAD --color-moved=zebra --no-renames | grep -v "index" | test_decode_color >actual &&
+	cat >expected <<-\EOF &&
+	<BOLD>diff --git a/bar b/bar<RESET>
+	<BOLD>--- a/bar<RESET>
+	<BOLD>+++ b/bar<RESET>
+	<CYAN>@@ -0,0 +1,2 @@<RESET>
+	<BOLD;CYAN>+<RESET><BOLD;CYAN>ten chars__<RESET>
+	<GREEN>+<RESET><GREEN>nine chars<RESET>
+	<BOLD>diff --git a/foo b/foo<RESET>
+	<BOLD>--- a/foo<RESET>
+	<BOLD>+++ b/foo<RESET>
+	<CYAN>@@ -1,3 +1 @@<RESET>
+	<RED>-nine chars<RESET>
+	 irrelevant_line<RESET>
+	<BOLD;MAGENTA>-ten chars__<RESET>
+	EOF
+
+	test_cmp expected actual
+'
+
+test_expect_success '--color-moved treats adjacent blocks as separate for MIN_NON_SPACE_COUNT' '
+	git reset --hard &&
+	cat <<-\EOF >foo &&
+	lin1
+	irrelevant_line
+	lin2
+	lin3
+	EOF
+	>bar &&
+	git add foo bar &&
+	git commit -m x &&
+
+	cat <<-\EOF >foo &&
+	irrelevant_line
+	EOF
+	cat <<-\EOF >bar &&
+	lin2
+	lin3
+	lin1
 	EOF
 
 	git diff HEAD --color-moved=zebra --no-renames | grep -v "index" | test_decode_color >actual &&
@@ -1444,17 +1483,17 @@ test_expect_success '--color-moved treats adjacent blocks as separate for MIN_BL
 	<BOLD>--- a/bar<RESET>
 	<BOLD>+++ b/bar<RESET>
 	<CYAN>@@ -0,0 +1,3 @@<RESET>
-	<GREEN>+<RESET><GREEN>line2<RESET>
-	<GREEN>+<RESET><GREEN>line3<RESET>
-	<GREEN>+<RESET><GREEN>line1<RESET>
+	<GREEN>+<RESET><GREEN>lin2<RESET>
+	<GREEN>+<RESET><GREEN>lin3<RESET>
+	<GREEN>+<RESET><GREEN>lin1<RESET>
 	<BOLD>diff --git a/foo b/foo<RESET>
 	<BOLD>--- a/foo<RESET>
 	<BOLD>+++ b/foo<RESET>
 	<CYAN>@@ -1,4 +1 @@<RESET>
-	<RED>-line1<RESET>
+	<RED>-lin1<RESET>
 	 irrelevant_line<RESET>
-	<RED>-line2<RESET>
-	<RED>-line3<RESET>
+	<RED>-lin2<RESET>
+	<RED>-lin3<RESET>
 	EOF
 
 	test_cmp expected actual
