@@ -227,4 +227,7 @@ struct key_value_info {
 extern NORETURN void git_die_config(const char *key, const char *err, ...) __attribute__((format(printf, 2, 3)));
 extern NORETURN void git_die_config_linenr(const char *key, const char *filename, int linenr);
 
+int git_parse_unsigned(const char *value, uintmax_t *ret, uintmax_t max);
+int git_parse_signed(const char *value, intmax_t *ret, intmax_t max);
+
 #endif /* CONFIG_H */

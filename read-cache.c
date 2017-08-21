@@ -21,10 +21,6 @@
 #include "utf8.h"
 #include "fsmonitor.h"
 
-#ifndef NO_PTHREADS
-#include <pthread.h>
-#endif
-
 /* Mask for the name length in ce_flags in the on-disk index */
 
 #define CE_NAMEMASK  (0x0fff)
@@ -167,9 +163,9 @@ static int ce_compare_data(const struct cache_entry *ce, struct stat *st)
 	int fd = git_open_cloexec(ce->name, O_RDONLY);
 
 	if (fd >= 0) {
-		unsigned char sha1[20];
-		if (!index_fd(sha1, fd, st, OBJ_BLOB, ce->name, 0))
-			match = hashcmp(sha1, ce->oid.hash);
+		struct object_id oid;
+		if (!index_fd(&oid, fd, st, OBJ_BLOB, ce->name, 0))
+			match = oidcmp(&oid, &ce->oid);
 		/* index_fd() closed the file descriptor already */
 	}
 	return match;
@@ -696,7 +692,7 @@ int add_to_index(struct index_state *istate, const char *path, struct stat *st, 
 		return 0;
 	}
 	if (!intent_only) {
-		if (index_path(ce->oid.hash, path, st, HASH_WRITE_OBJECT)) {
+		if (index_path(&ce->oid, path, st, HASH_WRITE_OBJECT)) {
 			free(ce);
 			return error("unable to index file %s", path);
 		}
@@ -1546,34 +1542,6 @@ static int verify_hdr(struct cache_header *hdr, unsigned long size)
 	return 0;
 }
 
-#ifndef NO_PTHREADS
-/*
- * Require index file to be larger than this threshold before
- * we bother using a thread to verify the SHA.
- * This value was arbitrarily chosen.
- */
-#define VERIFY_HDR_THRESHOLD	10*1024*1024
-
-struct verify_hdr_thread_data
-{
-	pthread_t thread_id;
-	struct cache_header *hdr;
-	size_t size;
-	int result;
-};
-
-/*
- * A thread proc to run the verify_hdr() computation
- * in a background thread.
- */
-static void *verify_hdr_thread(void *_data)
-{
-	struct verify_hdr_thread_data *p = _data;
-	p->result = verify_hdr(p->hdr, (unsigned long)p->size);
-	return NULL;
-}
-#endif
-
 static int read_index_extension(struct index_state *istate,
 				const char *ext, void *data, unsigned long sz)
 {
@@ -1779,9 +1747,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	void *mmap;
 	size_t mmap_size;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-#ifndef NO_PTHREADS
-	struct verify_hdr_thread_data verify_hdr_thread_data;
-#endif
 
 	if (istate->initialized)
 		return istate->cache_nr;
@@ -1808,23 +1773,8 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	close(fd);
 
 	hdr = mmap;
-#ifdef NO_PTHREADS
 	if (verify_hdr(hdr, mmap_size) < 0)
 		goto unmap;
-#else
-	if (mmap_size < VERIFY_HDR_THRESHOLD) {
-		if (verify_hdr(hdr, mmap_size) < 0)
-			goto unmap;
-	} else {
-		verify_hdr_thread_data.hdr = hdr;
-		verify_hdr_thread_data.size = mmap_size;
-		verify_hdr_thread_data.result = -1;
-		if (pthread_create(
-				&verify_hdr_thread_data.thread_id, NULL,
-				verify_hdr_thread, &verify_hdr_thread_data))
-			die_errno("unable to start verify_hdr_thread");
-	}
-#endif
 
 	hashcpy(istate->sha1, (const unsigned char *)hdr + mmap_size - 20);
 	istate->version = ntohl(hdr->hdr_version);
@@ -1872,16 +1822,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 		src_offset += 8;
 		src_offset += extsize;
 	}
-
-#ifndef NO_PTHREADS
-	if (mmap_size >= VERIFY_HDR_THRESHOLD) {
-		if (pthread_join(verify_hdr_thread_data.thread_id, NULL))
-			die_errno("unable to join verify_hdr_thread");
-		if (verify_hdr_thread_data.result < 0)
-			goto unmap;
-	}
-#endif
-
 	munmap(mmap, mmap_size);
 	return istate->cache_nr;
 
@@ -2142,7 +2082,7 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 {
 	int size;
 	struct ondisk_cache_entry *ondisk;
-	FAKE_INIT(int, saved_namelen, 0);
+	int saved_namelen = saved_namelen; /* compiler workaround */
 	char *name;
 	int result;
 

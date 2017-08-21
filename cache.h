@@ -13,6 +13,7 @@
 #include "hash.h"
 #include "path.h"
 #include "sha1-array.h"
+#include "repository.h"
 
 #ifndef platform_SHA_CTX
 /*
@@ -42,10 +43,10 @@
 #include <zlib.h>
 typedef struct git_zstream {
 	z_stream z;
-	size_t avail_in;
-	size_t avail_out;
-	size_t total_in;
-	size_t total_out;
+	unsigned long avail_in;
+	unsigned long avail_out;
+	unsigned long total_in;
+	unsigned long total_out;
 	unsigned char *next_in;
 	unsigned char *next_out;
 } git_zstream;
@@ -62,7 +63,7 @@ void git_deflate_end(git_zstream *);
 int git_deflate_abort(git_zstream *);
 int git_deflate_end_gently(git_zstream *);
 int git_deflate(git_zstream *, int flush);
-size_t git_deflate_bound(git_zstream *, size_t);
+unsigned long git_deflate_bound(git_zstream *, unsigned long);
 
 /* The length in bytes and in hex digits of an object name (SHA-1 value). */
 #define GIT_SHA1_RAWSZ 20
@@ -75,6 +76,44 @@ size_t git_deflate_bound(git_zstream *, size_t);
 struct object_id {
 	unsigned char hash[GIT_MAX_RAWSZ];
 };
+
+#define GIT_HASH_SHA1 0
+
+typedef void (*git_hash_init_fn)(void *ctx);
+typedef void (*git_hash_update_fn)(void *ctx, const void *in, size_t len);
+typedef void (*git_hash_final_fn)(unsigned char *hash, void *ctx);
+
+struct git_hash_algo {
+	/* The name of the algorithm, as appears in the config file. */
+	const char *name;
+
+	/* The size of a hash context (e.g. git_SHA_CTX). */
+	size_t ctxsz;
+
+	/* The length of the hash in bytes. */
+	size_t rawsz;
+
+	/* The length of the hash in hex characters. */
+	size_t hexsz;
+
+	/* The hash initialization function. */
+	git_hash_init_fn init_fn;
+
+	/* The hash update function. */
+	git_hash_update_fn update_fn;
+
+	/* The hash finalization function. */
+	git_hash_final_fn final_fn;
+
+	/* The OID of the empty tree. */
+	const struct object_id *empty_tree;
+
+	/* The OID of the empty blob. */
+	const struct object_id *empty_blob;
+};
+extern const struct git_hash_algo hash_algos[1];
+
+#define current_hash the_repository->hash_algo
 
 #if defined(DT_UNKNOWN) && !defined(NO_D_TYPE_IN_DIRENT)
 #define DTYPE(de)	((de)->d_type)
@@ -598,7 +637,6 @@ extern int daemonize(void);
 /* Initialize and use the cache information */
 struct lock_file;
 extern int read_index(struct index_state *);
-extern void preload_index(struct index_state *, const struct pathspec *pathspec);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
@@ -689,8 +727,8 @@ extern int ie_modified(const struct index_state *, const struct cache_entry *, s
 
 #define HASH_WRITE_OBJECT 1
 #define HASH_FORMAT_CHECK 2
-extern int index_fd(unsigned char *sha1, int fd, struct stat *st, enum object_type type, const char *path, unsigned flags);
-extern int index_path(unsigned char *sha1, const char *path, struct stat *st, unsigned flags);
+extern int index_fd(struct object_id *oid, int fd, struct stat *st, enum object_type type, const char *path, unsigned flags);
+extern int index_path(struct object_id *oid, const char *path, struct stat *st, unsigned flags);
 
 /*
  * Record to sd the data from st that we use to check whether a file
@@ -856,6 +894,7 @@ struct repository_format {
 	int version;
 	int precious_objects;
 	int is_bare;
+	int hash_algo;
 	char *work_tree;
 	struct string_list unknown_extensions;
 };
@@ -899,20 +938,6 @@ extern void check_repository_format(void);
  * overwritten each time the function is called.
  */
 extern const char *sha1_file_name(const unsigned char *sha1);
-
-/*
- * Return the name of the (local) packfile with the specified sha1 in
- * its name.  The return value is a pointer to memory that is
- * overwritten each time this function is called.
- */
-extern char *sha1_pack_name(const unsigned char *sha1);
-
-/*
- * Return the name of the (local) pack index file with the specified
- * sha1 in its name.  The return value is a pointer to memory that is
- * overwritten each time this function is called.
- */
-extern char *sha1_pack_index_name(const unsigned char *sha1);
 
 /*
  * Return an abbreviated sha1 unique within this repository's object database.
@@ -1002,22 +1027,22 @@ extern const struct object_id empty_blob_oid;
 
 static inline int is_empty_blob_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, EMPTY_BLOB_SHA1_BIN);
+	return !hashcmp(sha1, current_hash->empty_blob->hash);
 }
 
 static inline int is_empty_blob_oid(const struct object_id *oid)
 {
-	return !hashcmp(oid->hash, EMPTY_BLOB_SHA1_BIN);
+	return !oidcmp(oid, current_hash->empty_blob);
 }
 
 static inline int is_empty_tree_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, EMPTY_TREE_SHA1_BIN);
+	return !hashcmp(sha1, current_hash->empty_tree->hash);
 }
 
 static inline int is_empty_tree_oid(const struct object_id *oid)
 {
-	return !hashcmp(oid->hash, EMPTY_TREE_SHA1_BIN);
+	return !oidcmp(oid, current_hash->empty_tree);
 }
 
 /* set default permissions by passing mode arguments to open(2) */
@@ -1190,7 +1215,7 @@ static inline const unsigned char *lookup_replace_object(const unsigned char *sh
 extern int sha1_object_info(const unsigned char *, unsigned long *);
 extern int hash_sha1_file(const void *buf, unsigned long len, const char *type, unsigned char *sha1);
 extern int write_sha1_file(const void *buf, unsigned long len, const char *type, unsigned char *return_sha1);
-extern int hash_sha1_file_literally(const void *buf, unsigned long len, const char *type, unsigned char *sha1, unsigned flags);
+extern int hash_sha1_file_literally(const void *buf, unsigned long len, const char *type, struct object_id *oid, unsigned flags);
 extern int pretend_sha1_file(void *, unsigned long, enum object_type, unsigned char *);
 extern int force_object_loose(const unsigned char *sha1, time_t mtime);
 extern int git_open_cloexec(const char *name, int flags);
@@ -1199,14 +1224,9 @@ extern void *map_sha1_file(const unsigned char *sha1, unsigned long *size);
 extern int unpack_sha1_header(git_zstream *stream, unsigned char *map, unsigned long mapsize, void *buffer, unsigned long bufsiz);
 extern int parse_sha1_header(const char *hdr, unsigned long *sizep);
 
-/* global flag to enable extra checks when accessing packed objects */
-extern int do_check_packed_object_crc;
-
 extern int check_sha1_signature(const unsigned char *sha1, void *buf, unsigned long size, const char *type);
 
 extern int finalize_object_file(const char *tmpfile, const char *filename);
-
-extern int has_sha1_pack(const unsigned char *sha1);
 
 /*
  * Open the loose object at path, check its sha1, and return the contents,
@@ -1242,8 +1262,6 @@ extern int has_object_file_with_flags(const struct object_id *oid, int flags);
  * references.
  */
 extern int has_loose_object_nonlocal(const unsigned char *sha1);
-
-extern int has_pack_index(const unsigned char *sha1);
 
 extern void assert_sha1_type(const unsigned char *sha1, enum object_type expect);
 
@@ -1542,7 +1560,6 @@ extern struct alternate_object_database {
 	char path[FLEX_ARRAY];
 } *alt_odb_list;
 extern void prepare_alt_odb(void);
-extern void read_info_alternates(const char * relative_base, int depth);
 extern char *compute_alternate_path(const char *path, struct strbuf *err);
 typedef int alt_odb_fn(struct alternate_object_database *, void *);
 extern int foreach_alt_odb(alt_odb_fn, void*);
@@ -1618,29 +1635,6 @@ struct pack_entry {
 	struct packed_git *p;
 };
 
-extern struct packed_git *parse_pack_index(unsigned char *sha1, const char *idx_path);
-
-/* A hook to report invalid files in pack directory */
-#define PACKDIR_FILE_PACK 1
-#define PACKDIR_FILE_IDX 2
-#define PACKDIR_FILE_GARBAGE 4
-extern void (*report_garbage)(unsigned seen_bits, const char *path);
-
-extern void prepare_packed_git(void);
-extern void reprepare_packed_git(void);
-extern void install_packed_git(struct packed_git *pack);
-
-/*
- * Give a rough count of objects in the repository. This sacrifices accuracy
- * for speed.
- */
-unsigned long approximate_object_count(void);
-
-extern struct packed_git *find_sha1_pack(const unsigned char *sha1,
-					 struct packed_git *packs);
-
-extern void pack_report(void);
-
 /*
  * Create a temporary file rooted in the object database directory, or
  * die on failure. The filename is taken from "pattern", which should have the
@@ -1650,81 +1644,11 @@ extern void pack_report(void);
 extern int odb_mkstemp(struct strbuf *template, const char *pattern);
 
 /*
- * Generate the filename to be used for a pack file with checksum "sha1" and
- * extension "ext". The result is written into the strbuf "buf", overwriting
- * any existing contents. A pointer to buf->buf is returned as a convenience.
- *
- * Example: odb_pack_name(out, sha1, "idx") => ".git/objects/pack/pack-1234..idx"
- */
-extern char *odb_pack_name(struct strbuf *buf, const unsigned char *sha1, const char *ext);
-
-/*
  * Create a pack .keep file named "name" (which should generally be the output
  * of odb_pack_name). Returns a file descriptor opened for writing, or -1 on
  * error.
  */
 extern int odb_pack_keep(const char *name);
-
-/*
- * mmap the index file for the specified packfile (if it is not
- * already mmapped).  Return 0 on success.
- */
-extern int open_pack_index(struct packed_git *);
-
-/*
- * munmap the index file for the specified packfile (if it is
- * currently mmapped).
- */
-extern void close_pack_index(struct packed_git *);
-
-extern unsigned char *use_pack(struct packed_git *, struct pack_window **, off_t, size_t *);
-extern void close_pack_windows(struct packed_git *);
-extern void close_all_packs(void);
-extern void unuse_pack(struct pack_window **);
-extern void clear_delta_base_cache(void);
-extern struct packed_git *add_packed_git(const char *path, size_t path_len, int local);
-
-/*
- * Make sure that a pointer access into an mmap'd index file is within bounds,
- * and can provide at least 8 bytes of data.
- *
- * Note that this is only necessary for variable-length segments of the file
- * (like the 64-bit extended offset table), as we compare the size to the
- * fixed-length parts when we open the file.
- */
-extern void check_pack_index_ptr(const struct packed_git *p, const void *ptr);
-
-/*
- * Return the SHA-1 of the nth object within the specified packfile.
- * Open the index if it is not already open.  The return value points
- * at the SHA-1 within the mmapped index.  Return NULL if there is an
- * error.
- */
-extern const unsigned char *nth_packed_object_sha1(struct packed_git *, uint32_t n);
-/*
- * Like nth_packed_object_sha1, but write the data into the object specified by
- * the the first argument.  Returns the first argument on success, and NULL on
- * error.
- */
-extern const struct object_id *nth_packed_object_oid(struct object_id *, struct packed_git *, uint32_t n);
-
-/*
- * Return the offset of the nth object within the specified packfile.
- * The index must already be opened.
- */
-extern off_t nth_packed_object_offset(const struct packed_git *, uint32_t n);
-
-/*
- * If the object named sha1 is present in the specified packfile,
- * return its offset within the packfile; otherwise, return 0.
- */
-extern off_t find_pack_entry_one(const unsigned char *sha1, struct packed_git *);
-
-extern int is_pack_valid(struct packed_git *);
-extern void *unpack_entry(struct packed_git *, off_t, enum object_type *, unsigned long *);
-extern unsigned long unpack_object_header_buffer(const unsigned char *buf, unsigned long len, enum object_type *type, unsigned long *sizep);
-extern unsigned long get_size_from_delta(struct packed_git *, struct pack_window **, off_t);
-extern int unpack_object_header(struct packed_git *, struct pack_window **, off_t *, unsigned long *);
 
 /*
  * Iterate over the files in the loose-object parts of the object
@@ -1775,17 +1699,12 @@ int for_each_loose_file_in_objdir_buf(struct strbuf *path,
 				      void *data);
 
 /*
- * Iterate over loose and packed objects in both the local
+ * Iterate over loose objects in both the local
  * repository and any alternates repositories (unless the
  * LOCAL_ONLY flag is set).
  */
 #define FOR_EACH_OBJECT_LOCAL_ONLY 0x1
-typedef int each_packed_object_fn(const struct object_id *oid,
-				  struct packed_git *pack,
-				  uint32_t pos,
-				  void *data);
 extern int for_each_loose_object(each_loose_object_fn, void *, unsigned flags);
-extern int for_each_packed_object(each_packed_object_fn, void *, unsigned flags);
 
 struct object_info {
 	/* Request */
@@ -1835,7 +1754,6 @@ struct object_info {
 /* Do not retry packed storage after checking packed and loose storage */
 #define OBJECT_INFO_QUICK 8
 extern int sha1_object_info_extended(const unsigned char *, struct object_info *, unsigned flags);
-extern int packed_object_info(struct packed_git *pack, off_t offset, struct object_info *);
 
 /* Dumb servers support */
 extern int update_server_info(int);

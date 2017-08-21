@@ -21,6 +21,7 @@
 #include "string-list.h"
 #include "argv-array.h"
 #include "graph.h"
+#include "packfile.h"
 
 #ifdef NO_FAST_WORKING_DIRECTORY
 #define FAST_WORKING_DIRECTORY 0
@@ -461,8 +462,6 @@ static struct diff_tempfile {
 	struct tempfile tempfile;
 } diff_temp[2];
 
-typedef unsigned long (*sane_truncate_fn)(char *line, unsigned long len);
-
 struct emit_callback {
 	int color_diff;
 	unsigned ws_rule;
@@ -470,7 +469,6 @@ struct emit_callback {
 	int blank_at_eof_in_postimage;
 	int lno_in_preimage;
 	int lno_in_postimage;
-	sane_truncate_fn truncate;
 	const char **label_path;
 	struct diff_words_data *diff_words;
 	struct diff_options *opt;
@@ -858,25 +856,28 @@ static int shrink_potential_moved_blocks(struct moved_entry **pmb,
 /*
  * If o->color_moved is COLOR_MOVED_PLAIN, this function does nothing.
  *
- * Otherwise, if the last block has fewer non-space characters than
- * COLOR_MOVED_MIN_NON_SPACE_COUNT, unset DIFF_SYMBOL_MOVED_LINE on all lines
- * in that block.
+ * Otherwise, if the last block has fewer alphanumeric characters than
+ * COLOR_MOVED_MIN_ALNUM_COUNT, unset DIFF_SYMBOL_MOVED_LINE on all lines in
+ * that block.
  *
  * The last block consists of the (n - block_length)'th line up to but not
  * including the nth line.
+ *
+ * NEEDSWORK: This uses the same heuristic as blame_entry_score() in blame.c.
+ * Think of a way to unify them.
  */
 static void adjust_last_block(struct diff_options *o, int n, int block_length)
 {
-	int i, non_space_count = 0;
+	int i, alnum_count = 0;
 	if (o->color_moved == COLOR_MOVED_PLAIN)
 		return;
 	for (i = 1; i < block_length + 1; i++) {
 		const char *c = o->emitted_symbols->buf[n - i].line;
 		for (; *c; c++) {
-			if (isspace(*c))
+			if (!isalnum(*c))
 				continue;
-			non_space_count++;
-			if (non_space_count >= COLOR_MOVED_MIN_NON_SPACE_COUNT)
+			alnum_count++;
+			if (alnum_count >= COLOR_MOVED_MIN_ALNUM_COUNT)
 				return;
 		}
 	}
@@ -1993,8 +1994,6 @@ static unsigned long sane_truncate_line(struct emit_callback *ecb, char *line, u
 	unsigned long allot;
 	size_t l = len;
 
-	if (ecb->truncate)
-		return ecb->truncate(line, len);
 	cp = line;
 	allot = l;
 	while (0 < l) {
@@ -4010,7 +4009,7 @@ static void diff_fill_oid_info(struct diff_filespec *one)
 			}
 			if (lstat(one->path, &st) < 0)
 				die_errno("stat '%s'", one->path);
-			if (index_path(one->oid.hash, one->path, &st, 0))
+			if (index_path(&one->oid, one->path, &st, 0))
 				die("cannot hash %s", one->path);
 		}
 	}

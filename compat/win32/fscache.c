@@ -7,7 +7,6 @@ static int initialized;
 static volatile long enabled;
 static struct hashmap map;
 static CRITICAL_SECTION mutex;
-static struct trace_key trace_fscache = TRACE_KEY_INIT(FSCACHE);
 
 /*
  * An entry in the file system cache. Used for both entire directory listings
@@ -39,9 +38,9 @@ struct fsentry {
 		struct {
 			/* More stat members (only used for file entries). */
 			off64_t st_size;
-			struct timespec st_atim;
-			struct timespec st_mtim;
-			struct timespec st_ctim;
+			time_t st_atime;
+			time_t st_mtime;
+			time_t st_ctime;
 		};
 	};
 };
@@ -150,13 +149,12 @@ static struct fsentry *fseentry_create_entry(struct fsentry *list,
 
 	fse = fsentry_alloc(list, buf, len);
 
-	fse->st_mode = file_attr_to_st_mode(fdata->dwFileAttributes,
-			fdata->dwReserved0);
-	fse->st_size = S_ISLNK(fse->st_mode) ? MAX_LONG_PATH :
-			fdata->nFileSizeLow | (((off_t) fdata->nFileSizeHigh) << 32);
-	filetime_to_timespec(&(fdata->ftLastAccessTime), &(fse->st_atim));
-	filetime_to_timespec(&(fdata->ftLastWriteTime), &(fse->st_mtim));
-	filetime_to_timespec(&(fdata->ftCreationTime), &(fse->st_ctim));
+	fse->st_mode = file_attr_to_st_mode(fdata->dwFileAttributes);
+	fse->st_size = (((off64_t) (fdata->nFileSizeHigh)) << 32)
+			| fdata->nFileSizeLow;
+	fse->st_atime = filetime_to_time_t(&(fdata->ftLastAccessTime));
+	fse->st_mtime = filetime_to_time_t(&(fdata->ftLastWriteTime));
+	fse->st_ctime = filetime_to_time_t(&(fdata->ftCreationTime));
 
 	return fse;
 }
@@ -166,8 +164,7 @@ static struct fsentry *fseentry_create_entry(struct fsentry *list,
  * Dir should not contain trailing '/'. Use an empty string for the current
  * directory (not "."!).
  */
-static struct fsentry *fsentry_create_list(const struct fsentry *dir,
-					   int *dir_not_found)
+static struct fsentry *fsentry_create_list(const struct fsentry *dir)
 {
 	wchar_t pattern[MAX_LONG_PATH + 2]; /* + 2 for "\*" */
 	WIN32_FIND_DATAW fdata;
@@ -175,8 +172,6 @@ static struct fsentry *fsentry_create_list(const struct fsentry *dir,
 	int wlen;
 	struct fsentry *list, **phead;
 	DWORD err;
-
-	*dir_not_found = 0;
 
 	/* convert name to UTF-16 and check length */
 	if ((wlen = xutftowcs_path_ex(pattern, dir->name, MAX_LONG_PATH,
@@ -196,16 +191,12 @@ static struct fsentry *fsentry_create_list(const struct fsentry *dir,
 	h = FindFirstFileW(pattern, &fdata);
 	if (h == INVALID_HANDLE_VALUE) {
 		err = GetLastError();
-		*dir_not_found = 1; /* or empty directory */
 		errno = (err == ERROR_DIRECTORY) ? ENOTDIR : err_win_to_posix(err);
-		trace_printf_key(&trace_fscache, "fscache: error(%d) '%.*s'\n",
-						 errno, dir->len, dir->name);
 		return NULL;
 	}
 
 	/* allocate object to hold directory listing */
 	list = fsentry_alloc(NULL, dir->name, dir->len);
-	list->st_mode = S_IFDIR;
 
 	/* walk directory and build linked list of fsentry structures */
 	phead = &list->next;
@@ -290,16 +281,12 @@ static struct fsentry *fscache_get_wait(struct fsentry *key)
 static struct fsentry *fscache_get(struct fsentry *key)
 {
 	struct fsentry *fse, *future, *waiter;
-	int dir_not_found;
 
 	EnterCriticalSection(&mutex);
 	/* check if entry is in cache */
 	fse = fscache_get_wait(key);
 	if (fse) {
-		if (fse->st_mode)
-			fsentry_addref(fse);
-		else
-			fse = NULL; /* non-existing directory */
+		fsentry_addref(fse);
 		LeaveCriticalSection(&mutex);
 		return fse;
 	}
@@ -308,10 +295,7 @@ static struct fsentry *fscache_get(struct fsentry *key)
 		fse = fscache_get_wait(key->list);
 		if (fse) {
 			LeaveCriticalSection(&mutex);
-			/*
-			 * dir entry without file entry, or dir does not
-			 * exist -> file doesn't exist
-			 */
+			/* dir entry without file entry -> file doesn't exist */
 			errno = ENOENT;
 			return NULL;
 		}
@@ -325,7 +309,7 @@ static struct fsentry *fscache_get(struct fsentry *key)
 
 	/* create the directory listing (outside mutex!) */
 	LeaveCriticalSection(&mutex);
-	fse = fsentry_create_list(future, &dir_not_found);
+	fse = fsentry_create_list(future);
 	EnterCriticalSection(&mutex);
 
 	/* remove future entry and signal waiting threads */
@@ -339,17 +323,6 @@ static struct fsentry *fscache_get(struct fsentry *key)
 
 	/* leave on error (errno set by fsentry_create_list) */
 	if (!fse) {
-		if (dir_not_found && key->list) {
-			/*
-			 * Record that the directory does not exist (or is
-			 * empty, which for all practical matters is the same
-			 * thing as far as fscache is concerned).
-			 */
-			fse = fsentry_alloc(key->list->list,
-					    key->list->name, key->list->len);
-			fse->st_mode = 0;
-			hashmap_add(&map, fse);
-		}
 		LeaveCriticalSection(&mutex);
 		return NULL;
 	}
@@ -360,9 +333,6 @@ static struct fsentry *fscache_get(struct fsentry *key)
 	/* lookup file entry if requested (fse already points to directory) */
 	if (key->list)
 		fse = hashmap_get(&map, key, NULL);
-
-	if (fse && !fse->st_mode)
-		fse = NULL; /* non-existing directory */
 
 	/* return entry or ENOENT */
 	if (fse)
@@ -407,7 +377,6 @@ int fscache_enable(int enable)
 		fscache_clear();
 		LeaveCriticalSection(&mutex);
 	}
-	trace_printf_key(&trace_fscache, "fscache: enable(%d)\n", enable);
 	return result;
 }
 
@@ -448,9 +417,9 @@ int fscache_lstat(const char *filename, struct stat *st)
 	st->st_nlink = 1;
 	st->st_mode = fse->st_mode;
 	st->st_size = fse->st_size;
-	st->st_atim = fse->st_atim;
-	st->st_mtim = fse->st_mtim;
-	st->st_ctim = fse->st_ctim;
+	st->st_atime = fse->st_atime;
+	st->st_mtime = fse->st_mtime;
+	st->st_ctime = fse->st_ctime;
 
 	/* don't forget to release fsentry */
 	fsentry_release(fse);
@@ -473,8 +442,7 @@ static struct dirent *fscache_readdir(DIR *base_dir)
 	if (!next)
 		return NULL;
 	dir->pfsentry = next;
-	dir->dirent.d_type = S_ISREG(next->st_mode) ? DT_REG :
-			S_ISDIR(next->st_mode) ? DT_DIR : DT_LNK;
+	dir->dirent.d_type = S_ISDIR(next->st_mode) ? DT_DIR : DT_REG;
 	dir->dirent.d_name = (char*) next->name;
 	return &(dir->dirent);
 }

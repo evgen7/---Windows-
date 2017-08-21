@@ -167,6 +167,7 @@ Format of STDIN stream:
 #include "quote.h"
 #include "dir.h"
 #include "run-command.h"
+#include "packfile.h"
 
 #define PACK_ID_BITS 16
 #define MAX_PACK_ID ((1<<PACK_ID_BITS)-1)
@@ -3002,7 +3003,7 @@ static void cat_blob(struct object_entry *oe, struct object_id *oid)
 
 static void parse_get_mark(const char *p)
 {
-	FAKE_INIT(struct object_entry *, oe, NULL);
+	struct object_entry *oe = oe;
 	char output[GIT_MAX_HEXSZ + 2];
 
 	/* get-mark SP <object> LF */
@@ -3019,7 +3020,7 @@ static void parse_get_mark(const char *p)
 
 static void parse_cat_blob(const char *p)
 {
-	FAKE_INIT(struct object_entry *, oe, NULL);
+	struct object_entry *oe = oe;
 	struct object_id oid;
 
 	/* cat-blob SP <object> LF */

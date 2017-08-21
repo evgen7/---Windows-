@@ -597,7 +597,7 @@ int notes_merge(struct notes_merge_options *o,
 	bases = get_merge_bases(local, remote);
 	if (!bases) {
 		base_oid = &null_oid;
-		base_tree_oid = &empty_tree_oid;
+		base_tree_oid = current_hash->empty_tree;
 		if (o->verbosity >= 4)
 			printf("No merge base found; doing history-less merge\n");
 	} else if (!bases->next) {
@@ -709,7 +709,7 @@ int notes_merge_commit(struct notes_merge_options *o,
 		/* write file as blob, and add to partial_tree */
 		if (stat(path.buf, &st))
 			die_errno("Failed to stat '%s'", path.buf);
-		if (index_path(blob_oid.hash, path.buf, &st, HASH_WRITE_OBJECT))
+		if (index_path(&blob_oid, path.buf, &st, HASH_WRITE_OBJECT))
 			die("Failed to write blob object from '%s'", path.buf);
 		if (add_note(partial_tree, &obj_oid, &blob_oid, NULL))
 			die("Failed to add resolved note '%s' to notes tree",

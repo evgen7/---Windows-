@@ -254,7 +254,7 @@ plain::
 	moved line, but it is not very useful in a review to determine
 	if a block of code was moved without permutation.
 zebra::
-	Blocks of moved text of at least 10 non-whitespace characters
+	Blocks of moved text of at least 20 alphanumeric characters
 	are detected greedily. The detected blocks are
 	painted using either the 'color.diff.{old,new}Moved' color or
 	'color.diff.{old,new}MovedAlternative'. The change between

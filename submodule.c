@@ -580,7 +580,7 @@ void show_submodule_inline_diff(struct diff_options *o, const char *path,
 		struct object_id *one, struct object_id *two,
 		unsigned dirty_submodule)
 {
-	const struct object_id *old = &empty_tree_oid, *new = &empty_tree_oid;
+	const struct object_id *old = current_hash->empty_tree, *new = current_hash->empty_tree;
 	struct commit *left = NULL, *right = NULL;
 	struct commit_list *merge_bases = NULL;
 	struct child_process cp = CHILD_PROCESS_INIT;

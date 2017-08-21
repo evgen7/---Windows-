@@ -6,9 +6,7 @@ the Git commands' behavior. The `.git/config` file in each repository
 is used to store the configuration for that repository, and
 `$HOME/.gitconfig` is used to store a per-user configuration as
 fallback values for the `.git/config` file. The file `/etc/gitconfig`
-can be used to store a system-wide default configuration. On Windows,
-configuration can also be stored in `C:\ProgramData\Git\config`; This
-file will be used also by libgit2-based software.
+can be used to store a system-wide default configuration.
 
 The configuration variables are used by both the Git plumbing
 and the porcelains. The variables are divided into sections, wherein
@@ -1592,11 +1590,13 @@ gc.<pattern>.reflogExpireUnreachable::
 gc.rerereResolved::
 	Records of conflicted merge you resolved earlier are
 	kept for this many days when 'git rerere gc' is run.
+	You can also use more human-readable "1.month.ago", etc.
 	The default is 60 days.  See linkgit:git-rerere[1].
 
 gc.rerereUnresolved::
 	Records of conflicted merge you have not resolved are
 	kept for this many days when 'git rerere gc' is run.
+	You can also use more human-readable "1.month.ago", etc.
 	The default is 15 days.  See linkgit:git-rerere[1].
 
 gitcvs.commitMsgAnnotation::
@@ -1986,11 +1986,6 @@ http.sslCAPath::
 	Path containing files with the CA certificates to verify the peer
 	with when fetching or pushing over HTTPS. Can be overridden
 	by the `GIT_SSL_CAPATH` environment variable.
-
-http.sslBackend::
-	Name of the SSL backend to use (e.g. "openssl" or "schannel").
-	This option is ignored if cURL lacks support for choosing the SSL
-	backend at runtime.
 
 http.pinnedpubkey::
 	Public key of the https service. It may either be the filename of
@@ -3398,9 +3393,3 @@ web.browser::
 	Specify a web browser that may be used by some commands.
 	Currently only linkgit:git-instaweb[1] and linkgit:git-help[1]
 	may use it.
-
-sendpack.sideband::
-  Allows to disable the side-band-64k capability for send-pack even
-  when it is advertised by the server. Makes it possible to work
-  around a limitation in the git for windows implementation together
-  with the dump git protocol. Defaults to true.

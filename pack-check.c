@@ -2,6 +2,7 @@
 #include "pack.h"
 #include "pack-revindex.h"
 #include "progress.h"
+#include "packfile.h"
 
 struct idx_entry {
 	off_t                offset;
@@ -24,13 +25,13 @@ static int compare_entries(const void *e1, const void *e2)
 }
 
 int check_pack_crc(struct packed_git *p, struct pack_window **w_curs,
-		   off_t offset, size_t len, unsigned int nr)
+		   off_t offset, off_t len, unsigned int nr)
 {
 	const uint32_t *index_crc;
 	uint32_t data_crc = crc32(0, NULL, 0);
 
 	do {
-		size_t avail;
+		unsigned long avail;
 		void *data = use_pack(p, w_curs, offset, &avail);
 		if (avail > len)
 			avail = len;
@@ -65,7 +66,7 @@ static int verify_packfile(struct packed_git *p,
 
 	git_SHA1_Init(&ctx);
 	do {
-		size_t remaining;
+		unsigned long remaining;
 		unsigned char *in = use_pack(p, w_curs, offset, &remaining);
 		offset += remaining;
 		if (!pack_sig_ofs)

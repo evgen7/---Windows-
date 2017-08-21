@@ -2015,7 +2015,7 @@ int merge_recursive(struct merge_options *o,
 {
 	struct commit_list *iter;
 	struct commit *merged_common_ancestors;
-	FAKE_INIT(struct tree *, mrtree, NULL);
+	struct tree *mrtree = mrtree;
 	int clean;
 
 	if (show(o, 4)) {
@@ -2043,7 +2043,7 @@ int merge_recursive(struct merge_options *o,
 		/* if there is no common ancestor, use an empty tree */
 		struct tree *tree;
 
-		tree = lookup_tree(&empty_tree_oid);
+		tree = lookup_tree(current_hash->empty_tree);
 		merged_common_ancestors = make_virtual_commit(tree, "ancestor");
 	}
 

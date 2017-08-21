@@ -946,8 +946,8 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 		 * the editor and after we invoke run_status above.
 		 */
 		discard_cache();
-		read_cache_from(index_file);
 	}
+	read_cache_from(index_file);
 
 	if (update_main_cache_tree(0)) {
 		error(_("Error building trees"));
@@ -1345,8 +1345,6 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
-	static int no_lock_index = 0;
-	static int show_ignored_directory = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1378,10 +1376,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
-		OPT_BOOL(0, "no-lock-index", &no_lock_index,
-			 N_("do not lock the index")),
-		OPT_BOOL(0, "show-ignored-directory", &show_ignored_directory,
-		N_("(EXPERIMENTAL) Only show directories that match an ignore pattern name.")),
 		OPT_END(),
 	};
 
@@ -1395,11 +1389,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
 
-	if (no_lock_index)
-		setenv("GIT_LOCK_INDEX", "false", 1);
-	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
-		no_lock_index = 1;
-
 	handle_untracked_files_arg(&s);
 	if (show_ignored_in_status)
 		s.show_ignored_files = 1;
@@ -1411,7 +1400,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
-	fd = no_lock_index ? -1 : hold_locked_index(&index_lock, 0);
+	fd = hold_locked_index(&index_lock, 0);
 
 	s.is_initial = get_oid(s.reference, &oid) ? 1 : 0;
 	if (!s.is_initial)
@@ -1420,7 +1409,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	s.ignore_submodule_arg = ignore_submodule_arg;
 	s.status_format = status_format;
 	s.verbose = verbose;
-	s.show_ignored_directory = show_ignored_directory;
 
 	wt_status_collect(&s);
 

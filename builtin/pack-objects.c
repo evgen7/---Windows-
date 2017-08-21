@@ -25,6 +25,7 @@
 #include "sha1-array.h"
 #include "argv-array.h"
 #include "mru.h"
+#include "packfile.h"
 
 static const char *pack_usage[] = {
 	N_("git pack-objects --stdout [<options>...] [< <ref-list> | < <object-list>]"),
@@ -222,15 +223,15 @@ static void copy_pack_data(struct sha1file *f,
 		struct packed_git *p,
 		struct pack_window **w_curs,
 		off_t offset,
-		size_t len)
+		off_t len)
 {
 	unsigned char *in;
-	size_t avail;
+	unsigned long avail;
 
 	while (len) {
 		in = use_pack(p, w_curs, offset, &avail);
 		if (avail > len)
-			avail = len;
+			avail = (unsigned long)len;
 		sha1write(f, in, avail);
 		offset += avail;
 		len -= avail;
@@ -1388,8 +1389,8 @@ static void check_object(struct object_entry *entry)
 		struct pack_window *w_curs = NULL;
 		const unsigned char *base_ref = NULL;
 		struct object_entry *base_entry;
-		size_t used, used_0;
-		size_t avail;
+		unsigned long used, used_0;
+		unsigned long avail;
 		off_t ofs;
 		unsigned char *buf, c;
 

@@ -19,6 +19,7 @@
 #include "sigchain.h"
 #include "argv-array.h"
 #include "commit.h"
+#include "packfile.h"
 
 #define FAILED_RUN "failed to run %s"
 
@@ -473,10 +474,8 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 
 	report_garbage = report_pack_garbage;
 	reprepare_packed_git();
-	if (pack_garbage.nr > 0) {
-		close_all_packs();
+	if (pack_garbage.nr > 0)
 		clean_pack_garbage();
-	}
 
 	if (auto_gc && too_many_loose_objects())
 		warning(_("There are too many unreachable loose objects; "

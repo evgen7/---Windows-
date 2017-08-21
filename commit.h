@@ -247,7 +247,7 @@ struct commit_graft {
 };
 typedef int (*each_commit_graft_fn)(const struct commit_graft *, void *);
 
-struct commit_graft *read_graft_line(char *buf, int len);
+struct commit_graft *read_graft_line(struct strbuf *line);
 int register_commit_graft(struct commit_graft *, int);
 struct commit_graft *lookup_commit_graft(const struct object_id *oid);
 
@@ -312,11 +312,6 @@ int in_merge_bases_many(struct commit *, int, struct commit **);
 extern int interactive_add(int argc, const char **argv, const char *prefix, int patch);
 extern int run_add_interactive(const char *revision, const char *patch_mode,
 			       const struct pathspec *pathspec);
-
-static inline int single_parent(struct commit *commit)
-{
-	return commit->parents && !commit->parents->next;
-}
 
 struct commit_list *reduce_heads(struct commit_list *heads);
 
