@@ -123,10 +123,6 @@ struct utsname {
  * trivial stubs
  */
 
-static inline int readlink(const char *path, char *buf, size_t bufsiz)
-{ errno = ENOSYS; return -1; }
-static inline int symlink(const char *oldpath, const char *newpath)
-{ errno = ENOSYS; return -1; }
 static inline int fchmod(int fildes, mode_t mode)
 { errno = ENOSYS; return -1; }
 #ifndef __MINGW64_VERSION_MAJOR
@@ -218,6 +214,8 @@ int setitimer(int type, struct itimerval *in, struct itimerval *out);
 int sigaction(int sig, struct sigaction *in, struct sigaction *out);
 int link(const char *oldpath, const char *newpath);
 int uname(struct utsname *buf);
+int symlink(const char *target, const char *link);
+int readlink(const char *path, char *buf, size_t bufsiz);
 
 /*
  * replacements of existing functions
@@ -263,11 +261,56 @@ char *mingw_mktemp(char *template);
 char *mingw_getcwd(char *pointer, int len);
 #define getcwd mingw_getcwd
 
+#ifdef NO_UNSETENV
+#error "NO_UNSETENV is incompatible with the MinGW startup code!"
+#endif
+
+#if defined(_MSC_VER)
+/*
+ * We bind *env() routines (even the mingw_ ones) to private msc_ versions.
+ * These talk to the CRT using UNICODE/wchar_t, but maintain the original
+ * narrow-char API.
+ *
+ * Note that the MSCRT maintains both ANSI (getenv()) and UNICODE (_wgetenv())
+ * routines and stores both versions of each environment variable in parallel
+ * (and secretly updates both when you set one or the other), but it uses CP_ACP
+ * to do the conversion rather than CP_UTF8.
+ *
+ * Since everything in the git code base is UTF8, we define the msc_ routines
+ * to access the CRT using the UNICODE routines and manually convert them to
+ * UTF8.  This also avoids round-trip problems.
+ *
+ * This also helps with our linkage, since "_wenviron" is publicly exported
+ * from the CRT.  But to access "_environ" we would have to statically link
+ * to the CRT (/MT).
+ *
+ * We also use "wmain(argc,argv,env)" and get the initial UNICODE setup for us.
+ * This avoids the need for the msc_startup() to import and convert the
+ * inherited environment.
+ *
+ * We require NO_SETENV (and let gitsetenv() call our msc_putenv).
+ */
+#define getenv       msc_getenv
+#define putenv       msc_putenv
+#define unsetenv     msc_putenv
+#define mingw_getenv msc_getenv
+#define mingw_putenv msc_putenv
+char *msc_getenv(const char *name);
+int   msc_putenv(const char *name);
+
+#ifndef NO_SETENV
+#error "NO_SETENV is required for MSC startup code!"
+#endif
+
+#else
+
 char *mingw_getenv(const char *name);
 #define getenv mingw_getenv
 int mingw_putenv(const char *namevalue);
 #define putenv mingw_putenv
 #define unsetenv mingw_putenv
+
+#endif
 
 int mingw_gethostname(char *host, int namelen);
 #define gethostname mingw_gethostname
@@ -343,24 +386,51 @@ static inline long long filetime_to_hnsec(const FILETIME *ft)
 	return winTime - 116444736000000000LL;
 }
 
-static inline time_t filetime_to_time_t(const FILETIME *ft)
-{
-	return (time_t)(filetime_to_hnsec(ft) / 10000000);
-}
-
 /*
- * Use mingw specific stat()/lstat()/fstat() implementations on Windows.
+ * Use mingw specific stat()/lstat()/fstat() implementations on Windows,
+ * including our own struct stat with 64 bit st_size and nanosecond-precision
+ * file times.
  */
 #ifndef __MINGW64_VERSION_MAJOR
 #define off_t off64_t
 #define lseek _lseeki64
+#ifndef _MSC_VER
+struct timespec {
+	time_t tv_sec;
+	long tv_nsec;
+};
+#endif
 #endif
 
-/* use struct stat with 64 bit st_size */
+static inline void filetime_to_timespec(const FILETIME *ft, struct timespec *ts)
+{
+	long long hnsec = filetime_to_hnsec(ft);
+	ts->tv_sec = (time_t)(hnsec / 10000000);
+	ts->tv_nsec = (hnsec % 10000000) * 100;
+}
+
+struct mingw_stat {
+    _dev_t st_dev;
+    _ino_t st_ino;
+    _mode_t st_mode;
+    short st_nlink;
+    short st_uid;
+    short st_gid;
+    _dev_t st_rdev;
+    off64_t st_size;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
+};
+
+#define st_atime st_atim.tv_sec
+#define st_mtime st_mtim.tv_sec
+#define st_ctime st_ctim.tv_sec
+
 #ifdef stat
 #undef stat
 #endif
-#define stat _stati64
+#define stat mingw_stat
 int mingw_lstat(const char *file_name, struct stat *buf);
 int mingw_stat(const char *file_name, struct stat *buf);
 int mingw_fstat(int fd, struct stat *buf);
@@ -373,13 +443,6 @@ int mingw_fstat(int fd, struct stat *buf);
 #endif
 extern int (*lstat)(const char *file_name, struct stat *buf);
 
-#ifndef _stati64
-# define _stati64(x,y) mingw_stat(x,y)
-#elif defined (_USE_32BIT_TIME_T)
-# define _stat32i64(x,y) mingw_stat(x,y)
-#else
-# define _stat64(x,y) mingw_stat(x,y)
-#endif
 
 int mingw_utime(const char *file_name, const struct utimbuf *times);
 #define utime mingw_utime
@@ -443,6 +506,8 @@ static inline void convert_slashes(char *path)
 int mingw_offset_1st_component(const char *path);
 #define offset_1st_component mingw_offset_1st_component
 #define PATH_SEP ';'
+extern char *mingw_query_user_email(void);
+#define query_user_email mingw_query_user_email
 #if !defined(__MINGW64_VERSION_MAJOR) && (!defined(_MSC_VER) || _MSC_VER < 1800)
 #define PRIuMAX "I64u"
 #define PRId64 "I64d"
@@ -627,7 +692,26 @@ extern CRITICAL_SECTION pinfo_cs;
 
 /*
  * A replacement of main() that adds win32 specific initialization.
+ *
+ * Note that the end of these macros are unterminated so that the
+ * brace group following the use of the macro is the body of the
+ * function.
  */
+#if defined(_MSC_VER)
+
+int msc_startup(int argc, wchar_t **w_argv, wchar_t **w_env);
+extern int msc_main(int argc, const char **argv);
+
+#define main(c,v) dummy_decl_msc_main(void);				\
+int wmain(int my_argc,									\
+		  wchar_t **my_w_argv,							\
+		  wchar_t **my_w_env)							\
+{														\
+	return msc_startup(my_argc, my_w_argv, my_w_env);	\
+}														\
+int msc_main(c, v)
+
+#else
 
 void mingw_startup(void);
 #define main(c,v) dummy_decl_mingw_main(void); \
@@ -638,6 +722,8 @@ int main(int argc, const char **argv) \
 	return mingw_main(__argc, (void *)__argv); \
 } \
 static int mingw_main(c,v)
+
+#endif
 
 /*
  * Used by Pthread API implementation for Windows
