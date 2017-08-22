@@ -19,6 +19,7 @@
 #include "varint.h"
 #include "split-index.h"
 #include "utf8.h"
+#include "fsmonitor.h"
 
 /* Mask for the name length in ce_flags in the on-disk index */
 
@@ -38,11 +39,12 @@
 #define CACHE_EXT_RESOLVE_UNDO 0x52455543 /* "REUC" */
 #define CACHE_EXT_LINK 0x6c696e6b	  /* "link" */
 #define CACHE_EXT_UNTRACKED 0x554E5452	  /* "UNTR" */
+#define CACHE_EXT_FSMONITOR 0x46534D4E	  /* "FSMN" */
 
 /* changes that can be kept in $GIT_DIR/index (basically all extensions) */
 #define EXTMASK (RESOLVE_UNDO_CHANGED | CACHE_TREE_CHANGED | \
 		 CE_ENTRY_ADDED | CE_ENTRY_REMOVED | CE_ENTRY_CHANGED | \
-		 SPLIT_INDEX_ORDERED | UNTRACKED_CHANGED)
+		 SPLIT_INDEX_ORDERED | UNTRACKED_CHANGED | FSMONITOR_CHANGED)
 
 struct index_state the_index;
 static const char *alternate_index_output;
@@ -62,6 +64,7 @@ static void replace_index_entry(struct index_state *istate, int nr, struct cache
 	free(old);
 	set_index_entry(istate, nr, ce);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
+	ce->ce_flags |= CE_FSMONITOR_DIRTY;
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 }
 
@@ -160,9 +163,9 @@ static int ce_compare_data(const struct cache_entry *ce, struct stat *st)
 	int fd = git_open_cloexec(ce->name, O_RDONLY);
 
 	if (fd >= 0) {
-		unsigned char sha1[20];
-		if (!index_fd(sha1, fd, st, OBJ_BLOB, ce->name, 0))
-			match = hashcmp(sha1, ce->oid.hash);
+		struct object_id oid;
+		if (!index_fd(&oid, fd, st, OBJ_BLOB, ce->name, 0))
+			match = oidcmp(&oid, &ce->oid);
 		/* index_fd() closed the file descriptor already */
 	}
 	return match;
@@ -515,9 +518,8 @@ int remove_index_entry_at(struct index_state *istate, int pos)
 	istate->cache_nr--;
 	if (pos >= istate->cache_nr)
 		return 0;
-	memmove(istate->cache + pos,
-		istate->cache + pos + 1,
-		(istate->cache_nr - pos) * sizeof(struct cache_entry *));
+	MOVE_ARRAY(istate->cache + pos, istate->cache + pos + 1,
+		   istate->cache_nr - pos);
 	return 1;
 }
 
@@ -690,7 +692,7 @@ int add_to_index(struct index_state *istate, const char *path, struct stat *st, 
 		return 0;
 	}
 	if (!intent_only) {
-		if (index_path(ce->oid.hash, path, st, HASH_WRITE_OBJECT)) {
+		if (index_path(&ce->oid, path, st, HASH_WRITE_OBJECT)) {
 			free(ce);
 			return error("unable to index file %s", path);
 		}
@@ -778,6 +780,7 @@ int chmod_index_entry(struct index_state *istate, struct cache_entry *ce,
 	}
 	cache_tree_invalidate_path(istate, ce->name);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
+	ce->ce_flags |= CE_FSMONITOR_DIRTY;
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 
 	return 0;
@@ -1345,6 +1348,8 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 	const char *added_fmt;
 	const char *unmerged_fmt;
 
+	refresh_by_fsmonitor(istate);
+
 	modified_fmt = (in_porcelain ? "M\t%s\n" : "%s: needs update\n");
 	deleted_fmt = (in_porcelain ? "D\t%s\n" : "%s: needs update\n");
 	typechange_fmt = (in_porcelain ? "T\t%s\n" : "%s needs update\n");
@@ -1381,8 +1386,11 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 			continue;
 
 		new = refresh_cache_ent(istate, ce, options, &cache_errno, &changed);
-		if (new == ce)
+		if (new == ce) {
+			ce->ce_flags &= ~CE_FSMONITOR_DIRTY;
 			continue;
+		}
+
 		if (!new) {
 			const char *fmt;
 
@@ -1392,6 +1400,7 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 				 */
 				ce->ce_flags &= ~CE_VALID;
 				ce->ce_flags |= CE_UPDATE_IN_BASE;
+				ce->ce_flags |= CE_FSMONITOR_DIRTY;
 				istate->cache_changed |= CE_ENTRY_CHANGED;
 			}
 			if (quiet)
@@ -1500,6 +1509,7 @@ struct ondisk_cache_entry_extended {
 };
 
 /* These are only used for v3 or lower */
+#define align_padding_size(size, len) ((size + (len) + 8) & ~7) - (size + len)
 #define align_flex_name(STRUCT,len) ((offsetof(struct STRUCT,name) + (len) + 8) & ~7)
 #define ondisk_cache_entry_size(len) align_flex_name(ondisk_cache_entry,len)
 #define ondisk_cache_entry_extended_size(len) align_flex_name(ondisk_cache_entry_extended,len)
@@ -1549,6 +1559,9 @@ static int read_index_extension(struct index_state *istate,
 		break;
 	case CACHE_EXT_UNTRACKED:
 		istate->untracked = read_untracked_extension(data, sz);
+		break;
+	case CACHE_EXT_FSMONITOR:
+		read_fsmonitor_extension(istate, data, sz);
 		break;
 	default:
 		if (*ext < 'A' || 'Z' < *ext)
@@ -1722,6 +1735,7 @@ static void post_read_index_from(struct index_state *istate)
 	check_ce_order(istate);
 	tweak_untracked_cache(istate);
 	tweak_split_index(istate);
+	tweak_fsmonitor_extension(istate);
 }
 
 /* remember to discard_cache() before reading a different cache! */
@@ -2033,7 +2047,7 @@ static void ce_smudge_racily_clean_entry(struct cache_entry *ce)
 }
 
 /* Copy miscellaneous fields but not the name */
-static char *copy_cache_entry_to_ondisk(struct ondisk_cache_entry *ondisk,
+static void copy_cache_entry_to_ondisk(struct ondisk_cache_entry *ondisk,
 				       struct cache_entry *ce)
 {
 	short flags;
@@ -2057,32 +2071,35 @@ static char *copy_cache_entry_to_ondisk(struct ondisk_cache_entry *ondisk,
 		struct ondisk_cache_entry_extended *ondisk2;
 		ondisk2 = (struct ondisk_cache_entry_extended *)ondisk;
 		ondisk2->flags2 = htons((ce->ce_flags & CE_EXTENDED_FLAGS) >> 16);
-		return ondisk2->name;
-	}
-	else {
-		return ondisk->name;
 	}
 }
 
 static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
-			  struct strbuf *previous_name)
+			  struct strbuf *previous_name, struct ondisk_cache_entry *ondisk)
 {
 	int size;
-	struct ondisk_cache_entry *ondisk;
 	int saved_namelen = saved_namelen; /* compiler workaround */
-	char *name;
 	int result;
+	static unsigned char padding[8] = { 0x00 };
 
 	if (ce->ce_flags & CE_STRIP_NAME) {
 		saved_namelen = ce_namelen(ce);
 		ce->ce_namelen = 0;
 	}
 
+	if (ce->ce_flags & CE_EXTENDED)
+		size = offsetof(struct ondisk_cache_entry_extended, name);
+	else
+		size = offsetof(struct ondisk_cache_entry, name);
+
 	if (!previous_name) {
-		size = ondisk_ce_size(ce);
-		ondisk = xcalloc(1, size);
-		name = copy_cache_entry_to_ondisk(ondisk, ce);
-		memcpy(name, ce->name, ce_namelen(ce));
+		int len = ce_namelen(ce);
+		copy_cache_entry_to_ondisk(ondisk, ce);
+		result = ce_write(c, fd, ondisk, size);
+		if (!result)
+			result = ce_write(c, fd, ce->name, len);
+		if (!result)
+			result = ce_write(c, fd, padding, align_padding_size(size, len));
 	} else {
 		int common, to_remove, prefix_size;
 		unsigned char to_remove_vi[16];
@@ -2095,16 +2112,12 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 		to_remove = previous_name->len - common;
 		prefix_size = encode_varint(to_remove, to_remove_vi);
 
-		if (ce->ce_flags & CE_EXTENDED)
-			size = offsetof(struct ondisk_cache_entry_extended, name);
-		else
-			size = offsetof(struct ondisk_cache_entry, name);
-		size += prefix_size + (ce_namelen(ce) - common + 1);
-
-		ondisk = xcalloc(1, size);
-		name = copy_cache_entry_to_ondisk(ondisk, ce);
-		memcpy(name, to_remove_vi, prefix_size);
-		memcpy(name + prefix_size, ce->name + common, ce_namelen(ce) - common);
+		copy_cache_entry_to_ondisk(ondisk, ce);
+		result = ce_write(c, fd, ondisk, size);
+		if (!result)
+			result = ce_write(c, fd, to_remove_vi, prefix_size);
+		if (!result)
+			result = ce_write(c, fd, ce->name + common, ce_namelen(ce) - common + 1);
 
 		strbuf_splice(previous_name, common, to_remove,
 			      ce->name + common, ce_namelen(ce) - common);
@@ -2114,8 +2127,6 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 		ce->ce_flags &= ~CE_STRIP_NAME;
 	}
 
-	result = ce_write(c, fd, ondisk, size);
-	free(ondisk);
 	return result;
 }
 
@@ -2193,10 +2204,11 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 	int newfd = tempfile->fd;
 	git_SHA_CTX c;
 	struct cache_header hdr;
-	int i, err, removed, extended, hdr_version;
+	int i, err = 0, removed, extended, hdr_version;
 	struct cache_entry **cache = istate->cache;
 	int entries = istate->cache_nr;
 	struct stat st;
+	struct ondisk_cache_entry_extended ondisk;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
 	int drop_cache_tree = 0;
 
@@ -2233,6 +2245,7 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 		return -1;
 
 	previous_name = (hdr_version == 4) ? &previous_name_buf : NULL;
+
 	for (i = 0; i < entries; i++) {
 		struct cache_entry *ce = cache[i];
 		if (ce->ce_flags & CE_REMOVE)
@@ -2248,14 +2261,20 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 			if (allow)
 				warning(msg, ce->name);
 			else
-				return error(msg, ce->name);
+				err = error(msg, ce->name);
 
 			drop_cache_tree = 1;
 		}
-		if (ce_write_entry(&c, newfd, ce, previous_name) < 0)
-			return -1;
+		if (ce_write_entry(&c, newfd, ce, previous_name, (struct ondisk_cache_entry *)&ondisk) < 0)
+			err = -1;
+
+		if (err)
+			break;
 	}
 	strbuf_release(&previous_name_buf);
+
+	if (err)
+		return err;
 
 	/* Write extension data here */
 	if (!strip_extensions && istate->split_index) {
@@ -2297,6 +2316,16 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 		err = write_index_ext_header(&c, newfd, CACHE_EXT_UNTRACKED,
 					     sb.len) < 0 ||
 			ce_write(&c, newfd, sb.buf, sb.len) < 0;
+		strbuf_release(&sb);
+		if (err)
+			return -1;
+	}
+	if (!strip_extensions && istate->fsmonitor_last_update) {
+		struct strbuf sb = STRBUF_INIT;
+
+		write_fsmonitor_extension(&sb, istate);
+		err = write_index_ext_header(&c, newfd, CACHE_EXT_FSMONITOR, sb.len) < 0
+			|| ce_write(&c, newfd, sb.buf, sb.len) < 0;
 		strbuf_release(&sb);
 		if (err)
 			return -1;
