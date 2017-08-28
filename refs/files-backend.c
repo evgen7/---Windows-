@@ -106,15 +106,6 @@ static void files_reflog_path(struct files_ref_store *refs,
 			      struct strbuf *sb,
 			      const char *refname)
 {
-	if (!refname) {
-		/*
-		 * FIXME: of course this is wrong in multi worktree
-		 * setting. To be fixed real soon.
-		 */
-		strbuf_addf(sb, "%s/logs", refs->gitcommondir);
-		return;
-	}
-
 	switch (ref_type(refname)) {
 	case REF_TYPE_PER_WORKTREE:
 	case REF_TYPE_PSEUDOREF:
@@ -537,7 +528,9 @@ retry:
 	if (!lock->lk)
 		lock->lk = xcalloc(1, sizeof(struct lock_file));
 
-	if (hold_lock_file_for_update(lock->lk, ref_file.buf, LOCK_NO_DEREF) < 0) {
+	if (hold_lock_file_for_update_timeout(
+			    lock->lk, ref_file.buf, LOCK_NO_DEREF,
+			    get_files_ref_lock_timeout_ms()) < 0) {
 		if (errno == ENOENT && --attempts_remaining > 0) {
 			/*
 			 * Maybe somebody just deleted one of the
@@ -632,11 +625,11 @@ retry:
 
 		/*
 		 * If the ref did not exist and we are creating it,
-		 * make sure there is no existing ref that conflicts
-		 * with refname:
+		 * make sure there is no existing packed ref that
+		 * conflicts with refname:
 		 */
 		if (refs_verify_refname_available(
-				    &refs->base, refname,
+				    refs->packed_ref_store, refname,
 				    extras, skip, err))
 			goto error_return;
 	}
@@ -865,7 +858,9 @@ static int create_reflock(const char *path, void *cb)
 {
 	struct lock_file *lk = cb;
 
-	return hold_lock_file_for_update(lk, path, LOCK_NO_DEREF) < 0 ? -1 : 0;
+	return hold_lock_file_for_update_timeout(
+			lk, path, LOCK_NO_DEREF,
+			get_files_ref_lock_timeout_ms()) < 0 ? -1 : 0;
 }
 
 /*
@@ -939,7 +934,7 @@ static struct ref_lock *lock_ref_sha1_basic(struct files_ref_store *refs,
 	 * our refname.
 	 */
 	if (is_null_oid(&lock->old_oid) &&
-	    refs_verify_refname_available(&refs->base, refname,
+	    refs_verify_refname_available(refs->packed_ref_store, refname,
 					  extras, skip, err)) {
 		last_errno = ENOTDIR;
 		goto error_return;
@@ -1095,8 +1090,9 @@ static int files_pack_refs(struct ref_store *ref_store, unsigned int flags)
 	struct ref_iterator *iter;
 	int ok;
 	struct ref_to_prune *refs_to_prune = NULL;
+	struct strbuf err = STRBUF_INIT;
 
-	lock_packed_refs(refs->packed_ref_store, LOCK_DIE_ON_ERROR);
+	packed_refs_lock(refs->packed_ref_store, LOCK_DIE_ON_ERROR, &err);
 
 	iter = cache_ref_iterator_begin(get_loose_ref_cache(refs), NULL, 0);
 	while ((ok = ref_iterator_advance(iter)) == ITER_OK) {
@@ -1129,10 +1125,12 @@ static int files_pack_refs(struct ref_store *ref_store, unsigned int flags)
 	if (ok != ITER_DONE)
 		die("error while iterating over references");
 
-	if (commit_packed_refs(refs->packed_ref_store))
-		die_errno("unable to overwrite old ref-pack file");
+	if (commit_packed_refs(refs->packed_ref_store, &err))
+		die("unable to overwrite old ref-pack file: %s", err.buf);
+	packed_refs_unlock(refs->packed_ref_store);
 
 	prune_refs(refs, refs_to_prune);
+	strbuf_release(&err);
 	return 0;
 }
 
@@ -1147,23 +1145,15 @@ static int files_delete_refs(struct ref_store *ref_store, const char *msg,
 	if (!refnames->nr)
 		return 0;
 
-	result = repack_without_refs(refs->packed_ref_store, refnames, &err);
-	if (result) {
-		/*
-		 * If we failed to rewrite the packed-refs file, then
-		 * it is unsafe to try to remove loose refs, because
-		 * doing so might expose an obsolete packed value for
-		 * a reference that might even point at an object that
-		 * has been garbage collected.
-		 */
-		if (refnames->nr == 1)
-			error(_("could not delete reference %s: %s"),
-			      refnames->items[0].string, err.buf);
-		else
-			error(_("could not delete references: %s"), err.buf);
+	if (packed_refs_lock(refs->packed_ref_store, 0, &err))
+		goto error;
 
-		goto out;
+	if (repack_without_refs(refs->packed_ref_store, refnames, &err)) {
+		packed_refs_unlock(refs->packed_ref_store);
+		goto error;
 	}
+
+	packed_refs_unlock(refs->packed_ref_store);
 
 	for (i = 0; i < refnames->nr; i++) {
 		const char *refname = refnames->items[i].string;
@@ -1172,9 +1162,24 @@ static int files_delete_refs(struct ref_store *ref_store, const char *msg,
 			result |= error(_("could not remove reference %s"), refname);
 	}
 
-out:
 	strbuf_release(&err);
 	return result;
+
+error:
+	/*
+	 * If we failed to rewrite the packed-refs file, then it is
+	 * unsafe to try to remove loose refs, because doing so might
+	 * expose an obsolete packed value for a reference that might
+	 * even point at an object that has been garbage collected.
+	 */
+	if (refnames->nr == 1)
+		error(_("could not delete reference %s: %s"),
+		      refnames->items[0].string, err.buf);
+	else
+		error(_("could not delete references: %s"), err.buf);
+
+	strbuf_release(&err);
+	return -1;
 }
 
 /*
@@ -1244,9 +1249,9 @@ static int commit_ref_update(struct files_ref_store *refs,
 			     const struct object_id *oid, const char *logmsg,
 			     struct strbuf *err);
 
-static int files_rename_ref(struct ref_store *ref_store,
+static int files_copy_or_rename_ref(struct ref_store *ref_store,
 			    const char *oldrefname, const char *newrefname,
-			    const char *logmsg)
+			    const char *logmsg, int copy)
 {
 	struct files_ref_store *refs =
 		files_downcast(ref_store, REF_STORE_WRITE, "rename_ref");
@@ -1278,8 +1283,12 @@ static int files_rename_ref(struct ref_store *ref_store,
 	}
 
 	if (flag & REF_ISSYMREF) {
-		ret = error("refname %s is a symbolic ref, renaming it is not supported",
-			    oldrefname);
+		if (copy)
+			ret = error("refname %s is a symbolic ref, copying it is not supported",
+				    oldrefname);
+		else
+			ret = error("refname %s is a symbolic ref, renaming it is not supported",
+				    oldrefname);
 		goto out;
 	}
 	if (!refs_rename_ref_available(&refs->base, oldrefname, newrefname)) {
@@ -1287,13 +1296,19 @@ static int files_rename_ref(struct ref_store *ref_store,
 		goto out;
 	}
 
-	if (log && rename(sb_oldref.buf, tmp_renamed_log.buf)) {
+	if (!copy && log && rename(sb_oldref.buf, tmp_renamed_log.buf)) {
 		ret = error("unable to move logfile logs/%s to logs/"TMP_RENAMED_LOG": %s",
 			    oldrefname, strerror(errno));
 		goto out;
 	}
 
-	if (refs_delete_ref(&refs->base, logmsg, oldrefname,
+	if (copy && log && copy_file(tmp_renamed_log.buf, sb_oldref.buf, 0644)) {
+		ret = error("unable to copy logfile logs/%s to logs/"TMP_RENAMED_LOG": %s",
+			    oldrefname, strerror(errno));
+		goto out;
+	}
+
+	if (!copy && refs_delete_ref(&refs->base, logmsg, oldrefname,
 			    orig_oid.hash, REF_NODEREF)) {
 		error("unable to delete old %s", oldrefname);
 		goto rollback;
@@ -1306,7 +1321,7 @@ static int files_rename_ref(struct ref_store *ref_store,
 	 * the safety anyway; we want to delete the reference whatever
 	 * its current value.
 	 */
-	if (!refs_read_ref_full(&refs->base, newrefname,
+	if (!copy && !refs_read_ref_full(&refs->base, newrefname,
 				RESOLVE_REF_READING | RESOLVE_REF_NO_RECURSE,
 				oid.hash, NULL) &&
 	    refs_delete_ref(&refs->base, NULL, newrefname,
@@ -1337,7 +1352,10 @@ static int files_rename_ref(struct ref_store *ref_store,
 	lock = lock_ref_sha1_basic(refs, newrefname, NULL, NULL, NULL,
 				   REF_NODEREF, NULL, &err);
 	if (!lock) {
-		error("unable to rename '%s' to '%s': %s", oldrefname, newrefname, err.buf);
+		if (copy)
+			error("unable to copy '%s' to '%s': %s", oldrefname, newrefname, err.buf);
+		else
+			error("unable to rename '%s' to '%s': %s", oldrefname, newrefname, err.buf);
 		strbuf_release(&err);
 		goto rollback;
 	}
@@ -1386,6 +1404,22 @@ static int files_rename_ref(struct ref_store *ref_store,
 	strbuf_release(&tmp_renamed_log);
 
 	return ret;
+}
+
+static int files_rename_ref(struct ref_store *ref_store,
+			    const char *oldrefname, const char *newrefname,
+			    const char *logmsg)
+{
+	return files_copy_or_rename_ref(ref_store, oldrefname,
+				 newrefname, logmsg, 0);
+}
+
+static int files_copy_ref(struct ref_store *ref_store,
+			    const char *oldrefname, const char *newrefname,
+			    const char *logmsg)
+{
+	return files_copy_or_rename_ref(ref_store, oldrefname,
+				 newrefname, logmsg, 1);
 }
 
 static int close_ref(struct ref_lock *lock)
@@ -2045,21 +2079,61 @@ static struct ref_iterator_vtable files_reflog_iterator_vtable = {
 	files_reflog_iterator_abort
 };
 
-static struct ref_iterator *files_reflog_iterator_begin(struct ref_store *ref_store)
+static struct ref_iterator *reflog_iterator_begin(struct ref_store *ref_store,
+						  const char *gitdir)
 {
-	struct files_ref_store *refs =
-		files_downcast(ref_store, REF_STORE_READ,
-			       "reflog_iterator_begin");
 	struct files_reflog_iterator *iter = xcalloc(1, sizeof(*iter));
 	struct ref_iterator *ref_iterator = &iter->base;
 	struct strbuf sb = STRBUF_INIT;
 
 	base_ref_iterator_init(ref_iterator, &files_reflog_iterator_vtable);
-	files_reflog_path(refs, &sb, NULL);
+	strbuf_addf(&sb, "%s/logs", gitdir);
 	iter->dir_iterator = dir_iterator_begin(sb.buf);
 	iter->ref_store = ref_store;
 	strbuf_release(&sb);
+
 	return ref_iterator;
+}
+
+static enum iterator_selection reflog_iterator_select(
+	struct ref_iterator *iter_worktree,
+	struct ref_iterator *iter_common,
+	void *cb_data)
+{
+	if (iter_worktree) {
+		/*
+		 * We're a bit loose here. We probably should ignore
+		 * common refs if they are accidentally added as
+		 * per-worktree refs.
+		 */
+		return ITER_SELECT_0;
+	} else if (iter_common) {
+		if (ref_type(iter_common->refname) == REF_TYPE_NORMAL)
+			return ITER_SELECT_1;
+
+		/*
+		 * The main ref store may contain main worktree's
+		 * per-worktree refs, which should be ignored
+		 */
+		return ITER_SKIP_1;
+	} else
+		return ITER_DONE;
+}
+
+static struct ref_iterator *files_reflog_iterator_begin(struct ref_store *ref_store)
+{
+	struct files_ref_store *refs =
+		files_downcast(ref_store, REF_STORE_READ,
+			       "reflog_iterator_begin");
+
+	if (!strcmp(refs->gitdir, refs->gitcommondir)) {
+		return reflog_iterator_begin(ref_store, refs->gitcommondir);
+	} else {
+		return merge_ref_iterator_begin(
+			reflog_iterator_begin(ref_store, refs->gitdir),
+			reflog_iterator_begin(ref_store, refs->gitcommondir),
+			reflog_iterator_select, refs);
+	}
 }
 
 /*
@@ -2566,10 +2640,18 @@ static int files_transaction_finish(struct ref_store *ref_store,
 		}
 	}
 
-	if (repack_without_refs(refs->packed_ref_store, &refs_to_delete, err)) {
+	if (packed_refs_lock(refs->packed_ref_store, 0, err)) {
 		ret = TRANSACTION_GENERIC_ERROR;
 		goto cleanup;
 	}
+
+	if (repack_without_refs(refs->packed_ref_store, &refs_to_delete, err)) {
+		ret = TRANSACTION_GENERIC_ERROR;
+		packed_refs_unlock(refs->packed_ref_store);
+		goto cleanup;
+	}
+
+	packed_refs_unlock(refs->packed_ref_store);
 
 	/* Delete the reflogs of any references that were deleted: */
 	for_each_string_list_item(ref_to_delete, &refs_to_delete) {
@@ -2677,9 +2759,7 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 		}
 	}
 
-	if (lock_packed_refs(refs->packed_ref_store, 0)) {
-		strbuf_addf(err, "unable to lock packed-refs file: %s",
-			    strerror(errno));
+	if (packed_refs_lock(refs->packed_ref_store, 0, err)) {
 		ret = TRANSACTION_GENERIC_ERROR;
 		goto cleanup;
 	}
@@ -2693,14 +2773,13 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 				       &update->new_oid);
 	}
 
-	if (commit_packed_refs(refs->packed_ref_store)) {
-		strbuf_addf(err, "unable to commit packed-refs file: %s",
-			    strerror(errno));
+	if (commit_packed_refs(refs->packed_ref_store, err)) {
 		ret = TRANSACTION_GENERIC_ERROR;
 		goto cleanup;
 	}
 
 cleanup:
+	packed_refs_unlock(refs->packed_ref_store);
 	transaction->state = REF_TRANSACTION_CLOSED;
 	string_list_clear(&affected_refnames, 0);
 	return ret;
@@ -2893,6 +2972,7 @@ struct ref_storage_be refs_be_files = {
 	files_create_symref,
 	files_delete_refs,
 	files_rename_ref,
+	files_copy_ref,
 
 	files_ref_iterator_begin,
 	files_read_raw_ref,
