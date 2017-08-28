@@ -791,7 +791,6 @@ LIB_OBJS += ewah/ewah_rlw.o
 LIB_OBJS += exec_cmd.o
 LIB_OBJS += fetch-pack.o
 LIB_OBJS += fsck.o
-LIB_OBJS += fsmonitor.o
 LIB_OBJS += gettext.o
 LIB_OBJS += gpg-interface.o
 LIB_OBJS += graph.o
@@ -2454,10 +2453,6 @@ $(SP_OBJ): %.sp: %.c GIT-CFLAGS FORCE
 
 .PHONY: sparse $(SP_OBJ)
 sparse: $(SP_OBJ)
-
-.PHONY: style
-style:
-	git clang-format --style file --diff --extensions c,h
 
 check: common-cmds.h
 	@if sparse; \

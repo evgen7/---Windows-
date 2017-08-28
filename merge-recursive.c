@@ -2043,7 +2043,7 @@ int merge_recursive(struct merge_options *o,
 		/* if there is no common ancestor, use an empty tree */
 		struct tree *tree;
 
-		tree = lookup_tree(current_hash->empty_tree);
+		tree = lookup_tree(&empty_tree_oid);
 		merged_common_ancestors = make_virtual_commit(tree, "ancestor");
 	}
 

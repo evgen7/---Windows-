@@ -39,35 +39,6 @@ const struct object_id empty_blob_oid = {
 	EMPTY_BLOB_SHA1_BIN_LITERAL
 };
 
-static inline void git_hash_sha1_init(void *ctx)
-{
-	git_SHA1_Init((git_SHA_CTX *)ctx);
-}
-
-static inline void git_hash_sha1_update(void *ctx, const void *data, size_t len)
-{
-	git_SHA1_Update((git_SHA_CTX *)ctx, data, len);
-}
-
-static inline void git_hash_sha1_final(unsigned char *hash, void *ctx)
-{
-	git_SHA1_Final(hash, (git_SHA_CTX *)ctx);
-}
-
-const struct git_hash_algo hash_algos[1] = {
-	[GIT_HASH_SHA1] = {
-		.name = "sha-1",
-		.ctxsz = sizeof(git_SHA_CTX),
-		.rawsz = GIT_SHA1_RAWSZ,
-		.hexsz = GIT_SHA1_HEXSZ,
-		.init_fn = git_hash_sha1_init,
-		.update_fn = git_hash_sha1_update,
-		.final_fn = git_hash_sha1_final,
-		.empty_tree = &empty_tree_oid,
-		.empty_blob = &empty_blob_oid,
-	},
-};
-
 /*
  * This is meant to hold a *small* number of objects that you would
  * want read_sha1_file() to be able to return, but yet you do not want
@@ -1920,6 +1891,7 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	origlen = path->len;
 	strbuf_complete(path, '/');
 	strbuf_addf(path, "%02x", subdir_nr);
+	baselen = path->len;
 
 	dir = opendir(path->buf);
 	if (!dir) {
@@ -1929,15 +1901,12 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 		return r;
 	}
 
-	strbuf_addch(path, '/');
-	baselen = path->len;
-
 	while ((de = readdir(dir))) {
 		if (is_dot_or_dotdot(de->d_name))
 			continue;
 
 		strbuf_setlen(path, baselen);
-		strbuf_addstr(path, de->d_name);
+		strbuf_addf(path, "/%s", de->d_name);
 
 		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2)  {
 			char hex[GIT_MAX_HEXSZ+1];
@@ -1963,7 +1932,7 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	}
 	closedir(dir);
 
-	strbuf_setlen(path, baselen - 1); /* chomp the '/' that we added */
+	strbuf_setlen(path, baselen);
 	if (!r && subdir_cb)
 		r = subdir_cb(subdir_nr, path->buf, data);
 
