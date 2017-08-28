@@ -1176,26 +1176,6 @@ static void prune_one(struct rerere_id *id,
 		unlink_rr_item(id);
 }
 
-static void config_get_expiry(const char *key, timestamp_t *cutoff, timestamp_t now)
-{
-	char *expiry_string;
-	intmax_t days;
-	timestamp_t when;
-
-	if (git_config_get_string(key, &expiry_string))
-		return;
-
-	if (git_parse_signed(expiry_string, &days, maximum_signed_value_of_type(int))) {
-		const int scale = 86400;
-		*cutoff = now - days * scale;
-		return;
-	}
-
-	if (!parse_expiry_date(expiry_string, &when)) {
-		*cutoff = when;
-	}
-}
-
 void rerere_gc(struct string_list *rr)
 {
 	struct string_list to_remove = STRING_LIST_INIT_DUP;
@@ -1209,8 +1189,8 @@ void rerere_gc(struct string_list *rr)
 	if (setup_rerere(rr, 0) < 0)
 		return;
 
-	config_get_expiry("gc.rerereresolved", &cutoff_resolve, now);
-	config_get_expiry("gc.rerereunresolved", &cutoff_noresolve, now);
+	git_config_get_expiry_in_days("gc.rerereresolved", &cutoff_resolve, now);
+	git_config_get_expiry_in_days("gc.rerereunresolved", &cutoff_noresolve, now);
 	git_config(git_default_config, NULL);
 	dir = opendir(git_path("rr-cache"));
 	if (!dir)

@@ -1927,7 +1927,7 @@ int merge_trees(struct merge_options *o,
 	}
 
 	if (oid_eq(&common->object.oid, &merge->object.oid)) {
-		output(o, 0, _("Already up-to-date!"));
+		output(o, 0, _("Already up to date!"));
 		*result = head;
 		return 1;
 	}
@@ -2015,7 +2015,7 @@ int merge_recursive(struct merge_options *o,
 {
 	struct commit_list *iter;
 	struct commit *merged_common_ancestors;
-	FAKE_INIT(struct tree *, mrtree, NULL);
+	struct tree *mrtree = mrtree;
 	int clean;
 
 	if (show(o, 4)) {

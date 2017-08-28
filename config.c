@@ -770,7 +770,7 @@ static int parse_unit_factor(const char *end, uintmax_t *val)
 	return 0;
 }
 
-int git_parse_signed(const char *value, intmax_t *ret, intmax_t max)
+static int git_parse_signed(const char *value, intmax_t *ret, intmax_t max)
 {
 	if (value && *value) {
 		char *end;
@@ -800,7 +800,7 @@ int git_parse_signed(const char *value, intmax_t *ret, intmax_t max)
 	return 0;
 }
 
-int git_parse_unsigned(const char *value, uintmax_t *ret, uintmax_t max)
+static int git_parse_unsigned(const char *value, uintmax_t *ret, uintmax_t max)
 {
 	if (value && *value) {
 		char *end;
@@ -1239,13 +1239,20 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
+	if (!strcmp(var, "core.hidedotfiles")) {
+		if (value && !strcasecmp(value, "dotgitonly"))
+			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
+		else
+			hide_dotfiles = git_config_bool(var, value);
+	}
+
 	if (!strcmp(var, "core.fsmonitor")) {
 		core_fsmonitor = git_config_bool(var, value);
 		return 0;
 	}
 
 	/* Add other config variables here and to Documentation/config.txt. */
-	return platform_core_config(var, value);
+	return 0;
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -2089,6 +2096,28 @@ int git_config_get_expiry(const char *key, const char **output)
 			git_die_config(key, _("Invalid %s: '%s'"), key, *output);
 	}
 	return ret;
+}
+
+int git_config_get_expiry_in_days(const char *key, timestamp_t *expiry, timestamp_t now)
+{
+	char *expiry_string;
+	intmax_t days;
+	timestamp_t when;
+
+	if (git_config_get_string(key, &expiry_string))
+		return 1; /* no such thing */
+
+	if (git_parse_signed(expiry_string, &days, maximum_signed_value_of_type(int))) {
+		const int scale = 86400;
+		*expiry = now - days * scale;
+		return 0;
+	}
+
+	if (!parse_expiry_date(expiry_string, &when)) {
+		*expiry = when;
+		return 0;
+	}
+	return -1; /* thing exists but cannot be parsed */
 }
 
 int git_config_get_untracked_cache(void)

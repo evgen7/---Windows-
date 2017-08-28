@@ -30,7 +30,7 @@ static void add_head_info(struct worktree *wt)
 
 	target = refs_resolve_ref_unsafe(get_worktree_ref_store(wt),
 					 "HEAD",
-					 RESOLVE_REF_READING,
+					 0,
 					 wt->head_sha1, &flags);
 	if (!target)
 		return;
@@ -471,5 +471,27 @@ int submodule_uses_worktrees(const char *path)
 		break;
 	}
 	closedir(dir);
+	return ret;
+}
+
+int other_head_refs(each_ref_fn fn, void *cb_data)
+{
+	struct worktree **worktrees, **p;
+	int ret = 0;
+
+	worktrees = get_worktrees(0);
+	for (p = worktrees; *p; p++) {
+		struct worktree *wt = *p;
+		struct ref_store *refs;
+
+		if (wt->is_current)
+			continue;
+
+		refs = get_worktree_ref_store(wt);
+		ret = refs_head_ref(refs, fn, cb_data);
+		if (ret)
+			break;
+	}
+	free_worktrees(worktrees);
 	return ret;
 }

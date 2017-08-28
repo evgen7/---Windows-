@@ -765,12 +765,13 @@ static void prepare_to_commit(struct commit_list *remoteheads)
 	struct strbuf msg = STRBUF_INIT;
 	strbuf_addbuf(&msg, &merge_msg);
 	strbuf_addch(&msg, '\n');
+	if (squash)
+		BUG("the control must not reach here under --squash");
 	if (0 < option_edit)
 		strbuf_commented_addf(&msg, _(merge_editor_comment), comment_line_char);
 	if (signoff)
 		append_signoff(&msg, ignore_non_trailer(msg.buf, msg.len), 0);
-	if (!squash)
-		write_merge_heads(remoteheads);
+	write_merge_heads(remoteheads);
 	write_file_buf(git_path_merge_msg(), msg.buf, msg.len);
 	if (run_commit_hook(0 < option_edit, get_index_file(), "prepare-commit-msg",
 			    git_path_merge_msg(), "merge", NULL))
@@ -1358,7 +1359,7 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 		 * If head can reach all the merge then we are up to date.
 		 * but first the most common case of merging one remote.
 		 */
-		finish_up_to_date(_("Already up-to-date."));
+		finish_up_to_date(_("Already up to date."));
 		goto done;
 	} else if (fast_forward != FF_NO && !remoteheads->next &&
 			!common->next &&
@@ -1441,7 +1442,7 @@ int cmd_merge(int argc, const char **argv, const char *prefix)
 			}
 		}
 		if (up_to_date) {
-			finish_up_to_date(_("Already up-to-date. Yeeah!"));
+			finish_up_to_date(_("Already up to date. Yeeah!"));
 			goto done;
 		}
 	}
