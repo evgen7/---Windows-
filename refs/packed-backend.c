@@ -1,11 +1,11 @@
 #include "../cache.h"
+#include "../config.h"
 #include "../refs.h"
 #include "refs-internal.h"
 #include "ref-cache.h"
 #include "packed-backend.h"
 #include "../iterator.h"
 #include "../lockfile.h"
-#include "../config.h"
 
 struct packed_ref_cache {
 	struct ref_cache *cache;
@@ -134,8 +134,6 @@ static void clear_packed_ref_cache(struct packed_ref_store *refs)
 	if (refs->cache) {
 		struct packed_ref_cache *cache = refs->cache;
 
-		if (is_lock_file_locked(&refs->lock))
-			die("BUG: packed-ref cache cleared while locked");
 		refs->cache = NULL;
 		release_packed_ref_cache(cache);
 	}
@@ -232,6 +230,9 @@ static struct packed_ref_cache *read_packed_refs(const char *packed_refs_file)
 		const char *refname;
 		const char *traits;
 
+		if (!line.len || line.buf[line.len - 1] != '\n')
+			die("unterminated line in %s: %s", packed_refs_file, line.buf);
+
 		if (skip_prefix(line.buf, "# pack-refs with:", &traits)) {
 			if (strstr(traits, " fully-peeled "))
 				peeled = PEELED_FULLY;
@@ -256,9 +257,7 @@ static struct packed_ref_cache *read_packed_refs(const char *packed_refs_file)
 			    (peeled == PEELED_TAGS && starts_with(refname, "refs/tags/")))
 				last->flag |= REF_KNOWS_PEELED;
 			add_ref_entry(dir, last);
-			continue;
-		}
-		if (last &&
+		} else if (last &&
 		    line.buf[0] == '^' &&
 		    line.len == PEELED_LINE_LENGTH &&
 		    line.buf[PEELED_LINE_LENGTH - 1] == '\n' &&
@@ -270,6 +269,9 @@ static struct packed_ref_cache *read_packed_refs(const char *packed_refs_file)
 			 * reference:
 			 */
 			last->flag |= REF_KNOWS_PEELED;
+		} else {
+			strbuf_setlen(&line, line.len - 1);
+			die("unexpected line in %s: %s", packed_refs_file, line.buf);
 		}
 	}
 
@@ -564,6 +566,29 @@ int packed_refs_lock(struct ref_store *ref_store, int flags, struct strbuf *err)
 	return 0;
 }
 
+void packed_refs_unlock(struct ref_store *ref_store)
+{
+	struct packed_ref_store *refs = packed_downcast(
+			ref_store,
+			REF_STORE_READ | REF_STORE_WRITE,
+			"packed_refs_unlock");
+
+	if (!is_lock_file_locked(&refs->lock))
+		die("BUG: packed_refs_unlock() called when not locked");
+	rollback_lock_file(&refs->lock);
+	release_packed_ref_cache(refs->cache);
+}
+
+int packed_refs_is_locked(struct ref_store *ref_store)
+{
+	struct packed_ref_store *refs = packed_downcast(
+			ref_store,
+			REF_STORE_READ | REF_STORE_WRITE,
+			"packed_refs_is_locked");
+
+	return is_lock_file_locked(&refs->lock);
+}
+
 /*
  * The packed-refs header line that we write out.  Perhaps other
  * traits will be added later.  The trailing space is required.
@@ -590,11 +615,18 @@ int commit_packed_refs(struct ref_store *ref_store, struct strbuf *err)
 	struct strbuf sb = STRBUF_INIT;
 	FILE *out;
 	struct ref_iterator *iter;
+	char *packed_refs_path;
 
 	if (!is_lock_file_locked(&refs->lock))
 		die("BUG: commit_packed_refs() called when unlocked");
 
-	strbuf_addf(&sb, "%s.new", refs->path);
+	/*
+	 * If packed-refs is a symlink, we want to overwrite the
+	 * symlinked-to file, not the symlink itself. Also, put the
+	 * staging file next to it:
+	 */
+	packed_refs_path = get_locked_file_path(&refs->lock);
+	strbuf_addf(&sb, "%s.new", packed_refs_path);
 	if (create_tempfile(&refs->tempfile, sb.buf) < 0) {
 		strbuf_addf(err, "unable to create file %s: %s",
 			    sb.buf, strerror(errno));
@@ -637,7 +669,7 @@ int commit_packed_refs(struct ref_store *ref_store, struct strbuf *err)
 		goto error;
 	}
 
-	if (rename_tempfile(&refs->tempfile, refs->path)) {
+	if (rename_tempfile(&refs->tempfile, packed_refs_path)) {
 		strbuf_addf(err, "error replacing %s: %s",
 			    refs->path, strerror(errno));
 		goto out;
@@ -650,33 +682,16 @@ error:
 	delete_tempfile(&refs->tempfile);
 
 out:
-	rollback_lock_file(&refs->lock);
-	release_packed_ref_cache(packed_ref_cache);
+	free(packed_refs_path);
 	return ret;
-}
-
-/*
- * Rollback the lockfile for the packed-refs file, and discard the
- * in-memory packed reference cache.  (The packed-refs file will be
- * read anew if it is needed again after this function is called.)
- */
-static void rollback_packed_refs(struct packed_ref_store *refs)
-{
-	struct packed_ref_cache *packed_ref_cache = get_packed_ref_cache(refs);
-
-	packed_assert_main_repository(refs, "rollback_packed_refs");
-
-	if (!is_lock_file_locked(&refs->lock))
-		die("BUG: packed-refs not locked");
-	rollback_lock_file(&refs->lock);
-	release_packed_ref_cache(packed_ref_cache);
-	clear_packed_ref_cache(refs);
 }
 
 /*
  * Rewrite the packed-refs file, omitting any refs listed in
  * 'refnames'. On error, leave packed-refs unchanged, write an error
- * message to 'err', and return a nonzero value.
+ * message to 'err', and return a nonzero value. The packed refs lock
+ * must be held when calling this function; it will still be held when
+ * the function returns.
  *
  * The refs in 'refnames' needn't be sorted. `err` must not be NULL.
  */
@@ -693,6 +708,9 @@ int repack_without_refs(struct ref_store *ref_store,
 	packed_assert_main_repository(refs, "repack_without_refs");
 	assert(err);
 
+	if (!is_lock_file_locked(&refs->lock))
+		die("BUG: repack_without_refs called without holding lock");
+
 	/* Look for a packed ref */
 	for_each_string_list_item(refname, refnames) {
 		if (get_packed_ref(refs, refname->string)) {
@@ -705,9 +723,6 @@ int repack_without_refs(struct ref_store *ref_store,
 	if (!needs_repacking)
 		return 0; /* no refname exists in packed refs */
 
-	if (packed_refs_lock(&refs->base, 0, err))
-		return -1;
-
 	packed = get_packed_refs(refs);
 
 	/* Remove refnames from the cache */
@@ -719,7 +734,7 @@ int repack_without_refs(struct ref_store *ref_store,
 		 * All packed entries disappeared while we were
 		 * acquiring the lock.
 		 */
-		rollback_packed_refs(refs);
+		clear_packed_ref_cache(refs);
 		return 0;
 	}
 
@@ -791,6 +806,13 @@ static int packed_rename_ref(struct ref_store *ref_store,
 	die("BUG: packed reference store does not support renaming references");
 }
 
+static int packed_copy_ref(struct ref_store *ref_store,
+			   const char *oldrefname, const char *newrefname,
+			   const char *logmsg)
+{
+	die("BUG: packed reference store does not support copying references");
+}
+
 static struct ref_iterator *packed_reflog_iterator_begin(struct ref_store *ref_store)
 {
 	return empty_ref_iterator_begin();
@@ -856,6 +878,7 @@ struct ref_storage_be refs_be_packed = {
 	packed_create_symref,
 	packed_delete_refs,
 	packed_rename_ref,
+	packed_copy_ref,
 
 	packed_ref_iterator_begin,
 	packed_read_raw_ref,
