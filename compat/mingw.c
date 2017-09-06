@@ -202,7 +202,7 @@ static int ask_yes_no_if_possible(const char *format, ...)
 	}
 }
 
-int mingw_core_config(const char *var, const char *value)
+int mingw_core_config(const char *var, const char *value, void *cb)
 {
 	return 0;
 }
