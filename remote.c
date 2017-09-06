@@ -618,6 +618,19 @@ struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec)
 	return parse_refspec_internal(nr_refspec, refspec, 1, 0);
 }
 
+void add_and_parse_fetch_refspec(struct remote *remote, const char *refspec)
+{
+	struct refspec *rs;
+
+	add_fetch_refspec(remote, refspec);
+	rs = parse_fetch_refspec(1, &refspec);
+	REALLOC_ARRAY(remote->fetch, remote->fetch_refspec_nr);
+	remote->fetch[remote->fetch_refspec_nr - 1] = *rs;
+
+	/* Not free_refspecs(), as we copied its pointers above */
+	free(rs);
+}
+
 struct refspec *parse_push_refspec(int nr_refspec, const char **refspec)
 {
 	return parse_refspec_internal(nr_refspec, refspec, 0, 0);
@@ -1524,7 +1537,9 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 			     int force_update)
 {
 	struct ref *ref;
+	int allow_lazy_cas = 0;
 
+	git_config_get_bool("push.allowLazyForceWithLease", &allow_lazy_cas);
 	for (ref = remote_refs; ref; ref = ref->next) {
 		int force_ref_update = ref->force || force_update;
 		int reject_reason = 0;
@@ -1551,7 +1566,9 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 		 * branch.
 		 */
 		if (ref->expect_old_sha1) {
-			if (oidcmp(&ref->old_oid, &ref->old_oid_expect))
+			if (!allow_lazy_cas && ref->lazy_cas)
+				reject_reason = REF_STATUS_REJECT_LAZY_CAS;
+			else if (oidcmp(&ref->old_oid, &ref->old_oid_expect))
 				reject_reason = REF_STATUS_REJECT_STALE;
 			else
 				/* If the ref isn't stale then force the update. */
@@ -2348,10 +2365,13 @@ static void apply_cas(struct push_cas_option *cas,
 		if (!refname_match(entry->refname, ref->name))
 			continue;
 		ref->expect_old_sha1 = 1;
-		if (!entry->use_tracking)
+		if (!entry->use_tracking) {
 			oidcpy(&ref->old_oid_expect, &entry->expect);
-		else if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
-			oidclr(&ref->old_oid_expect);
+		} else {
+			ref->lazy_cas = 1;
+			if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
+				oidclr(&ref->old_oid_expect);
+		}
 		return;
 	}
 
@@ -2360,6 +2380,7 @@ static void apply_cas(struct push_cas_option *cas,
 		return;
 
 	ref->expect_old_sha1 = 1;
+	ref->lazy_cas = 1;
 	if (remote_tracking(remote, ref->name, &ref->old_oid_expect))
 		oidclr(&ref->old_oid_expect);
 }

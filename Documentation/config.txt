@@ -413,6 +413,13 @@ core.protectNTFS::
 	8.3 "short" names.
 	Defaults to `true` on Windows, and `false` elsewhere.
 
+core.fsmonitor::
+	If set to true, call the query-fsmonitor hook proc which will
+	identify all files that may have had changes since the last
+	request. This information is used to speed up operations like
+	'git commit' and 'git status' by limiting what git must scan to
+	detect changes.
+
 core.trustctime::
 	If false, the ctime differences between the index and the
 	working tree are ignored; useful when the inode change time
@@ -1990,8 +1997,7 @@ http.maxRequests::
 http.minSessions::
 	The number of curl sessions (counted across slots) to be kept across
 	requests. They will not be ended with curl_easy_cleanup() until
-	http_cleanup() is invoked. If USE_CURL_MULTI is not defined, this
-	value will be capped at 1. Defaults to 1.
+	http_cleanup() is invoked. Defaults to 1.
 
 http.postBuffer::
 	Maximum size in bytes of the buffer used by smart HTTP
@@ -2607,6 +2613,11 @@ new default).
 
 --
 
+push.allowLazyForceWithLease::
+	If set to true, allow the `--force-with-lease` option
+	without the expected object name (i.e. expecting the objects
+	at the tip of corresponding remote-tracking branches).
+
 push.followTags::
 	If set to true enable `--follow-tags` option by default.  You
 	may override this configuration at time of push by specifying
@@ -3017,6 +3028,10 @@ status.short::
 status.branch::
 	Set to true to enable --branch by default in linkgit:git-status[1].
 	The option --no-branch takes precedence over this variable.
+
+status.inProgress::
+	Set to true to enable --in-progress by default in linkgit:git-status[1].
+	The option --no-in-progress takes precedence over this variable.
 
 status.displayCommentPrefix::
 	If set to true, linkgit:git-status[1] will insert a comment

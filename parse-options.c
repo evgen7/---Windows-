@@ -603,7 +603,7 @@ static int usage_with_options_internal(struct parse_opt_ctx_t *ctx,
 		usagestr++;
 	}
 
-	if (opts->type != OPTION_GROUP)
+	if (opts->type != OPTION_GROUP && opts->type != OPTION_END)
 		fputc('\n', outfile);
 
 	for (; opts->type != OPTION_END; opts++) {

@@ -1,6 +1,8 @@
 #ifndef WORKTREE_H
 #define WORKTREE_H
 
+#include "refs.h"
+
 struct worktree {
 	char *path;
 	char *id;
@@ -58,6 +60,17 @@ extern int is_main_worktree(const struct worktree *wt);
 extern const char *is_worktree_locked(struct worktree *wt);
 
 /*
+ * Return zero if the worktree is in good condition.
+ */
+extern int validate_worktree(const struct worktree *wt, int quiet);
+
+/*
+ * Update worktrees/xxx/gitdir with the new path.
+ */
+extern int update_worktree_location(struct worktree *wt,
+				    const char *path_);
+
+/*
  * Free up the memory for worktree(s)
  */
 extern void free_worktrees(struct worktree **);
@@ -69,6 +82,12 @@ extern void free_worktrees(struct worktree **);
  */
 extern const struct worktree *find_shared_symref(const char *symref,
 						 const char *target);
+
+/*
+ * Similar to head_ref() for all HEADs _except_ one from the current
+ * worktree, which is covered by head_ref().
+ */
+int other_head_refs(each_ref_fn fn, void *cb_data);
 
 int is_worktree_being_rebased(const struct worktree *wt, const char *target);
 int is_worktree_being_bisected(const struct worktree *wt, const char *target);
