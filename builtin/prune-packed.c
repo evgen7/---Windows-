@@ -2,7 +2,6 @@
 #include "cache.h"
 #include "progress.h"
 #include "parse-options.h"
-#include "packfile.h"
 
 static const char * const prune_packed_usage[] = {
 	N_("git prune-packed [-n | --dry-run] [-q | --quiet]"),
@@ -38,7 +37,8 @@ static int prune_object(const struct object_id *oid, const char *path,
 void prune_packed_objects(int opts)
 {
 	if (opts & PRUNE_PACKED_VERBOSE)
-		progress = start_delayed_progress(_("Removing duplicate objects"), 256);
+		progress = start_progress_delay(_("Removing duplicate objects"),
+			256, 95, 2);
 
 	for_each_loose_file_in_objdir(get_object_directory(),
 				      prune_object, NULL, prune_subdir, &opts);

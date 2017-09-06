@@ -16,7 +16,10 @@ static inline void finddata2dirent(struct dirent *ent, WIN32_FIND_DATAW *fdata)
 	xwcstoutf(ent->d_name, fdata->cFileName, MAX_PATH * 3);
 
 	/* Set file type, based on WIN32_FIND_DATA */
-	if (fdata->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+	if ((fdata->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+			&& fdata->dwReserved0 == IO_REPARSE_TAG_SYMLINK)
+		ent->d_type = DT_LNK;
+	else if (fdata->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		ent->d_type = DT_DIR;
 	else
 		ent->d_type = DT_REG;
@@ -63,19 +66,23 @@ static int dirent_closedir(dirent_DIR *dir)
 
 DIR *dirent_opendir(const char *name)
 {
-	wchar_t pattern[MAX_PATH + 2]; /* + 2 for '/' '*' */
+	wchar_t pattern[MAX_LONG_PATH + 2]; /* + 2 for "\*" */
 	WIN32_FIND_DATAW fdata;
 	HANDLE h;
 	int len;
 	dirent_DIR *dir;
 
-	/* convert name to UTF-16 and check length < MAX_PATH */
-	if ((len = xutftowcs_path(pattern, name)) < 0)
+	/* convert name to UTF-16 and check length */
+	if ((len = xutftowcs_path_ex(pattern, name, MAX_LONG_PATH, -1,
+			MAX_PATH - 2, core_long_paths)) < 0)
 		return NULL;
 
-	/* append optional '/' and wildcard '*' */
+	/*
+	 * append optional '\' and wildcard '*'. Note: we need to use '\' as
+	 * Windows doesn't translate '/' to '\' for "\\?\"-prefixed paths.
+	 */
 	if (len && !is_dir_sep(pattern[len - 1]))
-		pattern[len++] = '/';
+		pattern[len++] = '\\';
 	pattern[len++] = '*';
 	pattern[len] = 0;
 
