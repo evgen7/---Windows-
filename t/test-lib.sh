@@ -44,6 +44,11 @@ GIT_BUILD_DIR="$TEST_DIRECTORY"/..
 : ${ASAN_OPTIONS=detect_leaks=0:abort_on_error=1}
 export ASAN_OPTIONS
 
+# If LSAN is in effect we _do_ want leak checking, but we still
+# want to abort so that we notice the problems.
+: ${LSAN_OPTIONS=abort_on_error=1}
+export LSAN_OPTIONS
+
 ################################################################
 # It appears that people try to run tests without building...
 "$GIT_BUILD_DIR/git" >/dev/null
@@ -99,7 +104,6 @@ unset VISUAL EMAIL LANGUAGE COLUMNS $("$PERL_PATH" -e '
 	my $ok = join("|", qw(
 		TRACE
 		DEBUG
-		USE_LOOKUP
 		TEST
 		.*_TEST
 		PROVE
@@ -275,7 +279,7 @@ then
 	test -z "$verbose" && verbose_only="$valgrind_only"
 elif test -n "$valgrind"
 then
-	verbose=t
+	test -z "$verbose_log" && verbose=t
 fi
 
 if test -n "$color"
@@ -1005,9 +1009,6 @@ case $uname_s in
 	find () {
 		/usr/bin/find "$@"
 	}
-	sum () {
-		md5sum "$@"
-	}
 	# git sees Windows-style pwd
 	pwd () {
 		builtin pwd -W
@@ -1184,6 +1185,12 @@ run_with_limited_cmdline () {
 }
 
 test_lazy_prereq CMDLINE_LIMIT 'run_with_limited_cmdline true'
+
+run_with_limited_stack () {
+	(ulimit -s 128 && "$@")
+}
+
+test_lazy_prereq ULIMIT_STACK_SIZE 'run_with_limited_stack true'
 
 build_option () {
 	git version --build-options |
