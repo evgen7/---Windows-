@@ -20,7 +20,7 @@ static const char *system_prefix(void)
 	    !(prefix = strip_path_suffix(argv0_path, GIT_EXEC_PATH)) &&
 	    !(prefix = strip_path_suffix(argv0_path, BINDIR)) &&
 	    !(prefix = strip_path_suffix(argv0_path, "git"))) {
-		prefix = FALLBACK_RUNTIME_PREFIX;
+		prefix = PREFIX;
 		trace_printf("RUNTIME_PREFIX requested, "
 				"but prefix computation failed.  "
 				"Using static fallback '%s'.\n", prefix);
@@ -45,7 +45,7 @@ void git_extract_argv0_path(const char *argv0)
 
 static const char *system_prefix(void)
 {
-	return FALLBACK_RUNTIME_PREFIX;
+	return PREFIX;
 }
 
 void git_extract_argv0_path(const char *argv0)
