@@ -7,6 +7,8 @@
 #include "cache.h"
 #include "config.h"
 #include "dir.h"
+#include "repository.h"
+#include "object-store.h"
 #include "builtin.h"
 #include "parse-options.h"
 #include "quote.h"
@@ -120,9 +122,9 @@ int cmd_count_objects(int argc, const char **argv, const char *prefix)
 		struct strbuf loose_buf = STRBUF_INIT;
 		struct strbuf pack_buf = STRBUF_INIT;
 		struct strbuf garbage_buf = STRBUF_INIT;
-		if (!packed_git)
-			prepare_packed_git();
-		for (p = packed_git; p; p = p->next) {
+		if (!the_repository->objects.packed_git)
+			prepare_packed_git(the_repository);
+		for (p = the_repository->objects.packed_git; p; p = p->next) {
 			if (!p->pack_local)
 				continue;
 			if (open_pack_index(p))
@@ -153,7 +155,7 @@ int cmd_count_objects(int argc, const char **argv, const char *prefix)
 		printf("prune-packable: %lu\n", packed_loose);
 		printf("garbage: %lu\n", garbage);
 		printf("size-garbage: %s\n", garbage_buf.buf);
-		foreach_alt_odb(print_alternate, NULL);
+		foreach_alt_odb(the_repository, print_alternate, NULL);
 		strbuf_release(&loose_buf);
 		strbuf_release(&pack_buf);
 		strbuf_release(&garbage_buf);

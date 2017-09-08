@@ -1,7 +1,6 @@
 #include "builtin.h"
 #include "cache.h"
 #include "bundle.h"
-#include "config.h"
 
 /*
  * Basic handler for bundle files to connect repositories via sneakernet.
@@ -22,7 +21,6 @@ int cmd_bundle(int argc, const char **argv, const char *prefix)
 	const char *cmd, *bundle_file;
 	int bundle_fd = -1;
 
-	git_config(git_default_config, NULL);
 	if (argc < 3)
 		usage(builtin_bundle_usage);
 

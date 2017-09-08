@@ -119,6 +119,7 @@ int add_files_to_cache(const char *prefix,
 	rev.diffopt.flags |= DIFF_OPT_OVERRIDE_SUBMODULE_CONFIG;
 	rev.max_count = 0; /* do not compare unmerged paths with stage #2 */
 	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
+	clear_pathspec(&rev.prune_data);
 	return !!data.add_errors;
 }
 
@@ -439,10 +440,6 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 
 	die_path_inside_submodule(&the_index, &pathspec);
 
-	enable_fscache(1);
-	/* We do not really re-read the index but update the up-to-date flags */
-	preload_index(&the_index, &pathspec);
-
 	if (add_new_files) {
 		int baselen;
 
@@ -518,5 +515,7 @@ finish:
 			die(_("Unable to write new index file"));
 	}
 
+	UNLEAK(pathspec);
+	UNLEAK(dir);
 	return exit_status;
 }

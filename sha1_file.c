@@ -22,7 +22,10 @@
 #include "pack-revindex.h"
 #include "sha1-lookup.h"
 #include "bulk-checkin.h"
+#include "repository.h"
+#include "object-store.h"
 #include "streaming.h"
+#include "path.h"
 #include "dir.h"
 #include "mru.h"
 #include "list.h"
@@ -280,12 +283,12 @@ static void fill_sha1_path(struct strbuf *buf, const unsigned char *sha1)
 	}
 }
 
-const char *sha1_file_name(const unsigned char *sha1)
+const char *sha1_file_name(struct repository *r, const unsigned char *sha1)
 {
 	static struct strbuf buf = STRBUF_INIT;
 
 	strbuf_reset(&buf);
-	strbuf_addf(&buf, "%s/", get_object_directory());
+	strbuf_addf(&buf, "%s/", r->objectdir);
 
 	fill_sha1_path(&buf, sha1);
 	return buf.buf;
@@ -305,21 +308,21 @@ static const char *alt_sha1_path(struct alternate_object_database *alt,
 	return buf->buf;
 }
 
-struct alternate_object_database *alt_odb_list;
-static struct alternate_object_database **alt_odb_tail;
-
 /*
  * Return non-zero iff the path is usable as an alternate object database.
  */
-static int alt_odb_usable(struct strbuf *path, const char *normalized_objdir)
+static int alt_odb_usable(struct repository *r, struct strbuf *path,
+			  const char *normalized_objdir)
 {
 	struct alternate_object_database *alt;
 
 	/* Detect cases where alternate disappeared */
 	if (!is_directory(path->buf)) {
-		error("object directory %s does not exist; "
-		      "check .git/objects/info/alternates.",
-		      path->buf);
+		struct strbuf sb = STRBUF_INIT;
+		strbuf_repo_git_path(&sb, r, "objects/info/alternates");
+		error("object directory %s does not exist; check %s",
+		      path->buf, sb.buf);
+		strbuf_release(&sb);
 		return 0;
 	}
 
@@ -327,7 +330,7 @@ static int alt_odb_usable(struct strbuf *path, const char *normalized_objdir)
 	 * Prevent the common mistake of listing the same
 	 * thing twice, or object directory itself.
 	 */
-	for (alt = alt_odb_list; alt; alt = alt->next) {
+	for (alt = r->objects.alt_odb_list; alt; alt = alt->next) {
 		if (!fspathcmp(path->buf, alt->path))
 			return 0;
 	}
@@ -352,9 +355,11 @@ static int alt_odb_usable(struct strbuf *path, const char *normalized_objdir)
  * SHA1, an extra slash for the first level indirection, and the
  * terminating NUL.
  */
-static void read_info_alternates(const char * relative_base, int depth);
-static int link_alt_odb_entry(const char *entry, const char *relative_base,
-	int depth, const char *normalized_objdir)
+static void read_info_alternates(struct repository *r,
+				 const char *relative_base,
+				 int depth);
+static int link_alt_odb_entry(struct repository *r, const char *entry,
+	const char *relative_base, int depth, const char *normalized_objdir)
 {
 	struct alternate_object_database *ent;
 	struct strbuf pathbuf = STRBUF_INIT;
@@ -379,7 +384,7 @@ static int link_alt_odb_entry(const char *entry, const char *relative_base,
 	while (pathbuf.len && pathbuf.buf[pathbuf.len - 1] == '/')
 		strbuf_setlen(&pathbuf, pathbuf.len - 1);
 
-	if (!alt_odb_usable(&pathbuf, normalized_objdir)) {
+	if (!alt_odb_usable(r, &pathbuf, normalized_objdir)) {
 		strbuf_release(&pathbuf);
 		return -1;
 	}
@@ -387,12 +392,12 @@ static int link_alt_odb_entry(const char *entry, const char *relative_base,
 	ent = alloc_alt_odb(pathbuf.buf);
 
 	/* add the alternate entry */
-	*alt_odb_tail = ent;
-	alt_odb_tail = &(ent->next);
+	*r->objects.alt_odb_tail = ent;
+	r->objects.alt_odb_tail = &(ent->next);
 	ent->next = NULL;
 
 	/* recursively add alternates */
-	read_info_alternates(pathbuf.buf, depth + 1);
+	read_info_alternates(r, pathbuf.buf, depth + 1);
 
 	strbuf_release(&pathbuf);
 	return 0;
@@ -427,8 +432,8 @@ static const char *parse_alt_odb_entry(const char *string,
 	return end;
 }
 
-static void link_alt_odb_entries(const char *alt, int len, int sep,
-				 const char *relative_base, int depth)
+static void link_alt_odb_entries(struct repository *r, const char *alt, int len,
+				 int sep, const char *relative_base, int depth)
 {
 	struct strbuf objdirbuf = STRBUF_INIT;
 	struct strbuf entry = STRBUF_INIT;
@@ -439,7 +444,7 @@ static void link_alt_odb_entries(const char *alt, int len, int sep,
 		return;
 	}
 
-	strbuf_add_absolute_path(&objdirbuf, get_object_directory());
+	strbuf_add_absolute_path(&objdirbuf, r->objectdir);
 	if (strbuf_normalize_path(&objdirbuf) < 0)
 		die("unable to normalize object directory: %s",
 		    objdirbuf.buf);
@@ -448,13 +453,16 @@ static void link_alt_odb_entries(const char *alt, int len, int sep,
 		alt = parse_alt_odb_entry(alt, sep, &entry);
 		if (!entry.len)
 			continue;
-		link_alt_odb_entry(entry.buf, relative_base, depth, objdirbuf.buf);
+		link_alt_odb_entry(r, entry.buf,
+				   relative_base, depth, objdirbuf.buf);
 	}
 	strbuf_release(&entry);
 	strbuf_release(&objdirbuf);
 }
 
-static void read_info_alternates(const char * relative_base, int depth)
+static void read_info_alternates(struct repository *r,
+				 const char *relative_base,
+				 int depth)
 {
 	char *map;
 	size_t mapsz;
@@ -475,7 +483,7 @@ static void read_info_alternates(const char * relative_base, int depth)
 	map = xmmap(NULL, mapsz, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
 
-	link_alt_odb_entries(map, mapsz, '\n', relative_base, depth);
+	link_alt_odb_entries(r, map, mapsz, '\n', relative_base, depth);
 
 	munmap(map, mapsz);
 }
@@ -531,8 +539,9 @@ void add_to_alternates_file(const char *reference)
 		fprintf_or_die(out, "%s\n", reference);
 		if (commit_lock_file(lock))
 			die_errno("unable to move new alternates file into place");
-		if (alt_odb_tail)
-			link_alt_odb_entries(reference, strlen(reference), '\n', NULL, 0);
+		if (the_repository->objects.alt_odb_tail)
+			link_alt_odb_entries(the_repository, reference,
+					     strlen(reference), '\n', NULL, 0);
 	}
 	free(alts);
 }
@@ -543,9 +552,10 @@ void add_to_alternates_memory(const char *reference)
 	 * Make sure alternates are initialized, or else our entry may be
 	 * overwritten when they are.
 	 */
-	prepare_alt_odb();
+	prepare_alt_odb(the_repository);
 
-	link_alt_odb_entries(reference, strlen(reference), '\n', NULL, 0);
+	link_alt_odb_entries(the_repository, reference, strlen(reference),
+			     '\n', NULL, 0);
 }
 
 /*
@@ -623,34 +633,43 @@ out:
 	return ref_git;
 }
 
-int foreach_alt_odb(alt_odb_fn fn, void *cb)
+int foreach_alt_odb(struct repository *r, alt_odb_fn fn, void *cb)
 {
 	struct alternate_object_database *ent;
-	int r = 0;
+	int ret = 0;
 
-	prepare_alt_odb();
-	for (ent = alt_odb_list; ent; ent = ent->next) {
-		r = fn(ent, cb);
-		if (r)
+	prepare_alt_odb(r);
+	for (ent = r->objects.alt_odb_list; ent; ent = ent->next) {
+		ret = fn(ent, cb);
+		if (ret)
 			break;
 	}
-	return r;
+	return ret;
 }
 
-void prepare_alt_odb(void)
+void prepare_alt_odb(struct repository *r)
 {
-	const char *alt;
-
-	if (alt_odb_tail)
+	if (r->objects.alt_odb_tail)
 		return;
 
-	alt = getenv(ALTERNATE_DB_ENVIRONMENT);
-	if (!alt) alt = "";
+	r->objects.alt_odb_tail = &r->objects.alt_odb_list;
 
-	alt_odb_tail = &alt_odb_list;
-	link_alt_odb_entries(alt, strlen(alt), PATH_SEP, NULL, 0);
+	if (!r->ignore_env) {
+		const char *alt = getenv(ALTERNATE_DB_ENVIRONMENT);
+		if (!alt)
+			alt = "";
 
-	read_info_alternates(get_object_directory(), 0);
+		/*
+		 * Paths in alt are relative to the cwd. We ignore environment
+		 * settings like this for all repositories except for
+		 * the_repository, so we don't have to worry about transforming
+		 * the path to be relative to another repository.
+		 */
+		link_alt_odb_entries(r, alt, strlen(alt),
+				     PATH_SEP, NULL, 0);
+	}
+
+	read_info_alternates(r, r->objectdir, 0);
 }
 
 /* Returns 1 if we have successfully freshened the file, 0 otherwise. */
@@ -679,14 +698,15 @@ int check_and_freshen_file(const char *fn, int freshen)
 
 static int check_and_freshen_local(const unsigned char *sha1, int freshen)
 {
-	return check_and_freshen_file(sha1_file_name(sha1), freshen);
+	return check_and_freshen_file(sha1_file_name(the_repository, sha1),
+				      freshen);
 }
 
 static int check_and_freshen_nonlocal(const unsigned char *sha1, int freshen)
 {
 	struct alternate_object_database *alt;
-	prepare_alt_odb();
-	for (alt = alt_odb_list; alt; alt = alt->next) {
+	prepare_alt_odb(the_repository);
+	for (alt = the_repository->objects.alt_odb_list; alt; alt = alt->next) {
 		const char *path = alt_sha1_path(alt, sha1);
 		if (check_and_freshen_file(path, freshen))
 			return 1;
@@ -831,18 +851,18 @@ int git_open_cloexec(const char *name, int flags)
  * Note that it may point to static storage and is only valid until another
  * call to sha1_file_name(), etc.
  */
-static int stat_sha1_file(const unsigned char *sha1, struct stat *st,
-			  const char **path)
+static int stat_sha1_file(struct repository *r, const unsigned char *sha1,
+			  struct stat *st, const char **path)
 {
 	struct alternate_object_database *alt;
 
-	*path = sha1_file_name(sha1);
+	*path = sha1_file_name(r, sha1);
 	if (!lstat(*path, st))
 		return 0;
 
-	prepare_alt_odb();
+	prepare_alt_odb(r);
 	errno = ENOENT;
-	for (alt = alt_odb_list; alt; alt = alt->next) {
+	for (alt = r->objects.alt_odb_list; alt; alt = alt->next) {
 		*path = alt_sha1_path(alt, sha1);
 		if (!lstat(*path, st))
 			return 0;
@@ -855,20 +875,21 @@ static int stat_sha1_file(const unsigned char *sha1, struct stat *st,
  * Like stat_sha1_file(), but actually open the object and return the
  * descriptor. See the caveats on the "path" parameter above.
  */
-static int open_sha1_file(const unsigned char *sha1, const char **path)
+static int open_sha1_file(struct repository *r,
+			  const unsigned char *sha1, const char **path)
 {
 	int fd;
 	struct alternate_object_database *alt;
 	int most_interesting_errno;
 
-	*path = sha1_file_name(sha1);
+	*path = sha1_file_name(r, sha1);
 	fd = git_open(*path);
 	if (fd >= 0)
 		return fd;
 	most_interesting_errno = errno;
 
-	prepare_alt_odb();
-	for (alt = alt_odb_list; alt; alt = alt->next) {
+	prepare_alt_odb(r);
+	for (alt = r->objects.alt_odb_list; alt; alt = alt->next) {
 		*path = alt_sha1_path(alt, sha1);
 		fd = git_open(*path);
 		if (fd >= 0)
@@ -884,9 +905,8 @@ static int open_sha1_file(const unsigned char *sha1, const char **path)
  * Map the loose object at "path" if it is not NULL, or the path found by
  * searching for a loose object named "sha1".
  */
-static void *map_sha1_file_1(const char *path,
-			     const unsigned char *sha1,
-			     unsigned long *size)
+static void *map_sha1_file_1(struct repository *r, const char *path,
+			     const unsigned char *sha1, unsigned long *size)
 {
 	void *map;
 	int fd;
@@ -894,7 +914,7 @@ static void *map_sha1_file_1(const char *path,
 	if (path)
 		fd = git_open(path);
 	else
-		fd = open_sha1_file(sha1, &path);
+		fd = open_sha1_file(r, sha1, &path);
 	map = NULL;
 	if (fd >= 0) {
 		struct stat st;
@@ -913,9 +933,10 @@ static void *map_sha1_file_1(const char *path,
 	return map;
 }
 
-void *map_sha1_file(const unsigned char *sha1, unsigned long *size)
+void *map_sha1_file(struct repository *r,
+		    const unsigned char *sha1, unsigned long *size)
 {
-	return map_sha1_file_1(NULL, sha1, size);
+	return map_sha1_file_1(r, NULL, sha1, size);
 }
 
 static int unpack_sha1_short_header(git_zstream *stream,
@@ -1104,9 +1125,9 @@ int parse_sha1_header(const char *hdr, unsigned long *sizep)
 	return parse_sha1_header_extended(hdr, &oi, 0);
 }
 
-static int sha1_loose_object_info(const unsigned char *sha1,
-				  struct object_info *oi,
-				  int flags)
+static int sha1_loose_object_info(struct repository *r,
+				  const unsigned char *sha1,
+				  struct object_info *oi, int flags)
 {
 	int status = 0;
 	unsigned long mapsize;
@@ -1130,14 +1151,14 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 	if (!oi->typep && !oi->typename && !oi->sizep && !oi->contentp) {
 		const char *path;
 		struct stat st;
-		if (stat_sha1_file(sha1, &st, &path) < 0)
+		if (stat_sha1_file(r, sha1, &st, &path) < 0)
 			return -1;
 		if (oi->disk_sizep)
 			*oi->disk_sizep = st.st_size;
 		return 0;
 	}
 
-	map = map_sha1_file(sha1, &mapsize);
+	map = map_sha1_file(r, sha1, &mapsize);
 	if (!map)
 		return -1;
 
@@ -1212,14 +1233,14 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 
 	if (!find_pack_entry(real, &e)) {
 		/* Most likely it's a loose object. */
-		if (!sha1_loose_object_info(real, oi, flags))
+		if (!sha1_loose_object_info(the_repository, real, oi, flags))
 			return 0;
 
 		/* Not a loose object; someone else may have just packed it. */
 		if (flags & OBJECT_INFO_QUICK) {
 			return -1;
 		} else {
-			reprepare_packed_git();
+			reprepare_packed_git(the_repository);
 			if (!find_pack_entry(real, &e))
 				return -1;
 		}
@@ -1322,7 +1343,7 @@ void *read_sha1_file_extended(const unsigned char *sha1,
 		die("replacement %s not found for %s",
 		    sha1_to_hex(repl), sha1_to_hex(sha1));
 
-	if (!stat_sha1_file(repl, &st, &path))
+	if (!stat_sha1_file(the_repository, repl, &st, &path))
 		die("loose object %s (stored in %s) is corrupt",
 		    sha1_to_hex(repl), path);
 
@@ -1519,7 +1540,7 @@ static int write_loose_object(const unsigned char *sha1, char *hdr, int hdrlen,
 	git_SHA_CTX c;
 	unsigned char parano_sha1[20];
 	static struct strbuf tmp_file = STRBUF_INIT;
-	const char *filename = sha1_file_name(sha1);
+	const char *filename = sha1_file_name(the_repository, sha1);
 
 	fd = create_tmpfile(&tmp_file, filename);
 	if (fd < 0) {
@@ -1849,6 +1870,7 @@ int index_path(struct object_id *oid, const char *path, struct stat *st, unsigne
 {
 	int fd;
 	struct strbuf sb = STRBUF_INIT;
+	int rc = 0;
 
 	switch (st->st_mode & S_IFMT) {
 	case S_IFREG:
@@ -1865,8 +1887,7 @@ int index_path(struct object_id *oid, const char *path, struct stat *st, unsigne
 		if (!(flags & HASH_WRITE_OBJECT))
 			hash_sha1_file(sb.buf, sb.len, blob_type, oid->hash);
 		else if (write_sha1_file(sb.buf, sb.len, blob_type, oid->hash))
-			return error("%s: failed to insert into database",
-				     path);
+			rc = error("%s: failed to insert into database", path);
 		strbuf_release(&sb);
 		break;
 	case S_IFDIR:
@@ -1874,7 +1895,7 @@ int index_path(struct object_id *oid, const char *path, struct stat *st, unsigne
 	default:
 		return error("%s: unsupported file type", path);
 	}
-	return 0;
+	return rc;
 }
 
 int read_pack_header(int fd, struct pack_header *header)
@@ -2043,7 +2064,7 @@ int for_each_loose_object(each_loose_object_fn cb, void *data, unsigned flags)
 
 	alt.cb = cb;
 	alt.data = data;
-	return foreach_alt_odb(loose_from_alt_odb, &alt);
+	return foreach_alt_odb(the_repository, loose_from_alt_odb, &alt);
 }
 
 static int check_stream_sha1(git_zstream *stream,
@@ -2117,7 +2138,7 @@ int read_loose_object(const char *path,
 
 	*contents = NULL;
 
-	map = map_sha1_file_1(path, NULL, &mapsize);
+	map = map_sha1_file_1(the_repository, path, NULL, &mapsize);
 	if (!map) {
 		error_errno("unable to mmap %s", path);
 		goto out;

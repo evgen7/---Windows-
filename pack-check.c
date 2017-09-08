@@ -1,5 +1,6 @@
 #include "cache.h"
 #include "pack.h"
+#include "object-store.h"
 #include "pack-revindex.h"
 #include "progress.h"
 #include "packfile.h"

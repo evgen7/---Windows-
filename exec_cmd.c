@@ -5,21 +5,14 @@
 #define MAX_ARGS	32
 
 static const char *argv_exec_path;
+
+#ifdef RUNTIME_PREFIX
 static const char *argv0_path;
 
-char *system_path(const char *path)
+static const char *system_prefix(void)
 {
-#ifdef RUNTIME_PREFIX
 	static const char *prefix;
-#else
-	static const char *prefix = FALLBACK_RUNTIME_PREFIX;
-#endif
-	struct strbuf d = STRBUF_INIT;
 
-	if (is_absolute_path(path))
-		return xstrdup(path);
-
-#ifdef RUNTIME_PREFIX
 	assert(argv0_path);
 	assert(is_absolute_path(argv0_path));
 
@@ -27,15 +20,12 @@ char *system_path(const char *path)
 	    !(prefix = strip_path_suffix(argv0_path, GIT_EXEC_PATH)) &&
 	    !(prefix = strip_path_suffix(argv0_path, BINDIR)) &&
 	    !(prefix = strip_path_suffix(argv0_path, "git"))) {
-		prefix = FALLBACK_RUNTIME_PREFIX;
+		prefix = PREFIX;
 		trace_printf("RUNTIME_PREFIX requested, "
 				"but prefix computation failed.  "
 				"Using static fallback '%s'.\n", prefix);
 	}
-#endif
-
-	strbuf_addf(&d, "%s/%s", prefix, path);
-	return strbuf_detach(&d, NULL);
+	return prefix;
 }
 
 void git_extract_argv0_path(const char *argv0)
@@ -49,6 +39,30 @@ void git_extract_argv0_path(const char *argv0)
 
 	if (slash)
 		argv0_path = xstrndup(argv0, slash - argv0);
+}
+
+#else
+
+static const char *system_prefix(void)
+{
+	return PREFIX;
+}
+
+void git_extract_argv0_path(const char *argv0)
+{
+}
+
+#endif /* RUNTIME_PREFIX */
+
+char *system_path(const char *path)
+{
+	struct strbuf d = STRBUF_INIT;
+
+	if (is_absolute_path(path))
+		return xstrdup(path);
+
+	strbuf_addf(&d, "%s/%s", system_prefix(), path);
+	return strbuf_detach(&d, NULL);
 }
 
 void git_set_argv_exec_path(const char *exec_path)

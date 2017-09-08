@@ -15,12 +15,7 @@ test_description='test untracked cache'
 # more.
 
 sync_mtime () {
-	if test_have_prereq BUSYBOX
-	then
-		find . -type d -print0 | xargs -0r ls -ld >/dev/null
-	else
-		find . -type d -ls >/dev/null
-	fi
+	find . -type d -ls >/dev/null
 }
 
 avoid_racy() {

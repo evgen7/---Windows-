@@ -1,6 +1,8 @@
 #include "git-compat-util.h"
 #include "http.h"
+#include "repository.h"
 #include "config.h"
+#include "object-store.h"
 #include "pack.h"
 #include "sideband.h"
 #include "run-command.h"
@@ -114,8 +116,6 @@ static struct curl_slist *extra_http_headers;
 static struct active_request_slot *active_queue_head;
 
 static char *cached_accept_language;
-
-static char *http_ssl_backend;
 
 size_t fread_buffer(char *ptr, size_t eltsize, size_t nmemb, void *buffer_)
 {
@@ -250,12 +250,6 @@ static int http_options(const char *var, const char *value, void *cb)
 		curl_ssl_try = git_config_bool(var, value);
 		return 0;
 	}
-	if (!strcmp("http.sslbackend", var)) {
-		free(http_ssl_backend);
-		http_ssl_backend = xstrdup_or_null(value);
-		return 0;
-	}
-
 	if (!strcmp("http.minsessions", var)) {
 		min_curl_sessions = git_config_int(var, value);
 		if (min_curl_sessions > 1)
@@ -819,30 +813,6 @@ void http_init(struct remote *remote, const char *url, int proactive_auth)
 
 	git_config(urlmatch_config_entry, &config);
 	free(normalized_url);
-
-#if LIBCURL_VERSION_NUM >= 0x073800 || \
-		defined(CURL_WITH_EXPERIMENTAL_SSL_BACKEND_SUPPORT)
-	if (http_ssl_backend) {
-		const curl_ssl_backend **backends;
-		struct strbuf buf = STRBUF_INIT;
-		int i;
-
-		switch (curl_global_sslset(-1, http_ssl_backend, &backends)) {
-		case CURLSSLSET_UNKNOWN_BACKEND:
-			strbuf_addf(&buf, _("Unsupported SSL backend '%s'. "
-					    "Supported SSL backends:"),
-					    http_ssl_backend);
-			for (i = 0; backends[i]; i++)
-				strbuf_addf(&buf, "\n\t%s", backends[i]->name);
-			die(buf.buf);
-		case CURLSSLSET_TOO_LATE:
-			die(_("Could not set SSL backend to '%s': already set"),
-			    http_ssl_backend);
-		case CURLSSLSET_OK:
-			break; /* Okay! */
-		}
-	}
-#endif
 
 	if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK)
 		die("curl_global_init failed");
@@ -1930,7 +1900,7 @@ int finish_http_pack_request(struct http_pack_request *preq)
 		return -1;
 	}
 
-	install_packed_git(p);
+	install_packed_git(the_repository, p);
 	free(tmp_idx);
 	return 0;
 }
@@ -2043,7 +2013,7 @@ struct http_object_request *new_http_object_request(const char *base_url,
 	hashcpy(freq->sha1, sha1);
 	freq->localfile = -1;
 
-	filename = sha1_file_name(sha1);
+	filename = sha1_file_name(the_repository, sha1);
 	snprintf(freq->tmpfile, sizeof(freq->tmpfile),
 		 "%s.temp", filename);
 
@@ -2191,7 +2161,8 @@ int finish_http_object_request(struct http_object_request *freq)
 		return -1;
 	}
 	freq->rename =
-		finalize_object_file(freq->tmpfile, sha1_file_name(freq->sha1));
+		finalize_object_file(freq->tmpfile,
+				     sha1_file_name(the_repository, freq->sha1));
 
 	return freq->rename;
 }

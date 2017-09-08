@@ -37,6 +37,7 @@ struct mru_entry {
 struct mru {
 	struct mru_entry *head, *tail;
 };
+#define MRU_INIT { NULL, NULL }
 
 void mru_append(struct mru *mru, void *item);
 void mru_mark(struct mru *mru, struct mru_entry *entry);

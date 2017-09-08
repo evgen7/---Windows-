@@ -411,7 +411,6 @@ static int cmd_parseopt(int argc, const char **argv, const char *prefix)
 	struct option *opts = NULL;
 	int onb = 0, osz = 0, unb = 0, usz = 0;
 
-	git_config(git_default_config, NULL);
 	strbuf_addstr(&parsed, "set --");
 	argc = parse_options(argc, argv, prefix, parseopt_opts, parseopt_usage,
 	                     PARSE_OPT_KEEP_DASHDASH);
@@ -758,8 +757,8 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 				continue;
 			}
 			if (!strcmp(arg, "--bisect")) {
-				for_each_ref_in("refs/bisect/bad", show_reference, NULL);
-				for_each_ref_in("refs/bisect/good", anti_reference, NULL);
+				for_each_fullref_in("refs/bisect/bad", show_reference, NULL, 0);
+				for_each_fullref_in("refs/bisect/good", anti_reference, NULL, 0);
 				continue;
 			}
 			if (opt_with_value(arg, "--branches", &arg)) {

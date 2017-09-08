@@ -1,4 +1,5 @@
 #include "builtin.h"
+#include "repository.h"
 #include "config.h"
 #include "lockfile.h"
 #include "pack.h"
@@ -7,6 +8,7 @@
 #include "sideband.h"
 #include "run-command.h"
 #include "exec_cmd.h"
+#include "object-store.h"
 #include "commit.h"
 #include "object.h"
 #include "remote.h"
@@ -1778,7 +1780,7 @@ static const char *unpack(int err_fd, struct shallow_info *si)
 		status = finish_command(&child);
 		if (status)
 			return "index-pack abnormal exit";
-		reprepare_packed_git();
+		reprepare_packed_git(the_repository);
 	}
 	return NULL;
 }

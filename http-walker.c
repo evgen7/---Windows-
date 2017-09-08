@@ -1,9 +1,11 @@
 #include "cache.h"
+#include "repository.h"
 #include "commit.h"
 #include "walker.h"
 #include "http.h"
 #include "list.h"
 #include "transport.h"
+#include "object-store.h"
 #include "packfile.h"
 
 struct alt_base {
@@ -535,7 +537,7 @@ static int fetch_object(struct walker *walker, unsigned char *sha1)
 		ret = error("File %s has bad hash", hex);
 	} else if (req->rename < 0) {
 		ret = error("unable to write sha1 filename %s",
-			    sha1_file_name(req->sha1));
+			    sha1_file_name(the_repository, req->sha1));
 	}
 
 	release_http_object_request(req);

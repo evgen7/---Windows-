@@ -29,9 +29,6 @@ struct path_hashmap_entry {
 	char path[FLEX_ARRAY];
 };
 
-static unsigned int (*pathhash)(const char *path);
-static int (*pathcmp)(const char *a, const char *b);
-
 static int path_hashmap_cmp(const void *cmp_data,
 			    const void *entry,
 			    const void *entry_or_key,
@@ -41,7 +38,15 @@ static int path_hashmap_cmp(const void *cmp_data,
 	const struct path_hashmap_entry *b = entry_or_key;
 	const char *key = keydata;
 
-	return pathcmp(a->path, key ? key : b->path);
+	if (ignore_case)
+		return strcasecmp(a->path, key ? key : b->path);
+	else
+		return strcmp(a->path, key ? key : b->path);
+}
+
+static unsigned int path_hash(const char *path)
+{
+	return ignore_case ? strihash(path) : strhash(path);
 }
 
 static void flush_output(struct merge_options *o)
@@ -341,7 +346,7 @@ static int save_files_dirs(const unsigned char *sha1,
 	strbuf_addstr(base, path);
 
 	FLEX_ALLOC_MEM(entry, path, base->buf, base->len);
-	hashmap_entry_init(entry, pathhash(entry->path));
+	hashmap_entry_init(entry, path_hash(entry->path));
 	hashmap_add(&o->current_file_dir_set, entry);
 
 	strbuf_setlen(base, baselen);
@@ -662,7 +667,6 @@ static void add_flattened_path(struct strbuf *out, const char *s)
 
 static char *unique_path(struct merge_options *o, const char *path, const char *branch)
 {
-	struct path_hashmap_entry dummy;
 	struct path_hashmap_entry *entry;
 	struct strbuf newpath = STRBUF_INIT;
 	int suffix = 0;
@@ -672,16 +676,15 @@ static char *unique_path(struct merge_options *o, const char *path, const char *
 	add_flattened_path(&newpath, branch);
 
 	base_len = newpath.len;
-	hashmap_entry_init(&dummy, pathhash(newpath.buf));
-	while (hashmap_get(&o->current_file_dir_set, &dummy, newpath.buf) ||
+	while (hashmap_get_from_hash(&o->current_file_dir_set,
+				     path_hash(newpath.buf), newpath.buf) ||
 	       (!o->call_depth && file_exists(newpath.buf))) {
 		strbuf_setlen(&newpath, base_len);
 		strbuf_addf(&newpath, "_%d", suffix++);
-		hashmap_entry_init(&dummy, pathhash(newpath.buf));
 	}
 
 	FLEX_ALLOC_MEM(entry, path, newpath.buf, newpath.len);
-	hashmap_entry_init(entry, pathhash(entry->path));
+	hashmap_entry_init(entry, path_hash(entry->path));
 	hashmap_add(&o->current_file_dir_set, entry);
 	return strbuf_detach(&newpath, NULL);
 }
@@ -1966,6 +1969,13 @@ int merge_trees(struct merge_options *o,
 	if (unmerged_cache()) {
 		struct string_list *entries, *re_head, *re_merge;
 		int i;
+		/*
+		 * Only need the hashmap while processing entries, so
+		 * initialize it here and free it when we are done running
+		 * through the entries. Keeping it in the merge_options as
+		 * opposed to decaring a local hashmap is for convenience
+		 * so that we don't have to pass it to around.
+		 */
 		hashmap_init(&o->current_file_dir_set, path_hashmap_cmp, NULL, 512);
 		get_files_dirs(o, head);
 		get_files_dirs(o, merge);
@@ -2043,7 +2053,7 @@ int merge_recursive(struct merge_options *o,
 {
 	struct commit_list *iter;
 	struct commit *merged_common_ancestors;
-	FAKE_INIT(struct tree *, mrtree, NULL);
+	struct tree *mrtree = mrtree;
 	int clean;
 
 	if (show(o, 4)) {
@@ -2205,8 +2215,6 @@ void init_merge_options(struct merge_options *o)
 	if (o->verbosity >= 5)
 		o->buffer_output = 0;
 	strbuf_init(&o->obuf, 0);
-	pathhash = ignore_case ? strihash : strhash;
-	pathcmp = ignore_case ? strcasecmp : strcmp;
 	string_list_init(&o->df_conflict_file_set, 1);
 }
 

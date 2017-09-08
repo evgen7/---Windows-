@@ -1307,6 +1307,13 @@ test_expect_success GPG \
 	'test_config user.signingkey BobTheMouse &&
 	test_must_fail git tag -s -m tail tag-gpg-failure'
 
+# try to produce invalid signature
+test_expect_success GPG \
+	'git tag -s fails if gpg is misconfigured (bad signature format)' \
+	'test_config gpg.program echo &&
+	 test_must_fail git tag -s -m tail tag-gpg-failure'
+
+
 # try to verify without gpg:
 
 rm -rf gpghome
@@ -1855,12 +1862,6 @@ test_expect_success 'version sort with very long prerelease suffix' '
 	test_config versionsort.prereleaseSuffix -very-looooooooooooooooooooooooong-prerelease-suffix &&
 	git tag -l --sort=version:refname
 '
-
-run_with_limited_stack () {
-	(ulimit -s 128 && "$@")
-}
-
-test_lazy_prereq ULIMIT_STACK_SIZE 'run_with_limited_stack true'
 
 # we require ulimit, this excludes Windows
 test_expect_success ULIMIT_STACK_SIZE '--contains and --no-contains work in a deep repo' '

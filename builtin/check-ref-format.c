@@ -6,7 +6,6 @@
 #include "refs.h"
 #include "builtin.h"
 #include "strbuf.h"
-#include "config.h"
 
 static const char builtin_check_ref_format_usage[] =
 "git check-ref-format [--normalize] [<options>] <refname>\n"
@@ -45,6 +44,7 @@ static int check_ref_format_branch(const char *arg)
 	if (strbuf_check_branch_ref(&sb, arg))
 		die("'%s' is not a valid branch name", arg);
 	printf("%s\n", sb.buf + 11);
+	strbuf_release(&sb);
 	return 0;
 }
 
@@ -55,7 +55,6 @@ int cmd_check_ref_format(int argc, const char **argv, const char *prefix)
 	int flags = 0;
 	const char *refname;
 
-	git_config(git_default_config, NULL);
 	if (argc == 2 && !strcmp(argv[1], "-h"))
 		usage(builtin_check_ref_format_usage);
 

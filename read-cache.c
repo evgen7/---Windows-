@@ -21,10 +21,6 @@
 #include "utf8.h"
 #include "fsmonitor.h"
 
-#ifndef NO_PTHREADS
-#include <pthread.h>
-#endif
-
 /* Mask for the name length in ce_flags in the on-disk index */
 
 #define CE_NAMEMASK  (0x0fff)
@@ -1547,34 +1543,6 @@ static int verify_hdr(struct cache_header *hdr, unsigned long size)
 	return 0;
 }
 
-#ifndef NO_PTHREADS
-/*
- * Require index file to be larger than this threshold before
- * we bother using a thread to verify the SHA.
- * This value was arbitrarily chosen.
- */
-#define VERIFY_HDR_THRESHOLD	10*1024*1024
-
-struct verify_hdr_thread_data
-{
-	pthread_t thread_id;
-	struct cache_header *hdr;
-	size_t size;
-	int result;
-};
-
-/*
- * A thread proc to run the verify_hdr() computation
- * in a background thread.
- */
-static void *verify_hdr_thread(void *_data)
-{
-	struct verify_hdr_thread_data *p = _data;
-	p->result = verify_hdr(p->hdr, (unsigned long)p->size);
-	return NULL;
-}
-#endif
-
 static int read_index_extension(struct index_state *istate,
 				const char *ext, void *data, unsigned long sz)
 {
@@ -1780,9 +1748,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	void *mmap;
 	size_t mmap_size;
 	struct strbuf previous_name_buf = STRBUF_INIT, *previous_name;
-#ifndef NO_PTHREADS
-	struct verify_hdr_thread_data verify_hdr_thread_data;
-#endif
 
 	if (istate->initialized)
 		return istate->cache_nr;
@@ -1809,23 +1774,8 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 	close(fd);
 
 	hdr = mmap;
-#ifdef NO_PTHREADS
 	if (verify_hdr(hdr, mmap_size) < 0)
 		goto unmap;
-#else
-	if (mmap_size < VERIFY_HDR_THRESHOLD) {
-		if (verify_hdr(hdr, mmap_size) < 0)
-			goto unmap;
-	} else {
-		verify_hdr_thread_data.hdr = hdr;
-		verify_hdr_thread_data.size = mmap_size;
-		verify_hdr_thread_data.result = -1;
-		if (pthread_create(
-				&verify_hdr_thread_data.thread_id, NULL,
-				verify_hdr_thread, &verify_hdr_thread_data))
-			die_errno("unable to start verify_hdr_thread");
-	}
-#endif
 
 	hashcpy(istate->sha1, (const unsigned char *)hdr + mmap_size - 20);
 	istate->version = ntohl(hdr->hdr_version);
@@ -1873,16 +1823,6 @@ int do_read_index(struct index_state *istate, const char *path, int must_exist)
 		src_offset += 8;
 		src_offset += extsize;
 	}
-
-#ifndef NO_PTHREADS
-	if (mmap_size >= VERIFY_HDR_THRESHOLD) {
-		if (pthread_join(verify_hdr_thread_data.thread_id, NULL))
-			die_errno("unable to join verify_hdr_thread");
-		if (verify_hdr_thread_data.result < 0)
-			goto unmap;
-	}
-#endif
-
 	munmap(mmap, mmap_size);
 	return istate->cache_nr;
 
@@ -2138,7 +2078,7 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 			  struct strbuf *previous_name, struct ondisk_cache_entry *ondisk)
 {
 	int size;
-	FAKE_INIT(int, saved_namelen, 0);
+	int saved_namelen = saved_namelen; /* compiler workaround */
 	int result;
 	static unsigned char padding[8] = { 0x00 };
 
@@ -2177,7 +2117,9 @@ static int ce_write_entry(git_SHA_CTX *c, int fd, struct cache_entry *ce,
 		if (!result)
 			result = ce_write(c, fd, to_remove_vi, prefix_size);
 		if (!result)
-			result = ce_write(c, fd, ce->name + common, ce_namelen(ce) - common + 1);
+			result = ce_write(c, fd, ce->name + common, ce_namelen(ce) - common);
+		if (!result)
+			result = ce_write(c, fd, padding, 1);
 
 		strbuf_splice(previous_name, common, to_remove,
 			      ce->name + common, ce_namelen(ce) - common);
@@ -2393,8 +2335,11 @@ static int do_write_index(struct index_state *istate, struct tempfile *tempfile,
 
 	if (ce_flush(&c, newfd, istate->sha1))
 		return -1;
-	if (close_tempfile(tempfile))
-		return error(_("could not close '%s'"), tempfile->filename.buf);
+	if (close_tempfile_gently(tempfile)) {
+		error(_("could not close '%s'"), tempfile->filename.buf);
+		delete_tempfile(&tempfile);
+		return -1;
+	}
 	if (stat(tempfile->filename.buf, &st))
 		return -1;
 	istate->timestamp.sec = (unsigned int)st.st_mtime;
@@ -2418,7 +2363,7 @@ static int commit_locked_index(struct lock_file *lk)
 static int do_write_locked_index(struct index_state *istate, struct lock_file *lock,
 				 unsigned flags)
 {
-	int ret = do_write_index(istate, &lock->tempfile, 0);
+	int ret = do_write_index(istate, lock->tempfile, 0);
 	if (ret)
 		return ret;
 	assert((flags & (COMMIT_LOCK | CLOSE_LOCK)) !=
@@ -2426,7 +2371,7 @@ static int do_write_locked_index(struct index_state *istate, struct lock_file *l
 	if (flags & COMMIT_LOCK)
 		return commit_locked_index(lock);
 	else if (flags & CLOSE_LOCK)
-		return close_lock_file(lock);
+		return close_lock_file_gently(lock);
 	else
 		return ret;
 }
@@ -2501,34 +2446,33 @@ static int clean_shared_index_files(const char *current_hex)
 	return 0;
 }
 
-static struct tempfile temporary_sharedindex;
-
 static int write_shared_index(struct index_state *istate,
 			      struct lock_file *lock, unsigned flags)
 {
+	struct tempfile *temp;
 	struct split_index *si = istate->split_index;
-	int fd, ret;
+	int ret;
 
-	fd = mks_tempfile(&temporary_sharedindex, git_path("sharedindex_XXXXXX"));
-	if (fd < 0) {
+	temp = mks_tempfile(git_path("sharedindex_XXXXXX"));
+	if (!temp) {
 		hashclr(si->base_sha1);
 		return do_write_locked_index(istate, lock, flags);
 	}
 	move_cache_to_base_index(istate);
-	ret = do_write_index(si->base, &temporary_sharedindex, 1);
+	ret = do_write_index(si->base, temp, 1);
 	if (ret) {
-		delete_tempfile(&temporary_sharedindex);
+		delete_tempfile(&temp);
 		return ret;
 	}
-	ret = adjust_shared_perm(get_tempfile_path(&temporary_sharedindex));
+	ret = adjust_shared_perm(get_tempfile_path(temp));
 	if (ret) {
 		int save_errno = errno;
-		error("cannot fix permission bits on %s", get_tempfile_path(&temporary_sharedindex));
-		delete_tempfile(&temporary_sharedindex);
+		error("cannot fix permission bits on %s", get_tempfile_path(temp));
+		delete_tempfile(&temp);
 		errno = save_errno;
 		return ret;
 	}
-	ret = rename_tempfile(&temporary_sharedindex,
+	ret = rename_tempfile(&temp,
 			      git_path("sharedindex.%s", sha1_to_hex(si->base->sha1)));
 	if (!ret) {
 		hashcpy(si->base_sha1, si->base->sha1);

@@ -4,8 +4,8 @@
 #include "tree-walk.h"
 #include "cache-tree.h"
 
-#ifndef DEBUG_CACHE_TREE
-#define DEBUG_CACHE_TREE 0
+#ifndef DEBUG
+#define DEBUG 0
 #endif
 
 struct cache_tree *cache_tree(void)
@@ -110,7 +110,7 @@ static int do_invalidate_path(struct cache_tree *it, const char *path)
 	int namelen;
 	struct cache_tree_sub *down;
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	fprintf(stderr, "cache-tree invalidate <%s>\n", path);
 #endif
 
@@ -393,7 +393,7 @@ static int update_one(struct cache_tree *it,
 		strbuf_addf(&buffer, "%o %.*s%c", mode, entlen, path + baselen, '\0');
 		strbuf_add(&buffer, sha1, 20);
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 		fprintf(stderr, "cache-tree update-one %o %.*s\n",
 			mode, entlen, path + baselen);
 #endif
@@ -416,7 +416,7 @@ static int update_one(struct cache_tree *it,
 
 	strbuf_release(&buffer);
 	it->entry_count = to_invalidate ? -1 : i - *skip_count;
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	fprintf(stderr, "cache-tree update-one (%d ent, %d subtree) %s\n",
 		it->entry_count, it->subtree_nr,
 		oid_to_hex(&it->oid));
@@ -455,7 +455,7 @@ static void write_one(struct strbuf *buffer, struct cache_tree *it,
 	strbuf_add(buffer, path, pathlen);
 	strbuf_addf(buffer, "%c%d %d\n", 0, it->entry_count, it->subtree_nr);
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	if (0 <= it->entry_count)
 		fprintf(stderr, "cache-tree <%.*s> (%d ent, %d subtree) %s\n",
 			pathlen, path, it->entry_count, it->subtree_nr,
@@ -528,7 +528,7 @@ static struct cache_tree *read_one(const char **buffer, unsigned long *size_p)
 		size -= 20;
 	}
 
-#if DEBUG_CACHE_TREE
+#if DEBUG
 	if (0 <= it->entry_count)
 		fprintf(stderr, "cache-tree <%s> (%d ent, %d subtree) %s\n",
 			*buffer, it->entry_count, subtree_nr,
@@ -603,19 +603,16 @@ static struct cache_tree *cache_tree_find(struct cache_tree *it, const char *pat
 int write_index_as_tree(unsigned char *sha1, struct index_state *index_state, const char *index_path, int flags, const char *prefix)
 {
 	int entries, was_valid, newfd;
-	struct lock_file *lock_file;
+	struct lock_file lock_file = LOCK_INIT;
+	int ret = 0;
 
-	/*
-	 * We can't free this memory, it becomes part of a linked list
-	 * parsed atexit()
-	 */
-	lock_file = xcalloc(1, sizeof(struct lock_file));
-
-	newfd = hold_lock_file_for_update(lock_file, index_path, LOCK_DIE_ON_ERROR);
+	newfd = hold_lock_file_for_update(&lock_file, index_path, LOCK_DIE_ON_ERROR);
 
 	entries = read_index_from(index_state, index_path);
-	if (entries < 0)
-		return WRITE_TREE_UNREADABLE_INDEX;
+	if (entries < 0) {
+		ret = WRITE_TREE_UNREADABLE_INDEX;
+		goto out;
+	}
 	if (flags & WRITE_TREE_IGNORE_CACHE_TREE)
 		cache_tree_free(&index_state->cache_tree);
 
@@ -624,10 +621,12 @@ int write_index_as_tree(unsigned char *sha1, struct index_state *index_state, co
 
 	was_valid = cache_tree_fully_valid(index_state->cache_tree);
 	if (!was_valid) {
-		if (cache_tree_update(index_state, flags) < 0)
-			return WRITE_TREE_UNMERGED_INDEX;
+		if (cache_tree_update(index_state, flags) < 0) {
+			ret = WRITE_TREE_UNMERGED_INDEX;
+			goto out;
+		}
 		if (0 <= newfd) {
-			if (!write_locked_index(index_state, lock_file, COMMIT_LOCK))
+			if (!write_locked_index(index_state, &lock_file, COMMIT_LOCK))
 				newfd = -1;
 		}
 		/* Not being able to write is fine -- we are only interested
@@ -641,17 +640,19 @@ int write_index_as_tree(unsigned char *sha1, struct index_state *index_state, co
 	if (prefix) {
 		struct cache_tree *subtree;
 		subtree = cache_tree_find(index_state->cache_tree, prefix);
-		if (!subtree)
-			return WRITE_TREE_PREFIX_ERROR;
+		if (!subtree) {
+			ret = WRITE_TREE_PREFIX_ERROR;
+			goto out;
+		}
 		hashcpy(sha1, subtree->oid.hash);
 	}
 	else
 		hashcpy(sha1, index_state->cache_tree->oid.hash);
 
+out:
 	if (0 <= newfd)
-		rollback_lock_file(lock_file);
-
-	return 0;
+		rollback_lock_file(&lock_file);
+	return ret;
 }
 
 int write_cache_as_tree(unsigned char *sha1, int flags, const char *prefix)

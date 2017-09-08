@@ -73,6 +73,7 @@ static int show_progress = -1;
 static int default_to_upstream = 1;
 static int signoff;
 static const char *sign_commit;
+static int verify_msg = 1;
 
 static struct strategy all_strategy[] = {
 	{ "recursive",  DEFAULT_TWOHEAD | NO_TRIVIAL },
@@ -236,6 +237,7 @@ static struct option builtin_merge_options[] = {
 	  N_("GPG sign commit"), PARSE_OPT_OPTARG, NULL, (intptr_t) "" },
 	OPT_BOOL(0, "overwrite-ignore", &overwrite_ignore, N_("update ignored files (default)")),
 	OPT_BOOL(0, "signoff", &signoff, N_("add Signed-off-by:")),
+	OPT_BOOL(0, "verify", &verify_msg, N_("verify commit-msg hook")),
 	OPT_END()
 };
 
@@ -253,6 +255,7 @@ static int save_state(struct object_id *stash)
 	struct child_process cp = CHILD_PROCESS_INIT;
 	struct strbuf buffer = STRBUF_INIT;
 	const char *argv[] = {"stash", "create", NULL};
+	int rc = -1;
 
 	cp.argv = argv;
 	cp.out = -1;
@@ -266,11 +269,14 @@ static int save_state(struct object_id *stash)
 	if (finish_command(&cp) || len < 0)
 		die(_("stash failed"));
 	else if (!len)		/* no changes */
-		return -1;
+		goto out;
 	strbuf_setlen(&buffer, buffer.len-1);
 	if (get_oid(buffer.buf, stash))
 		die(_("not a valid object: %s"), buffer.buf);
-	return 0;
+	rc = 0;
+out:
+	strbuf_release(&buffer);
+	return rc;
 }
 
 static void read_empty(unsigned const char *sha1, int verbose)
@@ -780,6 +786,12 @@ static void prepare_to_commit(struct commit_list *remoteheads)
 		if (launch_editor(git_path_merge_msg(), NULL, NULL))
 			abort_commit(remoteheads, NULL);
 	}
+
+	if (verify_msg && run_commit_hook(0 < option_edit, get_index_file(),
+					  "commit-msg",
+					  git_path_merge_msg(), NULL))
+		abort_commit(remoteheads, NULL);
+
 	read_merge_msg(&msg);
 	strbuf_stripspace(&msg, 0 < option_edit);
 	if (!msg.len)
@@ -934,6 +946,7 @@ static void write_merge_heads(struct commit_list *remoteheads)
 	if (fast_forward == FF_NO)
 		strbuf_addstr(&buf, "no-ff");
 	write_file_buf(git_path_merge_mode(), buf.buf, buf.len);
+	strbuf_release(&buf);
 }
 
 static void write_merge_state(struct commit_list *remoteheads)

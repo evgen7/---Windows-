@@ -17,14 +17,14 @@ static void trim_last_path_component(struct strbuf *path)
 	int i = path->len;
 
 	/* back up past trailing slashes, if any */
-	while (i && is_dir_sep(path->buf[i - 1]))
+	while (i && path->buf[i - 1] == '/')
 		i--;
 
 	/*
 	 * then go backwards until a slash, or the beginning of the
 	 * string
 	 */
-	while (i && !is_dir_sep(path->buf[i - 1]))
+	while (i && path->buf[i - 1] != '/')
 		i--;
 
 	strbuf_setlen(path, i);
@@ -72,7 +72,6 @@ static void resolve_symlink(struct strbuf *path)
 /* Make sure errno contains a meaningful value on error */
 static int lock_file(struct lock_file *lk, const char *path, int flags)
 {
-	int fd;
 	struct strbuf filename = STRBUF_INIT;
 
 	strbuf_addstr(&filename, path);
@@ -80,9 +79,9 @@ static int lock_file(struct lock_file *lk, const char *path, int flags)
 		resolve_symlink(&filename);
 
 	strbuf_addstr(&filename, LOCK_SUFFIX);
-	fd = create_tempfile(&lk->tempfile, filename.buf);
+	lk->tempfile = create_tempfile(filename.buf);
 	strbuf_release(&filename);
-	return fd;
+	return lk->tempfile ? lk->tempfile->fd : -1;
 }
 
 /*
@@ -191,7 +190,7 @@ char *get_locked_file_path(struct lock_file *lk)
 {
 	struct strbuf ret = STRBUF_INIT;
 
-	strbuf_addstr(&ret, get_tempfile_path(&lk->tempfile));
+	strbuf_addstr(&ret, get_tempfile_path(lk->tempfile));
 	if (ret.len <= LOCK_SUFFIX_LEN ||
 	    strcmp(ret.buf + ret.len - LOCK_SUFFIX_LEN, LOCK_SUFFIX))
 		die("BUG: get_locked_file_path() called for malformed lock object");

@@ -6,12 +6,12 @@ test_description='rewrite diff'
 
 test_expect_success setup '
 
-	cat "$TEST_DIRECTORY"/diff-lib/COPYING >test &&
+	cat "$TEST_DIRECTORY"/../COPYING >test &&
 	git add test &&
 	tr \
 	  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" \
 	  "nopqrstuvwxyzabcdefghijklmNOPQRSTUVWXYZABCDEFGHIJKLM" \
-	  <"$TEST_DIRECTORY"/diff-lib/COPYING >test &&
+	  <"$TEST_DIRECTORY"/../COPYING >test &&
 	echo "to be deleted" >test2 &&
 	git add test2
 

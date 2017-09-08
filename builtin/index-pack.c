@@ -12,6 +12,7 @@
 #include "exec_cmd.h"
 #include "streaming.h"
 #include "thread-utils.h"
+#include "object-store.h"
 #include "packfile.h"
 
 static const char index_pack_usage[] =

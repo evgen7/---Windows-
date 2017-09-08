@@ -1091,8 +1091,8 @@ test_expect_success $PREREQ 'in-reply-to but no threading' '
 		--to=nobody@example.com \
 		--in-reply-to="<in-reply-id@example.com>" \
 		--no-thread \
-		$patches >out &&
-	grep "In-Reply-To: <in-reply-id@example.com>" out
+		$patches |
+	grep "In-Reply-To: <in-reply-id@example.com>"
 '
 
 test_expect_success $PREREQ 'no in-reply-to and no threading' '

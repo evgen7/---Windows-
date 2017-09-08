@@ -2,7 +2,6 @@
 #include "cache.h"
 #include "parse-options.h"
 #include "bisect.h"
-#include "config.h"
 
 static const char * const git_bisect_helper_usage[] = {
 	N_("git bisect--helper --next-all [--no-checkout]"),
@@ -21,7 +20,6 @@ int cmd_bisect__helper(int argc, const char **argv, const char *prefix)
 		OPT_END()
 	};
 
-	git_config(git_default_config, NULL);
 	argc = parse_options(argc, argv, prefix, options,
 			     git_bisect_helper_usage, 0);
 

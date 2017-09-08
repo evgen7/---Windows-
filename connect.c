@@ -652,10 +652,6 @@ static enum protocol parse_connect_url(const char *url_orig, char **ret_host,
 
 	if (protocol == PROTO_LOCAL)
 		path = end;
-	else if (protocol == PROTO_FILE && *host != '/' &&
-		 !has_dos_drive_prefix(host) &&
-		 offset_1st_component(host - 2) > 1)
-		path = host - 2; /* include the leading "//" */
 	else if (protocol == PROTO_FILE && has_dos_drive_prefix(end))
 		path = end; /* "file://$(pwd)" may be "file://C:/projects/repo" */
 	else
@@ -782,7 +778,6 @@ struct child_process *git_connect(int fd[2], const char *url,
 	char *hostandport, *path;
 	struct child_process *conn = &no_fork;
 	enum protocol protocol;
-	struct strbuf cmd = STRBUF_INIT;
 
 	/* Without this we cannot rely on waitpid() to tell
 	 * what happened to our children.
@@ -830,6 +825,8 @@ struct child_process *git_connect(int fd[2], const char *url,
 			     target_host, 0);
 		free(target_host);
 	} else {
+		struct strbuf cmd = STRBUF_INIT;
+
 		conn = xmalloc(sizeof(*conn));
 		child_process_init(conn);
 
@@ -866,6 +863,7 @@ struct child_process *git_connect(int fd[2], const char *url,
 				free(hostandport);
 				free(path);
 				free(conn);
+				strbuf_release(&cmd);
 				return NULL;
 			}
 
