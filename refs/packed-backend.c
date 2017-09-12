@@ -513,6 +513,10 @@ int packed_refs_lock(struct ref_store *ref_store, int flags, struct strbuf *err)
 	 */
 	validate_packed_ref_cache(refs);
 
+	/*
+	 * Now make sure that the packed-refs file as it exists in the
+	 * locked state is loaded into the cache:
+	 */
 	get_packed_ref_cache(refs);
 	return 0;
 }
