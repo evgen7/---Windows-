@@ -1,10 +1,8 @@
-/test-abbrev
 /test-chmtime
 /test-ctype
 /test-config
 /test-date
 /test-delta
-/test-drop-caches
 /test-dump-cache-tree
 /test-dump-split-index
 /test-dump-untracked-cache

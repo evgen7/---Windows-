@@ -62,7 +62,7 @@ int is_staging_gitmodules_ok(const struct index_state *istate)
 	if ((pos >= 0) && (pos < istate->cache_nr)) {
 		struct stat st;
 		if (lstat(GITMODULES_FILE, &st) == 0 &&
-		    ce_match_stat(istate->cache[pos], &st, CE_MATCH_IGNORE_FSMONITOR) & DATA_CHANGED)
+		    ce_match_stat(istate->cache[pos], &st, 0) & DATA_CHANGED)
 			return 0;
 	}
 
@@ -587,7 +587,7 @@ void show_submodule_inline_diff(struct diff_options *o, const char *path,
 		struct object_id *one, struct object_id *two,
 		unsigned dirty_submodule)
 {
-	const struct object_id *old = current_hash->empty_tree, *new = current_hash->empty_tree;
+	const struct object_id *old = &empty_tree_oid, *new = &empty_tree_oid;
 	struct commit *left = NULL, *right = NULL;
 	struct commit_list *merge_bases = NULL;
 	struct child_process cp = CHILD_PROCESS_INIT;
@@ -1608,8 +1608,7 @@ int submodule_move_head(const char *path,
 			cp.dir = path;
 
 			prepare_submodule_repo_env(&cp.env_array);
-			argv_array_pushl(&cp.args, "update-ref", "HEAD",
-					 "--no-deref", new, NULL);
+			argv_array_pushl(&cp.args, "update-ref", "HEAD", new, NULL);
 
 			if (run_command(&cp)) {
 				ret = -1;

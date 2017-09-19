@@ -1287,10 +1287,6 @@ struct ref_iterator *refs_ref_iterator_begin(
 	if (trim)
 		iter = prefix_ref_iterator_begin(iter, "", trim);
 
-	/* Sanity check for subclasses: */
-	if (!iter->ordered)
-		BUG("reference iterator is not ordered");
-
 	return iter;
 }
 
@@ -1689,23 +1685,7 @@ int refs_pack_refs(struct ref_store *refs, unsigned int flags)
 int refs_peel_ref(struct ref_store *refs, const char *refname,
 		  unsigned char *sha1)
 {
-	int flag;
-	unsigned char base[20];
-
-	if (current_ref_iter && current_ref_iter->refname == refname) {
-		struct object_id peeled;
-
-		if (ref_iterator_peel(current_ref_iter, &peeled))
-			return -1;
-		hashcpy(sha1, peeled.hash);
-		return 0;
-	}
-
-	if (refs_read_ref_full(refs, refname,
-			       RESOLVE_REF_READING, base, &flag))
-		return -1;
-
-	return peel_object(base, sha1);
+	return refs->be->peel_ref(refs, refname, sha1);
 }
 
 int peel_ref(const char *refname, unsigned char *sha1)
@@ -2054,15 +2034,4 @@ int refs_rename_ref(struct ref_store *refs, const char *oldref,
 int rename_ref(const char *oldref, const char *newref, const char *logmsg)
 {
 	return refs_rename_ref(get_main_ref_store(), oldref, newref, logmsg);
-}
-
-int refs_copy_existing_ref(struct ref_store *refs, const char *oldref,
-		    const char *newref, const char *logmsg)
-{
-	return refs->be->copy_ref(refs, oldref, newref, logmsg);
-}
-
-int copy_existing_ref(const char *oldref, const char *newref, const char *logmsg)
-{
-	return refs_copy_existing_ref(get_main_ref_store(), oldref, newref, logmsg);
 }

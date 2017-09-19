@@ -736,10 +736,6 @@ static int push_update_ref_status(struct strbuf *buf,
 			status = REF_STATUS_REJECT_STALE;
 			FREE_AND_NULL(msg);
 		}
-		else if (!strcmp(msg, "lazy force-with-error")) {
-			status = REF_STATUS_REJECT_LAZY_CAS;
-			FREE_AND_NULL(msg);
-		}
 		else if (!strcmp(msg, "forced update")) {
 			forced = 1;
 			FREE_AND_NULL(msg);
@@ -851,7 +847,6 @@ static int push_refs_with_push(struct transport *transport,
 		switch (ref->status) {
 		case REF_STATUS_REJECT_NONFASTFORWARD:
 		case REF_STATUS_REJECT_STALE:
-		case REF_STATUS_REJECT_LAZY_CAS:
 		case REF_STATUS_REJECT_ALREADY_EXISTS:
 		case REF_STATUS_UPTODATE:
 			continue;

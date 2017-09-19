@@ -387,14 +387,6 @@ static const char *skipspaces(const char *s)
 	return s;
 }
 
-static char *findspace(const char *s)
-{
-	for (; *s; s++)
-		if (isspace(*s))
-			return (char*)s;
-	return NULL;
-}
-
 static int cmd_parseopt(int argc, const char **argv, const char *prefix)
 {
 	static int keep_dashdash = 0, stop_at_non_option = 0;
@@ -442,7 +434,7 @@ static int cmd_parseopt(int argc, const char **argv, const char *prefix)
 	/* parse: (<short>|<short>,<long>|<long>)[*=?!]*<arghint>? SP+ <help> */
 	while (strbuf_getline(&sb, stdin) != EOF) {
 		const char *s;
-		char *help;
+		const char *help;
 		struct option *o;
 
 		if (!sb.len)
@@ -452,17 +444,15 @@ static int cmd_parseopt(int argc, const char **argv, const char *prefix)
 		memset(opts + onb, 0, sizeof(opts[onb]));
 
 		o = &opts[onb++];
-		help = findspace(sb.buf);
-		if (!help || sb.buf == help) {
+		help = strchr(sb.buf, ' ');
+		if (!help || *sb.buf == ' ') {
 			o->type = OPTION_GROUP;
 			o->help = xstrdup(skipspaces(sb.buf));
 			continue;
 		}
 
-		*help = '\0';
-
 		o->type = OPTION_CALLBACK;
-		o->help = xstrdup(skipspaces(help+1));
+		o->help = xstrdup(skipspaces(help));
 		o->value = &parsed;
 		o->flags = PARSE_OPT_NOARG;
 		o->callback = &parseopt_dump;
@@ -875,11 +865,6 @@ int cmd_rev_parse(int argc, const char **argv, const char *prefix)
 			}
 			if (!strcmp(arg, "--is-bare-repository")) {
 				printf("%s\n", is_bare_repository() ? "true"
-						: "false");
-				continue;
-			}
-			if (!strcmp(arg, "--is-shallow-repository")) {
-				printf("%s\n", is_repository_shallow() ? "true"
 						: "false");
 				continue;
 			}
