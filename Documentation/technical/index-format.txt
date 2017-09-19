@@ -298,7 +298,7 @@ The remaining data of each directory block is grouped by type:
 
 == File System Monitor cache
 
-  The file system monitor cache tracks files for which the query-fsmonitor
+  The file system monitor cache tracks files for which the core.fsmonitor
   hook has told us about changes.  The signature for this extension is
   { 'F', 'S', 'M', 'N' }.
 
@@ -310,7 +310,7 @@ The remaining data of each directory block is grouped by type:
 	time which is stored as the nanoseconds elapsed since midnight,
 	January 1, 1970.
 
-  - 32-bit bitmap size: the size of the CE_FSMONITOR_DIRTY bitmap.
+  - 32-bit bitmap size: the size of the CE_FSMONITOR_VALID bitmap.
 
   - An ewah bitmap, the n-th bit indicates whether the n-th index entry
-    is CE_FSMONITOR_DIRTY.
+    is not CE_FSMONITOR_VALID.

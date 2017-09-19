@@ -4,6 +4,7 @@
 #include "streaming.h"
 #include "submodule.h"
 #include "progress.h"
+#include "fsmonitor.h"
 
 static void create_directories(const char *path, int path_len,
 			       const struct checkout *state)
@@ -257,7 +258,8 @@ static int write_entry(struct cache_entry *ce,
 	char *new;
 	struct strbuf buf = STRBUF_INIT;
 	unsigned long size;
-	size_t wrote, newsize = 0;
+	ssize_t wrote;
+	size_t newsize = 0;
 	struct stat st;
 	const struct submodule *sub;
 
@@ -332,7 +334,7 @@ static int write_entry(struct cache_entry *ce,
 			fstat_done = fstat_output(fd, state, &st);
 		close(fd);
 		free(new);
-		if (wrote != size)
+		if (wrote < 0)
 			return error("unable to write file %s", path);
 		break;
 	case S_IFGITLINK:
@@ -357,7 +359,7 @@ finish:
 			lstat(ce->name, &st);
 		fill_stat_cache_info(ce, &st);
 		ce->ce_flags |= CE_UPDATE_IN_BASE;
-		ce->ce_flags |= CE_FSMONITOR_DIRTY;
+		mark_fsmonitor_invalid(state->istate, ce);
 		state->istate->cache_changed |= CE_ENTRY_CHANGED;
 	}
 	return 0;
@@ -403,7 +405,7 @@ int checkout_entry(struct cache_entry *ce,
 
 	if (!check_path(path.buf, path.len, &st, state->base_dir_len)) {
 		const struct submodule *sub;
-		unsigned changed = ce_match_stat(ce, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE);
+		unsigned changed = ce_match_stat(ce, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_IGNORE_FSMONITOR);
 		/*
 		 * Needs to be checked before !changed returns early,
 		 * as the possibly empty directory was not changed

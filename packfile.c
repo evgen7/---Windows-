@@ -1,13 +1,11 @@
 #include "cache.h"
 #include "mru.h"
 #include "pack.h"
-#include "repository.h"
 #include "dir.h"
 #include "mergesort.h"
 #include "packfile.h"
 #include "delta.h"
 #include "list.h"
-#include "object-store.h"
 #include "streaming.h"
 #include "sha1-lookup.h"
 
@@ -41,6 +39,8 @@ static unsigned int pack_open_fds;
 static unsigned int pack_max_fds;
 static size_t peak_pack_mapped;
 static size_t pack_mapped;
+struct packed_git *packed_git;
+struct mru packed_git_mru;
 
 #define SZ_FMT PRIuMAX
 static inline uintmax_t sz_fmt(size_t s) { return s; }
@@ -240,7 +240,7 @@ static int unuse_one_window(struct packed_git *current)
 
 	if (current)
 		scan_windows(current, &lru_p, &lru_w, &lru_l);
-	for (p = the_repository->objects.packed_git; p; p = p->next)
+	for (p = packed_git; p; p = p->next)
 		scan_windows(p, &lru_p, &lru_w, &lru_l);
 	if (lru_p) {
 		munmap(lru_w->base, lru_w->len);
@@ -310,7 +310,7 @@ void close_all_packs(void)
 {
 	struct packed_git *p;
 
-	for (p = the_repository->objects.packed_git; p; p = p->next)
+	for (p = packed_git; p; p = p->next)
 		if (p->do_not_close)
 			die("BUG: want to close pack marked 'do-not-close'");
 		else
@@ -378,7 +378,7 @@ static int close_one_pack(void)
 	struct pack_window *mru_w = NULL;
 	int accept_windows_inuse = 1;
 
-	for (p = the_repository->objects.packed_git; p; p = p->next) {
+	for (p = packed_git; p; p = p->next) {
 		if (p->pack_fd == -1)
 			continue;
 		find_lru_pack(p, &lru_p, &mru_w, &accept_windows_inuse);
@@ -664,13 +664,13 @@ struct packed_git *add_packed_git(const char *path, size_t path_len, int local)
 	return p;
 }
 
-void install_packed_git(struct repository *r, struct packed_git *pack)
+void install_packed_git(struct packed_git *pack)
 {
 	if (pack->pack_fd != -1)
 		pack_open_fds++;
 
-	pack->next = r->objects.packed_git;
-	r->objects.packed_git = pack;
+	pack->next = packed_git;
+	packed_git = pack;
 }
 
 void (*report_garbage)(unsigned seen_bits, const char *path);
@@ -719,8 +719,7 @@ static void report_pack_garbage(struct string_list *list)
 	report_helper(list, seen_bits, first, list->nr);
 }
 
-static void prepare_packed_git_one(struct repository *r,
-				   char *objdir, int local)
+static void prepare_packed_git_one(char *objdir, int local)
 {
 	struct strbuf path = STRBUF_INIT;
 	size_t dirnamelen;
@@ -753,7 +752,7 @@ static void prepare_packed_git_one(struct repository *r,
 		base_len = path.len;
 		if (strip_suffix_mem(path.buf, &base_len, ".idx")) {
 			/* Don't reopen a pack we already have. */
-			for (p = r->objects.packed_git; p; p = p->next) {
+			for (p = packed_git; p; p = p->next) {
 				size_t len;
 				if (strip_suffix(p->pack_name, ".pack", &len) &&
 				    len == base_len &&
@@ -766,7 +765,7 @@ static void prepare_packed_git_one(struct repository *r,
 			     * corresponding .pack file that we can map.
 			     */
 			    (p = add_packed_git(path.buf, path.len, local)) != NULL)
-				install_packed_git(r, p);
+				install_packed_git(p);
 		}
 
 		if (!report_garbage)
@@ -786,6 +785,8 @@ static void prepare_packed_git_one(struct repository *r,
 	strbuf_release(&path);
 }
 
+static int approximate_object_count_valid;
+
 /*
  * Give a fast, rough count of the number of objects in the repository. This
  * ignores loose objects completely. If you have a lot of them, then either
@@ -795,20 +796,19 @@ static void prepare_packed_git_one(struct repository *r,
  */
 unsigned long approximate_object_count(void)
 {
-	if (!the_repository->objects.approximate_object_count_valid) {
-		unsigned long count;
+	static unsigned long count;
+	if (!approximate_object_count_valid) {
 		struct packed_git *p;
 
-		prepare_packed_git(the_repository);
+		prepare_packed_git();
 		count = 0;
-		for (p = the_repository->objects.packed_git; p; p = p->next) {
+		for (p = packed_git; p; p = p->next) {
 			if (open_pack_index(p))
 				continue;
 			count += p->num_objects;
 		}
-		the_repository->objects.approximate_object_count = count;
 	}
-	return the_repository->objects.approximate_object_count;
+	return count;
 }
 
 static void *get_next_packed_git(const void *p)
@@ -849,42 +849,42 @@ static int sort_pack(const void *a_, const void *b_)
 	return -1;
 }
 
-static void rearrange_packed_git(struct repository *r)
+static void rearrange_packed_git(void)
 {
-	r->objects.packed_git = llist_mergesort(
-		r->objects.packed_git, get_next_packed_git,
-		set_next_packed_git, sort_pack);
+	packed_git = llist_mergesort(packed_git, get_next_packed_git,
+				     set_next_packed_git, sort_pack);
 }
 
-static void prepare_packed_git_mru(struct repository *r)
+static void prepare_packed_git_mru(void)
 {
 	struct packed_git *p;
 
-	mru_clear(&r->objects.packed_git_mru);
-	for (p = r->objects.packed_git; p; p = p->next)
-		mru_append(&r->objects.packed_git_mru, p);
+	mru_clear(&packed_git_mru);
+	for (p = packed_git; p; p = p->next)
+		mru_append(&packed_git_mru, p);
 }
 
-void prepare_packed_git(struct repository *r)
+static int prepare_packed_git_run_once = 0;
+void prepare_packed_git(void)
 {
 	struct alternate_object_database *alt;
 
-	if (r->objects.packed_git_initialized)
+	if (prepare_packed_git_run_once)
 		return;
-	prepare_packed_git_one(r, r->objectdir, 1);
-	prepare_alt_odb(r);
-	for (alt = r->objects.alt_odb_list; alt; alt = alt->next)
-		prepare_packed_git_one(r, alt->path, 0);
-	rearrange_packed_git(r);
-	prepare_packed_git_mru(r);
-	r->objects.packed_git_initialized = 1;
+	prepare_packed_git_one(get_object_directory(), 1);
+	prepare_alt_odb();
+	for (alt = alt_odb_list; alt; alt = alt->next)
+		prepare_packed_git_one(alt->path, 0);
+	rearrange_packed_git();
+	prepare_packed_git_mru();
+	prepare_packed_git_run_once = 1;
 }
 
-void reprepare_packed_git(struct repository *r)
+void reprepare_packed_git(void)
 {
-	r->objects.approximate_object_count_valid = 0;
-	r->objects.packed_git_initialized = 0;
-	prepare_packed_git(r);
+	approximate_object_count_valid = 0;
+	prepare_packed_git_run_once = 0;
+	prepare_packed_git();
 }
 
 unsigned long unpack_object_header_buffer(const unsigned char *buf,
@@ -995,7 +995,7 @@ const struct packed_git *has_packed_and_bad(const unsigned char *sha1)
 	struct packed_git *p;
 	unsigned i;
 
-	for (p = the_repository->objects.packed_git; p; p = p->next)
+	for (p = packed_git; p; p = p->next)
 		for (i = 0; i < p->num_bad_objects; i++)
 			if (!hashcmp(sha1, p->bad_object_sha1 + 20 * i))
 				return p;
@@ -1826,13 +1826,13 @@ int find_pack_entry(const unsigned char *sha1, struct pack_entry *e)
 {
 	struct mru_entry *p;
 
-	prepare_packed_git(the_repository);
-	if (!the_repository->objects.packed_git)
+	prepare_packed_git();
+	if (!packed_git)
 		return 0;
 
-	for (p = the_repository->objects.packed_git_mru.head; p; p = p->next) {
+	for (p = packed_git_mru.head; p; p = p->next) {
 		if (fill_pack_entry(sha1, e, p->item)) {
-			mru_mark(&the_repository->objects.packed_git_mru, p);
+			mru_mark(&packed_git_mru, p);
 			return 1;
 		}
 	}
@@ -1878,8 +1878,8 @@ int for_each_packed_object(each_packed_object_fn cb, void *data, unsigned flags)
 	int r = 0;
 	int pack_errors = 0;
 
-	prepare_packed_git(the_repository);
-	for (p = the_repository->objects.packed_git; p; p = p->next) {
+	prepare_packed_git();
+	for (p = packed_git; p; p = p->next) {
 		if ((flags & FOR_EACH_OBJECT_LOCAL_ONLY) && !p->pack_local)
 			continue;
 		if (open_pack_index(p)) {

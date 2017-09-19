@@ -1,6 +1,5 @@
 #include "cache.h"
 #include "pack-revindex.h"
-#include "object-store.h"
 
 /*
  * Pack index for existing packs give us easy access to the offsets into

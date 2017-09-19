@@ -18,6 +18,7 @@
 #include "parse-options.h"
 #include "argv-array.h"
 #include "prio-queue.h"
+#include "protocol.h"
 
 static const char * const upload_pack_usage[] = {
 	N_("git upload-pack [<options>] <dir>"),
@@ -1067,6 +1068,20 @@ int cmd_main(int argc, const char **argv)
 		die("'%s' does not appear to be a git repository", dir);
 
 	git_config(upload_pack_config, NULL);
-	upload_pack();
+
+	switch (determine_protocol_version_server()) {
+	case protocol_v1:
+		if (advertise_refs || !stateless_rpc)
+			packet_write_fmt(1, "version 1\n");
+		/*
+		 * v1 is just the original protocol with a version string,
+		 * so just fall through after writing the version string.
+		 */
+	case protocol_v0:
+	default:
+		upload_pack();
+		break;
+	}
+
 	return 0;
 }

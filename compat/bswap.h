@@ -160,6 +160,7 @@ static inline uint64_t git_bswap64(uint64_t x)
 #define get_be32(p)	ntohl(*(unsigned int *)(p))
 #define get_be64(p)	ntohll(*(uint64_t *)(p))
 #define put_be32(p, v)	do { *(unsigned int *)(p) = htonl(v); } while (0)
+#define put_be64(p, v)	do { *(uint64_t *)(p) = htonll(v); } while (0)
 
 #else
 
@@ -179,6 +180,13 @@ static inline uint32_t get_be32(const void *ptr)
 		(uint32_t)p[3] <<  0;
 }
 
+static inline uint64_t get_be64(const void *ptr)
+{
+	const unsigned char *p = ptr;
+	return	(uint64_t)get_be32(p[0]) << 32 |
+		(uint64_t)get_be32(p[4]) <<  0;
+}
+
 static inline void put_be32(void *ptr, uint32_t value)
 {
 	unsigned char *p = ptr;
@@ -188,11 +196,17 @@ static inline void put_be32(void *ptr, uint32_t value)
 	p[3] = value >>  0;
 }
 
-static inline uint64_t get_be64(const void *ptr)
+static inline void put_be64(void *ptr, uint64_t value)
 {
-	const unsigned char *p = ptr;
-	return  ((uint64_t)get_be32(p) << 32) |
-		((uint64_t)get_be32(p + 4));
+	unsigned char *p = ptr;
+	p[0] = value >> 56;
+	p[1] = value >> 48;
+	p[2] = value >> 40;
+	p[3] = value >> 32;
+	p[4] = value >> 24;
+	p[5] = value >> 16;
+	p[6] = value >>  8;
+	p[7] = value >>  0;
 }
 
 #endif

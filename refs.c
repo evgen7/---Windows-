@@ -609,7 +609,7 @@ static int write_pseudoref(const char *pseudoref, const unsigned char *sha1,
 		}
 	}
 
-	if (write_in_full(fd, buf.buf, buf.len) != buf.len) {
+	if (write_in_full(fd, buf.buf, buf.len) < 0) {
 		strbuf_addf(err, "could not write to '%s'", filename);
 		rollback_lock_file(&lock);
 		goto done;
@@ -938,6 +938,8 @@ int ref_transaction_update(struct ref_transaction *transaction,
 			    refname);
 		return -1;
 	}
+
+	flags &= REF_TRANSACTION_UPDATE_ALLOWED_FLAGS;
 
 	flags |= (new_sha1 ? REF_HAVE_NEW : 0) | (old_sha1 ? REF_HAVE_OLD : 0);
 
@@ -1285,6 +1287,10 @@ struct ref_iterator *refs_ref_iterator_begin(
 	if (trim)
 		iter = prefix_ref_iterator_begin(iter, "", trim);
 
+	/* Sanity check for subclasses: */
+	if (!iter->ordered)
+		BUG("reference iterator is not ordered");
+
 	return iter;
 }
 
@@ -1357,7 +1363,7 @@ int for_each_replace_ref(each_ref_fn fn, void *cb_data)
 	return do_for_each_ref(get_main_ref_store(),
 			       git_replace_ref_base, fn,
 			       strlen(git_replace_ref_base),
-			       0, cb_data);
+			       DO_FOR_EACH_INCLUDE_BROKEN, cb_data);
 }
 
 int for_each_namespaced_ref(each_ref_fn fn, void *cb_data)
@@ -1683,7 +1689,23 @@ int refs_pack_refs(struct ref_store *refs, unsigned int flags)
 int refs_peel_ref(struct ref_store *refs, const char *refname,
 		  unsigned char *sha1)
 {
-	return refs->be->peel_ref(refs, refname, sha1);
+	int flag;
+	unsigned char base[20];
+
+	if (current_ref_iter && current_ref_iter->refname == refname) {
+		struct object_id peeled;
+
+		if (ref_iterator_peel(current_ref_iter, &peeled))
+			return -1;
+		hashcpy(sha1, peeled.hash);
+		return 0;
+	}
+
+	if (refs_read_ref_full(refs, refname,
+			       RESOLVE_REF_READING, base, &flag))
+		return -1;
+
+	return peel_object(base, sha1);
 }
 
 int peel_ref(const char *refname, unsigned char *sha1)

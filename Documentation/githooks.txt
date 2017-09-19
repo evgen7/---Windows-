@@ -456,14 +456,14 @@ non-zero status causes 'git send-email' to abort before sending any
 e-mails.
 
 
-[[query-fsmonitor]]
-query-fsmonitor
-~~~~~~~~~~~~~~~
+[[fsmonitor-watchman]]
+fsmonitor-watchman
+~~~~~~~~~~~~~~~~~~
 
 This hook is invoked when the configuration option core.fsmonitor is
-set and git needs to identify changed or untracked files.  It takes
-two arguments, a version (currently 1) and the time in elapsed
-nanoseconds since midnight, January 1, 1970.
+set to .git/hooks/fsmonitor-watchman.  It takes two arguments, a version
+(currently 1) and the time in elapsed nanoseconds since midnight,
+January 1, 1970.
 
 The hook should output to stdout the list of all files in the working
 directory that may have changed since the requested time.  The logic

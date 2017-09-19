@@ -1,5 +1,4 @@
 #include "builtin.h"
-#include "repository.h"
 #include "config.h"
 #include "lockfile.h"
 #include "pack.h"
@@ -8,7 +7,6 @@
 #include "sideband.h"
 #include "run-command.h"
 #include "exec_cmd.h"
-#include "object-store.h"
 #include "commit.h"
 #include "object.h"
 #include "remote.h"
@@ -26,6 +24,7 @@
 #include "tmp-objdir.h"
 #include "oidset.h"
 #include "packfile.h"
+#include "protocol.h"
 
 static const char * const receive_pack_usage[] = {
 	N_("git receive-pack <git-dir>"),
@@ -745,7 +744,7 @@ static int run_and_feed_hook(const char *hook_name, feed_fn feed,
 		size_t n;
 		if (feed(feed_state, &buf, &n))
 			break;
-		if (write_in_full(proc.in, buf, n) != n)
+		if (write_in_full(proc.in, buf, n) < 0)
 			break;
 	}
 	close(proc.in);
@@ -1780,7 +1779,7 @@ static const char *unpack(int err_fd, struct shallow_info *si)
 		status = finish_command(&child);
 		if (status)
 			return "index-pack abnormal exit";
-		reprepare_packed_git(the_repository);
+		reprepare_packed_git();
 	}
 	return NULL;
 }
@@ -1964,6 +1963,19 @@ int cmd_receive_pack(int argc, const char **argv, const char *prefix)
 		unpack_limit = transfer_unpack_limit;
 	else if (0 <= receive_unpack_limit)
 		unpack_limit = receive_unpack_limit;
+
+	switch (determine_protocol_version_server()) {
+	case protocol_v1:
+		if (advertise_refs || !stateless_rpc)
+			packet_write_fmt(1, "version 1\n");
+		/*
+		 * v1 is just the original protocol with a version string,
+		 * so just fall through after writing the version string.
+		 */
+	case protocol_v0:
+	default:
+		break;
+	}
 
 	if (advertise_refs || !stateless_rpc) {
 		write_head_info();

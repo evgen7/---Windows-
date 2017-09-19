@@ -1,8 +1,6 @@
 #include "git-compat-util.h"
 #include "http.h"
-#include "repository.h"
 #include "config.h"
-#include "object-store.h"
 #include "pack.h"
 #include "sideband.h"
 #include "run-command.h"
@@ -14,6 +12,7 @@
 #include "gettext.h"
 #include "transport.h"
 #include "packfile.h"
+#include "protocol.h"
 
 static struct trace_key trace_curl = TRACE_KEY_INIT(CURL);
 long int git_curl_ipresolve = CURL_IPRESOLVE_WHATEVER;
@@ -795,6 +794,21 @@ static void set_from_env(const char **var, const char *envname)
 		*var = val;
 }
 
+static void protocol_http_header(void)
+{
+	if (get_protocol_version_config() > 0) {
+		struct strbuf protocol_header = STRBUF_INIT;
+
+		strbuf_addf(&protocol_header, GIT_PROTOCOL_HEADER ": version=%d",
+			    get_protocol_version_config());
+
+
+		extra_http_headers = curl_slist_append(extra_http_headers,
+						       protocol_header.buf);
+		strbuf_release(&protocol_header);
+	}
+}
+
 void http_init(struct remote *remote, const char *url, int proactive_auth)
 {
 	char *low_speed_limit;
@@ -824,6 +838,8 @@ void http_init(struct remote *remote, const char *url, int proactive_auth)
 
 	if (remote)
 		var_override(&http_proxy_authmethod, remote->http_proxy_authmethod);
+
+	protocol_http_header();
 
 	pragma_header = curl_slist_append(http_copy_default_headers(),
 		"Pragma: no-cache");
@@ -1900,7 +1916,7 @@ int finish_http_pack_request(struct http_pack_request *preq)
 		return -1;
 	}
 
-	install_packed_git(the_repository, p);
+	install_packed_git(p);
 	free(tmp_idx);
 	return 0;
 }
@@ -2013,7 +2029,7 @@ struct http_object_request *new_http_object_request(const char *base_url,
 	hashcpy(freq->sha1, sha1);
 	freq->localfile = -1;
 
-	filename = sha1_file_name(the_repository, sha1);
+	filename = sha1_file_name(sha1);
 	snprintf(freq->tmpfile, sizeof(freq->tmpfile),
 		 "%s.temp", filename);
 
@@ -2161,8 +2177,7 @@ int finish_http_object_request(struct http_object_request *freq)
 		return -1;
 	}
 	freq->rename =
-		finalize_object_file(freq->tmpfile,
-				     sha1_file_name(the_repository, freq->sha1));
+		finalize_object_file(freq->tmpfile, sha1_file_name(freq->sha1));
 
 	return freq->rename;
 }

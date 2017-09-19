@@ -11,7 +11,6 @@
  */
 
 #include "builtin.h"
-#include "repository.h"
 #include "config.h"
 #include "tempfile.h"
 #include "lockfile.h"
@@ -19,7 +18,6 @@
 #include "run-command.h"
 #include "sigchain.h"
 #include "argv-array.h"
-#include "object-store.h"
 #include "commit.h"
 #include "packfile.h"
 
@@ -174,8 +172,8 @@ static int too_many_packs(void)
 	if (gc_auto_pack_limit <= 0)
 		return 0;
 
-	prepare_packed_git(the_repository);
-	for (cnt = 0, p = the_repository->objects.packed_git; p; p = p->next) {
+	prepare_packed_git();
+	for (cnt = 0, p = packed_git; p; p = p->next) {
 		if (!p->pack_local)
 			continue;
 		if (p->pack_keep)
@@ -260,7 +258,7 @@ static const char *lock_repo_for_gc(int force, pid_t* ret_pid)
 		int should_exit;
 
 		if (!scan_fmt)
-			scan_fmt = xstrfmt("%s %%%dc", "%"SCNuMAX, HOST_NAME_MAX);
+			scan_fmt = xstrfmt("%s %%%ds", "%"SCNuMAX, HOST_NAME_MAX);
 		fp = fopen(pidfile_path, "r");
 		memset(locking_host, 0, sizeof(locking_host));
 		should_exit =
@@ -475,7 +473,7 @@ int cmd_gc(int argc, const char **argv, const char *prefix)
 		return error(FAILED_RUN, rerere.argv[0]);
 
 	report_garbage = report_pack_garbage;
-	reprepare_packed_git(the_repository);
+	reprepare_packed_git();
 	if (pack_garbage.nr > 0)
 		clean_pack_garbage();
 

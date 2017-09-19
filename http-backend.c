@@ -1,9 +1,7 @@
 #include "cache.h"
 #include "config.h"
-#include "repository.h"
 #include "refs.h"
 #include "pkt-line.h"
-#include "object-store.h"
 #include "object.h"
 #include "tag.h"
 #include "exec_cmd.h"
@@ -360,7 +358,7 @@ static void inflate_request(const char *prog_name, int out, int buffer_input)
 				die("zlib error inflating request, result %d", ret);
 
 			n = stream.total_out - cnt;
-			if (write_in_full(out, out_buf, n) != n)
+			if (write_in_full(out, out_buf, n) < 0)
 				die("%s aborted reading request", prog_name);
 			cnt += n;
 
@@ -381,7 +379,7 @@ static void copy_request(const char *prog_name, int out)
 	ssize_t n = read_request(0, &buf);
 	if (n < 0)
 		die_errno("error reading request body");
-	if (write_in_full(out, buf, n) != n)
+	if (write_in_full(out, buf, n) < 0)
 		die("%s aborted reading request", prog_name);
 	close(out);
 	free(buf);
@@ -520,14 +518,14 @@ static void get_info_packs(struct strbuf *hdr, char *arg)
 	size_t cnt = 0;
 
 	select_getanyfile(hdr);
-	prepare_packed_git(the_repository);
-	for (p = the_repository->objects.packed_git; p; p = p->next) {
+	prepare_packed_git();
+	for (p = packed_git; p; p = p->next) {
 		if (p->pack_local)
 			cnt++;
 	}
 
 	strbuf_grow(&buf, cnt * 53 + 2);
-	for (p = the_repository->objects.packed_git; p; p = p->next) {
+	for (p = packed_git; p; p = p->next) {
 		if (p->pack_local)
 			strbuf_addf(&buf, "P %s\n", p->pack_name + objdirlen + 6);
 	}

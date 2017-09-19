@@ -243,7 +243,7 @@ struct cache_entry {
 #define CE_ADDED             (1 << 19)
 
 #define CE_HASHED            (1 << 20)
-#define CE_FSMONITOR_DIRTY   (1 << 21)
+#define CE_FSMONITOR_VALID   (1 << 21)
 #define CE_WT_REMOVE         (1 << 22) /* remove in work directory */
 #define CE_CONFLICTED        (1 << 23)
 
@@ -387,7 +387,6 @@ struct index_state {
 	unsigned char sha1[20];
 	struct untracked_cache *untracked;
 	uint64_t fsmonitor_last_update;
-	struct ewah_bitmap *fsmonitor_dirty;
 };
 
 extern struct index_state the_index;
@@ -487,6 +486,15 @@ static inline enum object_type object_type(unsigned int mode)
 #define GIT_NOGLOB_PATHSPECS_ENVIRONMENT "GIT_NOGLOB_PATHSPECS"
 #define GIT_ICASE_PATHSPECS_ENVIRONMENT "GIT_ICASE_PATHSPECS"
 #define GIT_QUARANTINE_ENVIRONMENT "GIT_QUARANTINE_PATH"
+
+/*
+ * Environment variable used in handshaking the wire protocol.
+ * Contains a colon ':' separated list of keys with optional values
+ * 'key[=value]'.  Presence of unknown keys must be tolerated.
+ */
+#define GIT_PROTOCOL_ENVIRONMENT "GIT_PROTOCOL"
+/* HTTP header used to handshake the wire protocol */
+#define GIT_PROTOCOL_HEADER "Git-Protocol"
 
 /*
  * This environment variable is expected to contain a boolean indicating
@@ -723,8 +731,10 @@ extern void *read_blob_data_from_index(const struct index_state *, const char *,
 #define CE_MATCH_IGNORE_MISSING		0x08
 /* enable stat refresh */
 #define CE_MATCH_REFRESH		0x10
-extern int ie_match_stat(const struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
-extern int ie_modified(const struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
+/* do stat comparison even if CE_FSMONITOR_VALID is true */
+#define CE_MATCH_IGNORE_FSMONITOR 0X20
+extern int ie_match_stat(struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
+extern int ie_modified(struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
 
 #define HASH_WRITE_OBJECT 1
 #define HASH_FORMAT_CHECK 2
@@ -817,7 +827,7 @@ extern int core_apply_sparse_checkout;
 extern int precomposed_unicode;
 extern int protect_hfs;
 extern int protect_ntfs;
-extern int core_fsmonitor;
+extern const char *core_fsmonitor;
 
 /*
  * Include broken refs in all ref iterations, which will
@@ -939,6 +949,14 @@ extern void check_repository_format(void);
 #define INODE_CHANGED   0x0010
 #define DATA_CHANGED    0x0020
 #define TYPE_CHANGED    0x0040
+
+/*
+ * Return the name of the file in the local object database that would
+ * be used to store a loose object with the specified sha1.  The
+ * return value is a pointer to a statically allocated buffer that is
+ * overwritten each time the function is called.
+ */
+extern const char *sha1_file_name(const unsigned char *sha1);
 
 /*
  * Return an abbreviated sha1 unique within this repository's object database.
@@ -1221,6 +1239,7 @@ extern int pretend_sha1_file(void *, unsigned long, enum object_type, unsigned c
 extern int force_object_loose(const unsigned char *sha1, time_t mtime);
 extern int git_open_cloexec(const char *name, int flags);
 #define git_open(name) git_open_cloexec(name, O_RDONLY)
+extern void *map_sha1_file(const unsigned char *sha1, unsigned long *size);
 extern int unpack_sha1_header(git_zstream *stream, unsigned char *map, unsigned long mapsize, void *buffer, unsigned long bufsiz);
 extern int parse_sha1_header(const char *hdr, unsigned long *sizep);
 
@@ -1540,7 +1559,7 @@ extern int has_dirs_only_path(const char *name, int len, int prefix_len);
 extern void schedule_dir_for_removal(const char *name, int len);
 extern void remove_scheduled_dirs(void);
 
-struct alternate_object_database {
+extern struct alternate_object_database {
 	struct alternate_object_database *next;
 
 	/* see alt_scratch_buf() */
@@ -1557,13 +1576,12 @@ struct alternate_object_database {
 	char loose_objects_subdir_seen[256];
 	struct oid_array loose_objects_cache;
 
-	/*
-	 * Path to the alternate object database, relative to the
-	 * current working directory.
-	 */
 	char path[FLEX_ARRAY];
-};
+} *alt_odb_list;
+extern void prepare_alt_odb(void);
 extern char *compute_alternate_path(const char *path, struct strbuf *err);
+typedef int alt_odb_fn(struct alternate_object_database *, void *);
+extern int foreach_alt_odb(alt_odb_fn, void*);
 
 /*
  * Allocate a "struct alternate_object_database" but do _not_ actually
@@ -1600,6 +1618,34 @@ struct pack_window {
 	unsigned int last_used;
 	unsigned int inuse_cnt;
 };
+
+extern struct packed_git {
+	struct packed_git *next;
+	struct pack_window *windows;
+	off_t pack_size;
+	const void *index_data;
+	size_t index_size;
+	uint32_t num_objects;
+	uint32_t num_bad_objects;
+	unsigned char *bad_object_sha1;
+	int index_version;
+	time_t mtime;
+	int pack_fd;
+	unsigned pack_local:1,
+		 pack_keep:1,
+		 freshened:1,
+		 do_not_close:1;
+	unsigned char sha1[20];
+	struct revindex_entry *revindex;
+	/* something like ".git/objects/pack/xxxxx.pack" */
+	char pack_name[FLEX_ARRAY]; /* more */
+} *packed_git;
+
+/*
+ * A most-recently-used ordered version of the packed_git list, which can
+ * be iterated instead of packed_git (and marked via mru_mark).
+ */
+extern struct mru packed_git_mru;
 
 struct pack_entry {
 	off_t offset;

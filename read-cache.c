@@ -64,7 +64,7 @@ static void replace_index_entry(struct index_state *istate, int nr, struct cache
 	free(old);
 	set_index_entry(istate, nr, ce);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
-	ce->ce_flags |= CE_FSMONITOR_DIRTY;
+	mark_fsmonitor_invalid(istate, ce);
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 }
 
@@ -153,8 +153,10 @@ void fill_stat_cache_info(struct cache_entry *ce, struct stat *st)
 	if (assume_unchanged)
 		ce->ce_flags |= CE_VALID;
 
-	if (S_ISREG(st->st_mode))
+	if (S_ISREG(st->st_mode)) {
 		ce_mark_uptodate(ce);
+		mark_fsmonitor_valid(ce);
+	}
 }
 
 static int ce_compare_data(const struct cache_entry *ce, struct stat *st)
@@ -303,7 +305,7 @@ int match_stat_data_racy(const struct index_state *istate,
 	return match_stat_data(sd, st);
 }
 
-int ie_match_stat(const struct index_state *istate,
+int ie_match_stat(struct index_state *istate,
 		  const struct cache_entry *ce, struct stat *st,
 		  unsigned int options)
 {
@@ -311,7 +313,10 @@ int ie_match_stat(const struct index_state *istate,
 	int ignore_valid = options & CE_MATCH_IGNORE_VALID;
 	int ignore_skip_worktree = options & CE_MATCH_IGNORE_SKIP_WORKTREE;
 	int assume_racy_is_modified = options & CE_MATCH_RACY_IS_DIRTY;
+	int ignore_fsmonitor = options & CE_MATCH_IGNORE_FSMONITOR;
 
+	if (!ignore_fsmonitor)
+		refresh_fsmonitor(istate);
 	/*
 	 * If it's marked as always valid in the index, it's
 	 * valid whatever the checked-out copy says.
@@ -321,6 +326,8 @@ int ie_match_stat(const struct index_state *istate,
 	if (!ignore_skip_worktree && ce_skip_worktree(ce))
 		return 0;
 	if (!ignore_valid && (ce->ce_flags & CE_VALID))
+		return 0;
+	if (!ignore_fsmonitor && (ce->ce_flags & CE_FSMONITOR_VALID))
 		return 0;
 
 	/*
@@ -359,7 +366,7 @@ int ie_match_stat(const struct index_state *istate,
 	return changed;
 }
 
-int ie_modified(const struct index_state *istate,
+int ie_modified(struct index_state *istate,
 		const struct cache_entry *ce,
 		struct stat *st, unsigned int options)
 {
@@ -634,7 +641,7 @@ int add_to_index(struct index_state *istate, const char *path, struct stat *st, 
 	int size, namelen, was_same;
 	mode_t st_mode = st->st_mode;
 	struct cache_entry *ce, *alias;
-	unsigned ce_option = CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_RACY_IS_DIRTY;
+	unsigned ce_option = CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_RACY_IS_DIRTY|CE_MATCH_IGNORE_FSMONITOR;
 	int verbose = flags & (ADD_CACHE_VERBOSE | ADD_CACHE_PRETEND);
 	int pretend = flags & ADD_CACHE_PRETEND;
 	int intent_only = flags & ADD_CACHE_INTENT;
@@ -780,7 +787,7 @@ int chmod_index_entry(struct index_state *istate, struct cache_entry *ce,
 	}
 	cache_tree_invalidate_path(istate, ce->name);
 	ce->ce_flags |= CE_UPDATE_IN_BASE;
-	ce->ce_flags |= CE_FSMONITOR_DIRTY;
+	mark_fsmonitor_invalid(istate, ce);
 	istate->cache_changed |= CE_ENTRY_CHANGED;
 
 	return 0;
@@ -1232,10 +1239,13 @@ static struct cache_entry *refresh_cache_ent(struct index_state *istate,
 	int ignore_valid = options & CE_MATCH_IGNORE_VALID;
 	int ignore_skip_worktree = options & CE_MATCH_IGNORE_SKIP_WORKTREE;
 	int ignore_missing = options & CE_MATCH_IGNORE_MISSING;
+	int ignore_fsmonitor = options & CE_MATCH_IGNORE_FSMONITOR;
 
 	if (!refresh || ce_uptodate(ce))
 		return ce;
 
+	if (!ignore_fsmonitor)
+		refresh_fsmonitor(istate);
 	/*
 	 * CE_VALID or CE_SKIP_WORKTREE means the user promised us
 	 * that the change to the work tree does not matter and told
@@ -1246,6 +1256,10 @@ static struct cache_entry *refresh_cache_ent(struct index_state *istate,
 		return ce;
 	}
 	if (!ignore_valid && (ce->ce_flags & CE_VALID)) {
+		ce_mark_uptodate(ce);
+		return ce;
+	}
+	if (!ignore_fsmonitor && (ce->ce_flags & CE_FSMONITOR_VALID)) {
 		ce_mark_uptodate(ce);
 		return ce;
 	}
@@ -1286,8 +1300,10 @@ static struct cache_entry *refresh_cache_ent(struct index_state *istate,
 			 * because CE_UPTODATE flag is in-core only;
 			 * we are not going to write this change out.
 			 */
-			if (!S_ISGITLINK(ce->ce_mode))
+			if (!S_ISGITLINK(ce->ce_mode)) {
 				ce_mark_uptodate(ce);
+				mark_fsmonitor_valid(ce);
+			}
 			return ce;
 		}
 	}
@@ -1340,15 +1356,13 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 	int first = 1;
 	int in_porcelain = (flags & REFRESH_IN_PORCELAIN);
 	unsigned int options = (CE_MATCH_REFRESH |
-				(really ? CE_MATCH_IGNORE_VALID : 0) |
+				(really ? CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_FSMONITOR : 0) |
 				(not_new ? CE_MATCH_IGNORE_MISSING : 0));
 	const char *modified_fmt;
 	const char *deleted_fmt;
 	const char *typechange_fmt;
 	const char *added_fmt;
 	const char *unmerged_fmt;
-
-	refresh_by_fsmonitor(istate);
 
 	modified_fmt = (in_porcelain ? "M\t%s\n" : "%s: needs update\n");
 	deleted_fmt = (in_porcelain ? "D\t%s\n" : "%s: needs update\n");
@@ -1386,11 +1400,8 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 			continue;
 
 		new = refresh_cache_ent(istate, ce, options, &cache_errno, &changed);
-		if (new == ce) {
-			ce->ce_flags &= ~CE_FSMONITOR_DIRTY;
+		if (new == ce)
 			continue;
-		}
-
 		if (!new) {
 			const char *fmt;
 
@@ -1400,7 +1411,7 @@ int refresh_index(struct index_state *istate, unsigned int flags,
 				 */
 				ce->ce_flags &= ~CE_VALID;
 				ce->ce_flags |= CE_UPDATE_IN_BASE;
-				ce->ce_flags |= CE_FSMONITOR_DIRTY;
+				mark_fsmonitor_invalid(istate, ce);
 				istate->cache_changed |= CE_ENTRY_CHANGED;
 			}
 			if (quiet)
@@ -1735,7 +1746,7 @@ static void post_read_index_from(struct index_state *istate)
 	check_ce_order(istate);
 	tweak_untracked_cache(istate);
 	tweak_split_index(istate);
-	tweak_fsmonitor_extension(istate);
+	tweak_fsmonitor(istate);
 }
 
 /* remember to discard_cache() before reading a different cache! */
@@ -1936,7 +1947,7 @@ static int ce_write_flush(git_SHA_CTX *context, int fd)
 	unsigned int buffered = write_buffer_len;
 	if (buffered) {
 		git_SHA1_Update(context, write_buffer, buffered);
-		if (write_in_full(fd, write_buffer, buffered) != buffered)
+		if (write_in_full(fd, write_buffer, buffered) < 0)
 			return -1;
 		write_buffer_len = 0;
 	}
@@ -1985,7 +1996,7 @@ static int ce_flush(git_SHA_CTX *context, int fd, unsigned char *sha1)
 
 	/* Flush first if not enough space for SHA1 signature */
 	if (left + 20 > WRITE_BUFFER_SIZE) {
-		if (write_in_full(fd, write_buffer, left) != left)
+		if (write_in_full(fd, write_buffer, left) < 0)
 			return -1;
 		left = 0;
 	}
@@ -1994,7 +2005,7 @@ static int ce_flush(git_SHA_CTX *context, int fd, unsigned char *sha1)
 	git_SHA1_Final(write_buffer + left, context);
 	hashcpy(sha1, write_buffer + left);
 	left += 20;
-	return (write_in_full(fd, write_buffer, left) != left) ? -1 : 0;
+	return (write_in_full(fd, write_buffer, left) < 0) ? -1 : 0;
 }
 
 static void ce_smudge_racily_clean_entry(struct cache_entry *ce)

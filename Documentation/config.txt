@@ -414,11 +414,10 @@ core.protectNTFS::
 	Defaults to `true` on Windows, and `false` elsewhere.
 
 core.fsmonitor::
-	If set to true, call the query-fsmonitor hook proc which will
-	identify all files that may have had changes since the last
-	request. This information is used to speed up operations like
-	'git commit' and 'git status' by limiting what git must scan to
-	detect changes.
+	If set, the value of this variable is used as a command which
+	will identify all files that may have changed since the
+	requested date/time. This information is used to speed up git by
+	avoiding unnecessary processing of files that have not changed.
 
 core.trustctime::
 	If false, the ctime differences between the index and the
@@ -2521,6 +2520,22 @@ The protocol names currently used by git are:
 
   - any external helpers are named by their protocol (e.g., use
     `hg` to allow the `git-remote-hg` helper)
+--
+
+protocol.version::
+	If set, clients will attempt to communicate with a server using
+	the specified protocol version.  If unset, no attempt will be
+	made by the client to communicate using a particular protocol
+	version, this results in protocol version 0 being used.
+	Supported versions:
++
+--
+
+* `0` - the original wire protocol.
+
+* `1` - the original wire protocol with the addition of a version string
+  in the initial respose from the server.
+
 --
 
 pull.ff::

@@ -10,8 +10,6 @@
 #include "dir.h"
 #include "sha1-array.h"
 #include "packfile.h"
-#include "repository.h"
-#include "object-store.h"
 
 static int get_oid_oneline(const char *, struct object_id *, struct commit_list *);
 
@@ -106,7 +104,7 @@ static void find_short_object_filename(struct disambiguate_state *ds)
 		 */
 		fakeent = alloc_alt_odb(get_object_directory());
 	}
-	fakeent->next = the_repository->objects.alt_odb_list;
+	fakeent->next = alt_odb_list;
 
 	for (alt = fakeent; alt && !ds->ambiguous; alt = alt->next) {
 		int pos;
@@ -194,9 +192,8 @@ static void find_short_packed_object(struct disambiguate_state *ds)
 {
 	struct packed_git *p;
 
-	prepare_packed_git(the_repository);
-	for (p = the_repository->objects.packed_git; p && !ds->ambiguous;
-	     p = p->next)
+	prepare_packed_git();
+	for (p = packed_git; p && !ds->ambiguous; p = p->next)
 		unique_in_pack(p, ds);
 }
 
@@ -352,7 +349,7 @@ static int init_object_disambiguation(const char *name, int len,
 
 	ds->len = len;
 	ds->hex_pfx[len] = '\0';
-	prepare_alt_odb(the_repository);
+	prepare_alt_odb();
 	return 0;
 }
 
@@ -477,10 +474,41 @@ static unsigned msb(unsigned long val)
 	return r;
 }
 
+struct min_abbrev_data {
+	unsigned int init_len;
+	unsigned int cur_len;
+	char *hex;
+};
+
+static inline char get_hex_char_from_oid(const struct object_id *oid, int i)
+{
+	static const char hex[] = "0123456789abcdef";
+
+	if ((i & 1) == 0)
+		return hex[oid->hash[i >> 1] >> 4];
+	else
+		return hex[oid->hash[i >> 1] & 0xf];
+}
+
+static int extend_abbrev_len(const struct object_id *oid, void *cb_data)
+{
+	struct min_abbrev_data *mad = cb_data;
+
+	unsigned int i = mad->init_len;
+	while (mad->hex[i] && mad->hex[i] == get_hex_char_from_oid(oid, i))
+		i++;
+
+	if (i < GIT_MAX_RAWSZ && i >= mad->cur_len)
+		mad->cur_len = i + 1;
+
+	return 0;
+}
+
 int find_unique_abbrev_r(char *hex, const unsigned char *sha1, int len)
 {
-	int status, exists;
-
+	struct disambiguate_state ds;
+	struct min_abbrev_data mad;
+	struct object_id oid_ret;
 	if (len < 0) {
 		unsigned long count = approximate_object_count();
 		/*
@@ -506,19 +534,24 @@ int find_unique_abbrev_r(char *hex, const unsigned char *sha1, int len)
 	sha1_to_hex_r(hex, sha1);
 	if (len == GIT_SHA1_HEXSZ || !len)
 		return GIT_SHA1_HEXSZ;
-	exists = has_sha1_file(sha1);
-	while (len < GIT_SHA1_HEXSZ) {
-		struct object_id oid_ret;
-		status = get_short_oid(hex, len, &oid_ret, GET_OID_QUIETLY);
-		if (exists
-		    ? !status
-		    : status == SHORT_NAME_NOT_FOUND) {
-			hex[len] = 0;
-			return len;
-		}
-		len++;
-	}
-	return len;
+
+	if (init_object_disambiguation(hex, len, &ds) < 0)
+		return -1;
+
+	mad.init_len = len;
+	mad.cur_len = len;
+	mad.hex = hex;
+
+	ds.fn = extend_abbrev_len;
+	ds.always_call_fn = 1;
+	ds.cb_data = (void*)&mad;
+
+	find_short_object_filename(&ds);
+	find_short_packed_object(&ds);
+	(void)finish_object_disambiguation(&ds, &oid_ret);
+
+	hex[mad.cur_len] = 0;
+	return mad.cur_len;
 }
 
 const char *find_unique_abbrev(const unsigned char *sha1, int len)

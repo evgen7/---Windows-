@@ -1,7 +1,6 @@
 #include "cache.h"
 #include "config.h"
 #include "transport.h"
-#include "repository.h"
 #include "run-command.h"
 #include "pkt-line.h"
 #include "fetch-pack.h"
@@ -12,7 +11,6 @@
 #include "bundle.h"
 #include "dir.h"
 #include "refs.h"
-#include "object-store.h"
 #include "branch.h"
 #include "url.h"
 #include "submodule.h"
@@ -1293,5 +1291,5 @@ void for_each_alternate_ref(alternate_ref_fn fn, void *data)
 	struct alternate_refs_data cb;
 	cb.fn = fn;
 	cb.data = data;
-	foreach_alt_odb(the_repository, refs_from_alternate_cb, &cb);
+	foreach_alt_odb(refs_from_alternate_cb, &cb);
 }

@@ -1,13 +1,11 @@
 #include "cache.h"
 #include "repository.h"
-#include "object-store.h"
 #include "config.h"
 #include "submodule-config.h"
 
 /* The main repository */
 static struct repository the_repo = {
-	NULL, NULL, NULL, OBJECT_STORE_INIT,
-	NULL, NULL, NULL, NULL, NULL, NULL, &the_index, 0, 0
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &the_index, 0, 0
 };
 struct repository *the_repository = &the_repo;
 
