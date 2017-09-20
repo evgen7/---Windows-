@@ -1,4 +1,5 @@
 #include "builtin.h"
+#include "parse-options.h"
 #include "tag.h"
 
 /*
@@ -14,6 +15,8 @@
  * single-character-tag line, and "tagger . <> 0 +0000\n" at 20 bytes is
  * the shortest possible tagger-line.
  */
+
+static int allow_missing_tagger;
 
 /*
  * We refuse to tag something we can't verify. Just because.
@@ -41,8 +44,9 @@ static int verify_tag(char *buffer, unsigned long size)
 	unsigned char sha1[20];
 	const char *object, *type_line, *tag_line, *tagger_line, *lb, *rb;
 	size_t len;
+	const unsigned long min_size = allow_missing_tagger ? 71 : 84;
 
-	if (size < 84)
+	if (size < min_size)
 		return error("wanna fool me ? you obviously got the size wrong !");
 
 	buffer[size] = 0;
@@ -98,46 +102,46 @@ static int verify_tag(char *buffer, unsigned long size)
 	/* Verify the tagger line */
 	tagger_line = tag_line;
 
-	if (memcmp(tagger_line, "tagger ", 7))
+	if (!memcmp(tagger_line, "tagger ", 7)) {
+		/*
+		 * Check for correct form for name and email
+		 * i.e. " <" followed by "> " on _this_ line
+		 * No angle brackets within the name or email address fields.
+		 * No spaces within the email address field.
+		 */
+		tagger_line += 7;
+		if (!(lb = strstr(tagger_line, " <")) || !(rb = strstr(lb+2, "> ")) ||
+			strpbrk(tagger_line, "<>\n") != lb+1 ||
+			strpbrk(lb+2, "><\n ") != rb)
+			return error("char%"PRIuMAX": malformed tagger field",
+				(uintmax_t) (tagger_line - buffer));
+
+		/* Check for author name, at least one character, space is acceptable */
+		if (lb == tagger_line)
+			return error("char%"PRIuMAX": missing tagger name",
+				(uintmax_t) (tagger_line - buffer));
+
+		/* timestamp, 1 or more digits followed by space */
+		tagger_line = rb + 2;
+		if (!(len = strspn(tagger_line, "0123456789")))
+			return error("char%"PRIuMAX": missing tag timestamp",
+				(uintmax_t) (tagger_line - buffer));
+		tagger_line += len;
+		if (*tagger_line != ' ')
+			return error("char%"PRIuMAX": malformed tag timestamp",
+				(uintmax_t) (tagger_line - buffer));
+		tagger_line++;
+
+		/* timezone, 5 digits [+-]hhmm, max. 1400 */
+		if (!((tagger_line[0] == '+' || tagger_line[0] == '-') &&
+		      strspn(tagger_line+1, "0123456789") == 4 &&
+		      tagger_line[5] == '\n' && atoi(tagger_line+1) <= 1400))
+			return error("char%"PRIuMAX": malformed tag timezone",
+				(uintmax_t) (tagger_line - buffer));
+		tagger_line += 6;
+	} else if (!allow_missing_tagger)
 		return error("char%"PRIuMAX": could not find \"tagger \"",
-			(uintmax_t) (tagger_line - buffer));
-
-	/*
-	 * Check for correct form for name and email
-	 * i.e. " <" followed by "> " on _this_ line
-	 * No angle brackets within the name or email address fields.
-	 * No spaces within the email address field.
-	 */
-	tagger_line += 7;
-	if (!(lb = strstr(tagger_line, " <")) || !(rb = strstr(lb+2, "> ")) ||
-		strpbrk(tagger_line, "<>\n") != lb+1 ||
-		strpbrk(lb+2, "><\n ") != rb)
-		return error("char%"PRIuMAX": malformed tagger field",
-			(uintmax_t) (tagger_line - buffer));
-
-	/* Check for author name, at least one character, space is acceptable */
-	if (lb == tagger_line)
-		return error("char%"PRIuMAX": missing tagger name",
-			(uintmax_t) (tagger_line - buffer));
-
-	/* timestamp, 1 or more digits followed by space */
-	tagger_line = rb + 2;
-	if (!(len = strspn(tagger_line, "0123456789")))
-		return error("char%"PRIuMAX": missing tag timestamp",
-			(uintmax_t) (tagger_line - buffer));
-	tagger_line += len;
-	if (*tagger_line != ' ')
-		return error("char%"PRIuMAX": malformed tag timestamp",
-			(uintmax_t) (tagger_line - buffer));
-	tagger_line++;
-
-	/* timezone, 5 digits [+-]hhmm, max. 1400 */
-	if (!((tagger_line[0] == '+' || tagger_line[0] == '-') &&
-	      strspn(tagger_line+1, "0123456789") == 4 &&
-	      tagger_line[5] == '\n' && atoi(tagger_line+1) <= 1400))
-		return error("char%"PRIuMAX": malformed tag timezone",
-			(uintmax_t) (tagger_line - buffer));
-	tagger_line += 6;
+			     (uintmax_t) (tagger_line - buffer));
 
 	/* Verify the blank line separating the header from the body */
 	if (*tagger_line != '\n')
@@ -148,13 +152,25 @@ static int verify_tag(char *buffer, unsigned long size)
 	return 0;
 }
 
+static char const * const mktag_usage[] = {
+	N_("git mktag [<options>]"),
+	NULL
+};
+
+static struct option mktag_opts[] = {
+	OPT_BOOL(0, "allow-missing-tagger", &allow_missing_tagger, N_("allow the tagger field to be omitted")),
+	OPT_END(),
+};
+
 int cmd_mktag(int argc, const char **argv, const char *prefix)
 {
 	struct strbuf buf = STRBUF_INIT;
 	unsigned char result_sha1[20];
 
-	if (argc != 1)
-		usage("git mktag");
+	argc = parse_options(argc, argv, prefix, mktag_opts, mktag_usage, 0);
+
+	if (argc != 0)
+		usage_with_options(mktag_usage, mktag_opts);
 
 	if (strbuf_read(&buf, 0, 4096) < 0) {
 		die_errno("could not read from stdin");

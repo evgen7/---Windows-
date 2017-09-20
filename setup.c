@@ -432,16 +432,15 @@ static int check_repo_format(const char *var, const char *value, void *vdata)
 	return 0;
 }
 
-static int check_repository_format_gently(const char *gitdir, int *nongit_ok)
+static int check_repository_format_gently(const char *gitdir, struct repository_format *candidate, int *nongit_ok)
 {
 	struct strbuf sb = STRBUF_INIT;
 	struct strbuf err = STRBUF_INIT;
-	struct repository_format candidate;
 	int has_common;
 
 	has_common = get_common_dir(&sb, gitdir);
 	strbuf_addstr(&sb, "/config");
-	read_repository_format(&candidate, sb.buf);
+	read_repository_format(candidate, sb.buf);
 	strbuf_release(&sb);
 
 	/*
@@ -449,10 +448,10 @@ static int check_repository_format_gently(const char *gitdir, int *nongit_ok)
 	 * we treat a missing config as a silent "ok", even when nongit_ok
 	 * is unset.
 	 */
-	if (candidate.version < 0)
+	if (candidate->version < 0)
 		return 0;
 
-	if (verify_repository_format(&candidate, &err) < 0) {
+	if (verify_repository_format(candidate, &err) < 0) {
 		if (nongit_ok) {
 			warning("%s", err.buf);
 			strbuf_release(&err);
@@ -462,21 +461,21 @@ static int check_repository_format_gently(const char *gitdir, int *nongit_ok)
 		die("%s", err.buf);
 	}
 
-	repository_format_precious_objects = candidate.precious_objects;
-	string_list_clear(&candidate.unknown_extensions, 0);
+	repository_format_precious_objects = candidate->precious_objects;
+	string_list_clear(&candidate->unknown_extensions, 0);
 	if (!has_common) {
-		if (candidate.is_bare != -1) {
-			is_bare_repository_cfg = candidate.is_bare;
+		if (candidate->is_bare != -1) {
+			is_bare_repository_cfg = candidate->is_bare;
 			if (is_bare_repository_cfg == 1)
 				inside_work_tree = -1;
 		}
-		if (candidate.work_tree) {
+		if (candidate->work_tree) {
 			free(git_work_tree_cfg);
-			git_work_tree_cfg = candidate.work_tree;
+			git_work_tree_cfg = candidate->work_tree;
 			inside_work_tree = -1;
 		}
 	} else {
-		free(candidate.work_tree);
+		free(candidate->work_tree);
 	}
 
 	return 0;
@@ -487,6 +486,7 @@ int read_repository_format(struct repository_format *format, const char *path)
 	memset(format, 0, sizeof(*format));
 	format->version = -1;
 	format->is_bare = -1;
+	format->hash_algo = GIT_HASH_SHA1;
 	string_list_init(&format->unknown_extensions, 1);
 	git_config_from_file(check_repo_format, path, format);
 	return format->version;
@@ -622,6 +622,7 @@ cleanup_return:
 
 static const char *setup_explicit_git_dir(const char *gitdirenv,
 					  struct strbuf *cwd,
+					  struct repository_format *repo_fmt,
 					  int *nongit_ok)
 {
 	const char *work_tree_env = getenv(GIT_WORK_TREE_ENVIRONMENT);
@@ -647,7 +648,7 @@ static const char *setup_explicit_git_dir(const char *gitdirenv,
 		die("Not a git repository: '%s'", gitdirenv);
 	}
 
-	if (check_repository_format_gently(gitdirenv, nongit_ok)) {
+	if (check_repository_format_gently(gitdirenv, repo_fmt, nongit_ok)) {
 		free(gitfile);
 		return NULL;
 	}
@@ -720,9 +721,10 @@ static const char *setup_explicit_git_dir(const char *gitdirenv,
 
 static const char *setup_discovered_git_dir(const char *gitdir,
 					    struct strbuf *cwd, int offset,
+					    struct repository_format *repo_fmt,
 					    int *nongit_ok)
 {
-	if (check_repository_format_gently(gitdir, nongit_ok))
+	if (check_repository_format_gently(gitdir, repo_fmt, nongit_ok))
 		return NULL;
 
 	/* --work-tree is set without --git-dir; use discovered one */
@@ -734,7 +736,7 @@ static const char *setup_discovered_git_dir(const char *gitdir,
 			gitdir = to_free = real_pathdup(gitdir, 1);
 		if (chdir(cwd->buf))
 			die_errno("Could not come back to cwd");
-		ret = setup_explicit_git_dir(gitdir, cwd, nongit_ok);
+		ret = setup_explicit_git_dir(gitdir, cwd, repo_fmt, nongit_ok);
 		free(to_free);
 		return ret;
 	}
@@ -766,11 +768,12 @@ static const char *setup_discovered_git_dir(const char *gitdir,
 
 /* #16.1, #17.1, #20.1, #21.1, #22.1 (see t1510) */
 static const char *setup_bare_git_dir(struct strbuf *cwd, int offset,
+				      struct repository_format *repo_fmt,
 				      int *nongit_ok)
 {
 	int root_len;
 
-	if (check_repository_format_gently(".", nongit_ok))
+	if (check_repository_format_gently(".", repo_fmt, nongit_ok))
 		return NULL;
 
 	setenv(GIT_IMPLICIT_WORK_TREE_ENVIRONMENT, "0", 1);
@@ -782,7 +785,7 @@ static const char *setup_bare_git_dir(struct strbuf *cwd, int offset,
 		gitdir = offset == cwd->len ? "." : xmemdupz(cwd->buf, offset);
 		if (chdir(cwd->buf))
 			die_errno("Could not come back to cwd");
-		return setup_explicit_git_dir(gitdir, cwd, nongit_ok);
+		return setup_explicit_git_dir(gitdir, cwd, repo_fmt, nongit_ok);
 	}
 
 	inside_git_dir = 1;
@@ -1023,6 +1026,7 @@ const char *setup_git_directory_gently(int *nongit_ok)
 	static struct strbuf cwd = STRBUF_INIT;
 	struct strbuf dir = STRBUF_INIT, gitdir = STRBUF_INIT;
 	const char *prefix;
+	struct repository_format repo_fmt;
 
 	/*
 	 * We may have read an incomplete configuration before
@@ -1050,18 +1054,18 @@ const char *setup_git_directory_gently(int *nongit_ok)
 		prefix = NULL;
 		break;
 	case GIT_DIR_EXPLICIT:
-		prefix = setup_explicit_git_dir(gitdir.buf, &cwd, nongit_ok);
+		prefix = setup_explicit_git_dir(gitdir.buf, &cwd, &repo_fmt, nongit_ok);
 		break;
 	case GIT_DIR_DISCOVERED:
 		if (dir.len < cwd.len && chdir(dir.buf))
 			die(_("Cannot change to '%s'"), dir.buf);
 		prefix = setup_discovered_git_dir(gitdir.buf, &cwd, dir.len,
-						  nongit_ok);
+						  &repo_fmt, nongit_ok);
 		break;
 	case GIT_DIR_BARE:
 		if (dir.len < cwd.len && chdir(dir.buf))
 			die(_("Cannot change to '%s'"), dir.buf);
-		prefix = setup_bare_git_dir(&cwd, dir.len, nongit_ok);
+		prefix = setup_bare_git_dir(&cwd, dir.len, &repo_fmt, nongit_ok);
 		break;
 	case GIT_DIR_HIT_CEILING:
 		prefix = setup_nongit(cwd.buf, nongit_ok);
@@ -1107,6 +1111,7 @@ const char *setup_git_directory_gently(int *nongit_ok)
 			repo_set_gitdir(the_repository, gitdir);
 			setup_git_env();
 		}
+		repo_set_hash_algo(the_repository, repo_fmt.hash_algo);
 	}
 
 	strbuf_release(&dir);
@@ -1168,7 +1173,8 @@ int git_config_perm(const char *var, const char *value)
 
 void check_repository_format(void)
 {
-	check_repository_format_gently(get_git_dir(), NULL);
+	struct repository_format repo_fmt;
+	check_repository_format_gently(get_git_dir(), &repo_fmt, NULL);
 	startup_info->have_repository = 1;
 }
 

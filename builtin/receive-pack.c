@@ -24,6 +24,7 @@
 #include "tmp-objdir.h"
 #include "oidset.h"
 #include "packfile.h"
+#include "protocol.h"
 
 static const char * const receive_pack_usage[] = {
 	N_("git receive-pack <git-dir>"),
@@ -1962,6 +1963,19 @@ int cmd_receive_pack(int argc, const char **argv, const char *prefix)
 		unpack_limit = transfer_unpack_limit;
 	else if (0 <= receive_unpack_limit)
 		unpack_limit = receive_unpack_limit;
+
+	switch (determine_protocol_version_server()) {
+	case protocol_v1:
+		if (advertise_refs || !stateless_rpc)
+			packet_write_fmt(1, "version 1\n");
+		/*
+		 * v1 is just the original protocol with a version string,
+		 * so just fall through after writing the version string.
+		 */
+	case protocol_v0:
+	default:
+		break;
+	}
 
 	if (advertise_refs || !stateless_rpc) {
 		write_head_info();

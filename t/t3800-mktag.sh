@@ -340,7 +340,36 @@ check_verify_failure 'detect invalid header entry' \
 	'^error: char124: trailing garbage in tag header$'
 
 ############################################################
-# 24. create valid tag
+# 24. missing tagger ok with --allow-missing-tagger
+
+cat >tag.sig <<EOF
+object $head
+type commit
+tag mytag
+
+EOF
+
+test_expect_success \
+    'missing tagger with --allow-missing-tagger' \
+    'git mktag --allow-missing-tagger <tag.sig >.git/refs/tags/mytag 2>message'
+
+############################################################
+# 25. detect invalid header entry with --allow-missing-tagger
+
+cat >tag.sig <<EOF
+object $head
+type commit
+tag mytag
+this line should not be here
+EOF
+
+test_expect_success \
+    'detect invalid header entry with --allow-missing-tagger' \
+    '( test_must_fail git mktag --allow-missing-tagger <tag.sig 2>message ) &&
+       grep "^error: char70: trailing garbage in tag header$" message'
+
+############################################################
+# 26. create valid tag
 
 cat >tag.sig <<EOF
 object $head
@@ -355,7 +384,7 @@ test_expect_success \
     'git mktag <tag.sig >.git/refs/tags/mytag 2>message'
 
 ############################################################
-# 25. check mytag
+# 27. check mytag
 
 test_expect_success \
     'check mytag' \

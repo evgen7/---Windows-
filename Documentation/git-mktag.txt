@@ -9,7 +9,7 @@ git-mktag - Creates a tag object
 SYNOPSIS
 --------
 [verse]
-'git mktag'
+'git mktag' [--allow-missing-tagger]
 
 DESCRIPTION
 -----------
@@ -33,6 +33,13 @@ by older Git may not have `tagger` line).  The message, when
 exists, is separated by a blank line from the header.  The
 message part may contain a signature that Git itself doesn't
 care about, but that can be verified with gpg.
+
+OPTIONS
+-------
+--allow-missing-tagger::
+	Allow the `tagger` line in the header to be omitted. This is
+	rarely desirable but may be useful in recreating tags created
+	by older Git.
 
 GIT
 ---

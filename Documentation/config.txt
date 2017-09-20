@@ -413,6 +413,13 @@ core.protectNTFS::
 	8.3 "short" names.
 	Defaults to `true` on Windows, and `false` elsewhere.
 
+core.fsmonitor::
+	If set, the value of this variable is used as a command which
+	will identify all files that may have changed since the
+	requested date/time. This information is used to speed up git by
+	avoiding unnecessary processing of files that have not changed.
+	See the "fsmonitor-watchman" section of linkgit:githooks[5].
+
 core.trustctime::
 	If false, the ctime differences between the index and the
 	working tree are ignored; useful when the inode change time
@@ -1990,8 +1997,7 @@ http.maxRequests::
 http.minSessions::
 	The number of curl sessions (counted across slots) to be kept across
 	requests. They will not be ended with curl_easy_cleanup() until
-	http_cleanup() is invoked. If USE_CURL_MULTI is not defined, this
-	value will be capped at 1. Defaults to 1.
+	http_cleanup() is invoked. Defaults to 1.
 
 http.postBuffer::
 	Maximum size in bytes of the buffer used by smart HTTP
@@ -2517,6 +2523,22 @@ The protocol names currently used by git are:
     `hg` to allow the `git-remote-hg` helper)
 --
 
+protocol.version::
+	If set, clients will attempt to communicate with a server using
+	the specified protocol version.  If unset, no attempt will be
+	made by the client to communicate using a particular protocol
+	version, this results in protocol version 0 being used.
+	Supported versions:
++
+--
+
+* `0` - the original wire protocol.
+
+* `1` - the original wire protocol with the addition of a version string
+  in the initial respose from the server.
+
+--
+
 pull.ff::
 	By default, Git does not create an extra merge commit when merging
 	a commit that is a descendant of the current commit. Instead, the
@@ -2606,6 +2628,11 @@ This used to be the default, but not since Git 2.0 (`simple` is the
 new default).
 
 --
+
+push.allowLazyForceWithLease::
+	If set to true, allow the `--force-with-lease` option
+	without the expected object name (i.e. expecting the objects
+	at the tip of corresponding remote-tracking branches).
 
 push.followTags::
 	If set to true enable `--follow-tags` option by default.  You
@@ -3017,6 +3044,10 @@ status.short::
 status.branch::
 	Set to true to enable --branch by default in linkgit:git-status[1].
 	The option --no-branch takes precedence over this variable.
+
+status.inProgress::
+	Set to true to enable --in-progress by default in linkgit:git-status[1].
+	The option --no-in-progress takes precedence over this variable.
 
 status.displayCommentPrefix::
 	If set to true, linkgit:git-status[1] will insert a comment

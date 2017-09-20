@@ -641,43 +641,6 @@ out:
 	return ret;
 }
 
-static int files_peel_ref(struct ref_store *ref_store,
-			  const char *refname, unsigned char *sha1)
-{
-	struct files_ref_store *refs =
-		files_downcast(ref_store, REF_STORE_READ | REF_STORE_ODB,
-			       "peel_ref");
-	int flag;
-	unsigned char base[20];
-
-	if (current_ref_iter && current_ref_iter->refname == refname) {
-		struct object_id peeled;
-
-		if (ref_iterator_peel(current_ref_iter, &peeled))
-			return -1;
-		hashcpy(sha1, peeled.hash);
-		return 0;
-	}
-
-	if (refs_read_ref_full(ref_store, refname,
-			       RESOLVE_REF_READING, base, &flag))
-		return -1;
-
-	/*
-	 * If the reference is packed, read its ref_entry from the
-	 * cache in the hope that we already know its peeled value.
-	 * We only try this optimization on packed references because
-	 * (a) forcing the filling of the loose reference cache could
-	 * be expensive and (b) loose references anyway usually do not
-	 * have REF_KNOWS_PEELED.
-	 */
-	if (flag & REF_ISPACKED &&
-	    !refs_peel_ref(refs->packed_ref_store, refname, sha1))
-		return 0;
-
-	return peel_object(base, sha1);
-}
-
 struct files_ref_iterator {
 	struct ref_iterator base;
 
@@ -748,7 +711,7 @@ static struct ref_iterator *files_ref_iterator_begin(
 		const char *prefix, unsigned int flags)
 {
 	struct files_ref_store *refs;
-	struct ref_iterator *loose_iter, *packed_iter;
+	struct ref_iterator *loose_iter, *packed_iter, *overlay_iter;
 	struct files_ref_iterator *iter;
 	struct ref_iterator *ref_iterator;
 	unsigned int required_flags = REF_STORE_READ;
@@ -757,10 +720,6 @@ static struct ref_iterator *files_ref_iterator_begin(
 		required_flags |= REF_STORE_ODB;
 
 	refs = files_downcast(ref_store, required_flags, "ref_iterator_begin");
-
-	iter = xcalloc(1, sizeof(*iter));
-	ref_iterator = &iter->base;
-	base_ref_iterator_init(ref_iterator, &files_ref_iterator_vtable);
 
 	/*
 	 * We must make sure that all loose refs are read before
@@ -797,7 +756,13 @@ static struct ref_iterator *files_ref_iterator_begin(
 			refs->packed_ref_store, prefix, 0,
 			DO_FOR_EACH_INCLUDE_BROKEN);
 
-	iter->iter0 = overlay_ref_iterator_begin(loose_iter, packed_iter);
+	overlay_iter = overlay_ref_iterator_begin(loose_iter, packed_iter);
+
+	iter = xcalloc(1, sizeof(*iter));
+	ref_iterator = &iter->base;
+	base_ref_iterator_init(ref_iterator, &files_ref_iterator_vtable,
+			       overlay_iter->ordered);
+	iter->iter0 = overlay_iter;
 	iter->flags = flags;
 
 	return ref_iterator;
@@ -1258,9 +1223,9 @@ static int commit_ref_update(struct files_ref_store *refs,
 			     const struct object_id *oid, const char *logmsg,
 			     struct strbuf *err);
 
-static int files_rename_ref(struct ref_store *ref_store,
+static int files_copy_or_rename_ref(struct ref_store *ref_store,
 			    const char *oldrefname, const char *newrefname,
-			    const char *logmsg)
+			    const char *logmsg, int copy)
 {
 	struct files_ref_store *refs =
 		files_downcast(ref_store, REF_STORE_WRITE, "rename_ref");
@@ -1292,8 +1257,12 @@ static int files_rename_ref(struct ref_store *ref_store,
 	}
 
 	if (flag & REF_ISSYMREF) {
-		ret = error("refname %s is a symbolic ref, renaming it is not supported",
-			    oldrefname);
+		if (copy)
+			ret = error("refname %s is a symbolic ref, copying it is not supported",
+				    oldrefname);
+		else
+			ret = error("refname %s is a symbolic ref, renaming it is not supported",
+				    oldrefname);
 		goto out;
 	}
 	if (!refs_rename_ref_available(&refs->base, oldrefname, newrefname)) {
@@ -1301,13 +1270,19 @@ static int files_rename_ref(struct ref_store *ref_store,
 		goto out;
 	}
 
-	if (log && rename(sb_oldref.buf, tmp_renamed_log.buf)) {
+	if (!copy && log && rename(sb_oldref.buf, tmp_renamed_log.buf)) {
 		ret = error("unable to move logfile logs/%s to logs/"TMP_RENAMED_LOG": %s",
 			    oldrefname, strerror(errno));
 		goto out;
 	}
 
-	if (refs_delete_ref(&refs->base, logmsg, oldrefname,
+	if (copy && log && copy_file(tmp_renamed_log.buf, sb_oldref.buf, 0644)) {
+		ret = error("unable to copy logfile logs/%s to logs/"TMP_RENAMED_LOG": %s",
+			    oldrefname, strerror(errno));
+		goto out;
+	}
+
+	if (!copy && refs_delete_ref(&refs->base, logmsg, oldrefname,
 			    orig_oid.hash, REF_NODEREF)) {
 		error("unable to delete old %s", oldrefname);
 		goto rollback;
@@ -1320,7 +1295,7 @@ static int files_rename_ref(struct ref_store *ref_store,
 	 * the safety anyway; we want to delete the reference whatever
 	 * its current value.
 	 */
-	if (!refs_read_ref_full(&refs->base, newrefname,
+	if (!copy && !refs_read_ref_full(&refs->base, newrefname,
 				RESOLVE_REF_READING | RESOLVE_REF_NO_RECURSE,
 				oid.hash, NULL) &&
 	    refs_delete_ref(&refs->base, NULL, newrefname,
@@ -1351,7 +1326,10 @@ static int files_rename_ref(struct ref_store *ref_store,
 	lock = lock_ref_sha1_basic(refs, newrefname, NULL, NULL, NULL,
 				   REF_NODEREF, NULL, &err);
 	if (!lock) {
-		error("unable to rename '%s' to '%s': %s", oldrefname, newrefname, err.buf);
+		if (copy)
+			error("unable to copy '%s' to '%s': %s", oldrefname, newrefname, err.buf);
+		else
+			error("unable to rename '%s' to '%s': %s", oldrefname, newrefname, err.buf);
 		strbuf_release(&err);
 		goto rollback;
 	}
@@ -1400,6 +1378,22 @@ static int files_rename_ref(struct ref_store *ref_store,
 	strbuf_release(&tmp_renamed_log);
 
 	return ret;
+}
+
+static int files_rename_ref(struct ref_store *ref_store,
+			    const char *oldrefname, const char *newrefname,
+			    const char *logmsg)
+{
+	return files_copy_or_rename_ref(ref_store, oldrefname,
+				 newrefname, logmsg, 0);
+}
+
+static int files_copy_ref(struct ref_store *ref_store,
+			    const char *oldrefname, const char *newrefname,
+			    const char *logmsg)
+{
+	return files_copy_or_rename_ref(ref_store, oldrefname,
+				 newrefname, logmsg, 1);
 }
 
 static int close_ref_gently(struct ref_lock *lock)
@@ -2066,7 +2060,7 @@ static struct ref_iterator *reflog_iterator_begin(struct ref_store *ref_store,
 	struct ref_iterator *ref_iterator = &iter->base;
 	struct strbuf sb = STRBUF_INIT;
 
-	base_ref_iterator_init(ref_iterator, &files_reflog_iterator_vtable);
+	base_ref_iterator_init(ref_iterator, &files_reflog_iterator_vtable, 0);
 	strbuf_addf(&sb, "%s/logs", gitdir);
 	iter->dir_iterator = dir_iterator_begin(sb.buf);
 	iter->ref_store = ref_store;
@@ -2110,6 +2104,7 @@ static struct ref_iterator *files_reflog_iterator_begin(struct ref_store *ref_st
 		return reflog_iterator_begin(ref_store, refs->gitcommondir);
 	} else {
 		return merge_ref_iterator_begin(
+			0,
 			reflog_iterator_begin(ref_store, refs->gitdir),
 			reflog_iterator_begin(ref_store, refs->gitcommondir),
 			reflog_iterator_select, refs);
@@ -3061,10 +3056,10 @@ struct ref_storage_be refs_be_files = {
 	files_initial_transaction_commit,
 
 	files_pack_refs,
-	files_peel_ref,
 	files_create_symref,
 	files_delete_refs,
 	files_rename_ref,
+	files_copy_ref,
 
 	files_ref_iterator_begin,
 	files_read_raw_ref,

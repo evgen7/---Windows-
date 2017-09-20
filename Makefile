@@ -205,6 +205,9 @@ all::
 #
 # Define NO_MMAP if you want to avoid mmap.
 #
+# Define MMAP_PREVENTS_DELETE if a file that is currently mmapped cannot be
+# deleted or cannot be replaced using rename().
+#
 # Define NO_SYS_POLL_H if you don't have sys/poll.h.
 #
 # Define NO_POLL if you do not have or don't want to use poll().
@@ -638,12 +641,15 @@ X =
 
 PROGRAMS += $(patsubst %.o,git-%$X,$(PROGRAM_OBJS))
 
+TEST_PROGRAMS_NEED_X += test-abbrev
 TEST_PROGRAMS_NEED_X += test-chmtime
 TEST_PROGRAMS_NEED_X += test-ctype
 TEST_PROGRAMS_NEED_X += test-config
 TEST_PROGRAMS_NEED_X += test-date
 TEST_PROGRAMS_NEED_X += test-delta
+TEST_PROGRAMS_NEED_X += test-drop-caches
 TEST_PROGRAMS_NEED_X += test-dump-cache-tree
+TEST_PROGRAMS_NEED_X += test-dump-fsmonitor
 TEST_PROGRAMS_NEED_X += test-dump-split-index
 TEST_PROGRAMS_NEED_X += test-dump-untracked-cache
 TEST_PROGRAMS_NEED_X += test-fake-ssh
@@ -791,6 +797,7 @@ LIB_OBJS += ewah/ewah_rlw.o
 LIB_OBJS += exec_cmd.o
 LIB_OBJS += fetch-pack.o
 LIB_OBJS += fsck.o
+LIB_OBJS += fsmonitor.o
 LIB_OBJS += gettext.o
 LIB_OBJS += gpg-interface.o
 LIB_OBJS += graph.o
@@ -842,6 +849,7 @@ LIB_OBJS += pretty.o
 LIB_OBJS += prio-queue.o
 LIB_OBJS += progress.o
 LIB_OBJS += prompt.o
+LIB_OBJS += protocol.o
 LIB_OBJS += quote.o
 LIB_OBJS += reachable.o
 LIB_OBJS += read-cache.o
@@ -1389,6 +1397,13 @@ else
 	ifdef USE_WIN32_MMAP
 		COMPAT_CFLAGS += -DUSE_WIN32_MMAP
 		COMPAT_OBJS += compat/win32mmap.o
+	endif
+endif
+ifdef MMAP_PREVENTS_DELETE
+	BASIC_CFLAGS += -DMMAP_PREVENTS_DELETE
+else
+	ifdef USE_WIN32_MMAP
+		BASIC_CFLAGS += -DMMAP_PREVENTS_DELETE
 	endif
 endif
 ifdef OBJECT_CREATION_USES_RENAMES
@@ -2456,6 +2471,10 @@ $(SP_OBJ): %.sp: %.c GIT-CFLAGS FORCE
 
 .PHONY: sparse $(SP_OBJ)
 sparse: $(SP_OBJ)
+
+.PHONY: style
+style:
+	git clang-format --style file --diff --extensions c,h
 
 check: common-cmds.h
 	@if sparse; \
