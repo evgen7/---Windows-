@@ -18,6 +18,7 @@
 #include "utf8.h"
 #include "varint.h"
 #include "ewah/ewok.h"
+#include "fsmonitor.h"
 
 /*
  * Tells read_directory_recursive how a file or directory should be treated.
@@ -49,7 +50,7 @@ struct cached_dir {
 static enum path_treatment read_directory_recursive(struct dir_struct *dir,
 	struct index_state *istate, const char *path, int len,
 	struct untracked_cache_dir *untracked,
-	int check_only, const struct pathspec *pathspec);
+	int check_only, int stop_at_first_file, const struct pathspec *pathspec);
 static int get_dtype(struct dirent *de, struct index_state *istate,
 		     const char *path, int len);
 
@@ -1390,8 +1391,8 @@ static enum path_treatment treat_directory(struct dir_struct *dir,
 		if (dir->flags & DIR_SHOW_OTHER_DIRECTORIES)
 			break;
 		if (!(dir->flags & DIR_NO_GITLINKS)) {
-			unsigned char sha1[20];
-			if (resolve_gitlink_ref(dirname, "HEAD", sha1) == 0)
+			struct object_id oid;
+			if (resolve_gitlink_ref(dirname, "HEAD", &oid) == 0)
 				return path_untracked;
 		}
 		return path_recurse;
@@ -1404,8 +1405,13 @@ static enum path_treatment treat_directory(struct dir_struct *dir,
 
 	untracked = lookup_untracked(dir->untracked, untracked,
 				     dirname + baselen, len - baselen);
+
+	/*
+	 * If this is an excluded directory, then we only need to check if
+	 * the directory contains any files.
+	 */
 	return read_directory_recursive(dir, istate, dirname, len,
-					untracked, 1, pathspec);
+					untracked, 1, exclude, pathspec);
 }
 
 /*
@@ -1633,7 +1639,7 @@ static enum path_treatment treat_path_fast(struct dir_struct *dir,
 		 * with check_only set.
 		 */
 		return read_directory_recursive(dir, istate, path->buf, path->len,
-						cdir->ucd, 1, pathspec);
+						cdir->ucd, 1, 0, pathspec);
 	/*
 	 * We get path_recurse in the first run when
 	 * directory_exists_in_index() returns index_nonexistent. We
@@ -1688,17 +1694,23 @@ static int valid_cached_dir(struct dir_struct *dir,
 	if (!untracked)
 		return 0;
 
-	if (stat(path->len ? path->buf : ".", &st)) {
-		invalidate_directory(dir->untracked, untracked);
-		memset(&untracked->stat_data, 0, sizeof(untracked->stat_data));
-		return 0;
-	}
-	if (!untracked->valid ||
-	    match_stat_data_racy(istate, &untracked->stat_data, &st)) {
-		if (untracked->valid)
+	/*
+	 * With fsmonitor, we can trust the untracked cache's valid field.
+	 */
+	refresh_fsmonitor(istate);
+	if (!(dir->untracked->use_fsmonitor && untracked->valid)) {
+		if (stat(path->len ? path->buf : ".", &st)) {
 			invalidate_directory(dir->untracked, untracked);
-		fill_stat_data(&untracked->stat_data, &st);
-		return 0;
+			memset(&untracked->stat_data, 0, sizeof(untracked->stat_data));
+			return 0;
+		}
+		if (!untracked->valid ||
+			match_stat_data_racy(istate, &untracked->stat_data, &st)) {
+			if (untracked->valid)
+				invalidate_directory(dir->untracked, untracked);
+			fill_stat_data(&untracked->stat_data, &st);
+			return 0;
+		}
 	}
 
 	if (untracked->check_only != !!check_only) {
@@ -1793,12 +1805,20 @@ static void close_cached_dir(struct cached_dir *cdir)
  * Also, we ignore the name ".git" (even if it is not a directory).
  * That likely will not change.
  *
+ * If 'stop_at_first_file' is specified, 'path_excluded' is returned
+ * to signal that a file was found. This is the least significant value that
+ * indicates that a file was encountered that does not depend on the order of
+ * whether an untracked or exluded path was encountered first.
+ *
  * Returns the most significant path_treatment value encountered in the scan.
+ * If 'stop_at_first_file' is specified, `path_excluded` is the most
+ * significant path_treatment value that will be returned.
  */
+
 static enum path_treatment read_directory_recursive(struct dir_struct *dir,
 	struct index_state *istate, const char *base, int baselen,
 	struct untracked_cache_dir *untracked, int check_only,
-	const struct pathspec *pathspec)
+	int stop_at_first_file, const struct pathspec *pathspec)
 {
 	struct cached_dir cdir;
 	enum path_treatment state, subdir_state, dir_state = path_none;
@@ -1832,12 +1852,34 @@ static enum path_treatment read_directory_recursive(struct dir_struct *dir,
 			subdir_state =
 				read_directory_recursive(dir, istate, path.buf,
 							 path.len, ud,
-							 check_only, pathspec);
+							 check_only, stop_at_first_file, pathspec);
 			if (subdir_state > dir_state)
 				dir_state = subdir_state;
 		}
 
 		if (check_only) {
+			if (stop_at_first_file) {
+				/*
+				 * If stopping at first file, then
+				 * signal that a file was found by
+				 * returning `path_excluded`. This is
+				 * to return a consistent value
+				 * regardless of whether an ignored or
+				 * excluded file happened to be
+				 * encountered 1st.
+				 *
+				 * In current usage, the
+				 * `stop_at_first_file` is passed when
+				 * an ancestor directory has matched
+				 * an exclude pattern, so any found
+				 * files will be excluded.
+				 */
+				if (dir_state >= path_excluded) {
+					dir_state = path_excluded;
+					break;
+				}
+			}
+
 			/* abort early if maximum state has been reached */
 			if (dir_state == path_untracked) {
 				if (cdir.fdir)
@@ -2108,7 +2150,7 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		 */
 		dir->untracked = NULL;
 	if (!len || treat_leading_path(dir, istate, path, len, pathspec))
-		read_directory_recursive(dir, istate, path, len, untracked, 0, pathspec);
+		read_directory_recursive(dir, istate, path, len, untracked, 0, 0, pathspec);
 	QSORT(dir->entries, dir->nr, cmp_dir_entry);
 	QSORT(dir->ignored, dir->ignored_nr, cmp_dir_entry);
 
@@ -2244,10 +2286,10 @@ static int remove_dir_recurse(struct strbuf *path, int flag, int *kept_up)
 	int ret = 0, original_len = path->len, len, kept_down = 0;
 	int only_empty = (flag & REMOVE_DIR_EMPTY_ONLY);
 	int keep_toplevel = (flag & REMOVE_DIR_KEEP_TOPLEVEL);
-	unsigned char submodule_head[20];
+	struct object_id submodule_head;
 
 	if ((flag & REMOVE_DIR_KEEP_NESTED_GIT) &&
-	    !resolve_gitlink_ref(path->buf, "HEAD", submodule_head)) {
+	    !resolve_gitlink_ref(path->buf, "HEAD", &submodule_head)) {
 		/* Do not descend and nuke a nested git work tree. */
 		if (kept_up)
 			*kept_up = 1;
