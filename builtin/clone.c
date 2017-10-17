@@ -889,6 +889,7 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	const char *fetch_pattern;
 
 	fetch_if_missing = 0;
+	git_config(platform_core_config, NULL);
 
 	packet_trace_identity("clone");
 	argc = parse_options(argc, argv, prefix, builtin_clone_options,
