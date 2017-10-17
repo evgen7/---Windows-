@@ -20,7 +20,6 @@
 #include "trailer.h"
 #include "log-tree.h"
 #include "wt-status.h"
-#include "hashmap.h"
 
 #define GIT_REFLOG_ACTION "GIT_REFLOG_ACTION"
 
@@ -204,7 +203,7 @@ int sequencer_remove_state(struct replay_opts *opts)
 		free(opts->xopts[i]);
 	free(opts->xopts);
 
-	strbuf_addstr(&dir, get_dir(opts));
+	strbuf_addf(&dir, "%s", get_dir(opts));
 	remove_dir_recursively(&dir, 0);
 	strbuf_release(&dir);
 
@@ -347,7 +346,7 @@ static int read_oneliner(struct strbuf *buf,
 
 static struct tree *empty_tree(void)
 {
-	return lookup_tree(current_hash->empty_tree);
+	return lookup_tree(&empty_tree_oid);
 }
 
 static int error_dirty_index(struct replay_opts *opts)
@@ -393,7 +392,7 @@ static int fast_forward_to(const struct object_id *to, const struct object_id *f
 	transaction = ref_transaction_begin(&err);
 	if (!transaction ||
 	    ref_transaction_update(transaction, "HEAD",
-				   to, unborn ? &null_oid : from,
+				   to->hash, unborn ? null_sha1 : from->hash,
 				   0, sb.buf, &err) ||
 	    ref_transaction_commit(transaction, &err)) {
 		ref_transaction_free(transaction);
@@ -489,7 +488,7 @@ static int is_index_unchanged(void)
 	struct object_id head_oid;
 	struct commit *head_commit;
 
-	if (!resolve_ref_unsafe("HEAD", RESOLVE_REF_READING, &head_oid, NULL))
+	if (!resolve_ref_unsafe("HEAD", RESOLVE_REF_READING, head_oid.hash, NULL))
 		return error(_("could not resolve HEAD commit\n"));
 
 	head_commit = lookup_commit(&head_oid);
@@ -693,7 +692,7 @@ static int run_git_commit(const char *defmsg, struct replay_opts *opts,
 
 static int is_original_commit_empty(struct commit *commit)
 {
-	const struct object_id *ptree_oid;
+	const unsigned char *ptree_sha1;
 
 	if (parse_commit(commit))
 		return error(_("could not parse commit %s\n"),
@@ -703,12 +702,12 @@ static int is_original_commit_empty(struct commit *commit)
 		if (parse_commit(parent))
 			return error(_("could not parse parent commit %s\n"),
 				oid_to_hex(&parent->object.oid));
-		ptree_oid = &parent->tree->object.oid;
+		ptree_sha1 = parent->tree->object.oid.hash;
 	} else {
-		ptree_oid = current_hash->empty_tree; /* commit is root */
+		ptree_sha1 = EMPTY_TREE_SHA1_BIN; /* commit is root */
 	}
 
-	return !oidcmp(ptree_oid, &commit->tree->object.oid);
+	return !hashcmp(ptree_sha1, commit->tree->object.oid.hash);
 }
 
 /*
@@ -898,18 +897,18 @@ static int update_squash_messages(enum todo_command command,
 
 static void flush_rewritten_pending(void) {
 	struct strbuf buf = STRBUF_INIT;
-	struct object_id newoid;
+	unsigned char newsha1[20];
 	FILE *out;
 
-	if (strbuf_read_file(&buf, rebase_path_rewritten_pending(), (GIT_MAX_HEXSZ + 1) * 2) > 0 &&
-	    !get_oid("HEAD", &newoid) &&
+	if (strbuf_read_file(&buf, rebase_path_rewritten_pending(), 82) > 0 &&
+	    !get_sha1("HEAD", newsha1) &&
 	    (out = fopen_or_warn(rebase_path_rewritten_list(), "a"))) {
 		char *bol = buf.buf, *eol;
 
 		while (*bol) {
 			eol = strchrnul(bol, '\n');
 			fprintf(out, "%.*s %s\n", (int)(eol - bol),
-					bol, oid_to_hex(&newoid));
+					bol, sha1_to_hex(newsha1));
 			if (!*eol)
 				break;
 			bol = eol + 1;
@@ -958,7 +957,7 @@ static int do_pick_commit(enum todo_command command, struct commit *commit,
 	} else {
 		unborn = get_oid("HEAD", &head);
 		if (unborn)
-			oidcpy(&head, current_hash->empty_tree);
+			oidcpy(&head, &empty_tree_oid);
 		if (index_differs_from(unborn ? EMPTY_TREE_SHA1_HEX : "HEAD", 0, 0))
 			return error_dirty_index(opts);
 	}
@@ -1115,11 +1114,11 @@ static int do_pick_commit(enum todo_command command, struct commit *commit,
 	 * write it at all.
 	 */
 	if (command == TODO_PICK && !opts->no_commit && (res == 0 || res == 1) &&
-	    update_ref(NULL, "CHERRY_PICK_HEAD", &commit->object.oid, NULL,
+	    update_ref(NULL, "CHERRY_PICK_HEAD", commit->object.oid.hash, NULL,
 		       REF_NODEREF, UPDATE_REFS_MSG_ON_ERR))
 		res = -1;
 	if (command == TODO_REVERT && ((opts->no_commit && res == 0) || res == 1) &&
-	    update_ref(NULL, "REVERT_HEAD", &commit->object.oid, NULL,
+	    update_ref(NULL, "REVERT_HEAD", commit->object.oid.hash, NULL,
 		       REF_NODEREF, UPDATE_REFS_MSG_ON_ERR))
 		res = -1;
 
@@ -1184,6 +1183,7 @@ static int read_and_refresh_cache(struct replay_opts *opts)
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, NULL, NULL, NULL);
 	if (the_index.cache_changed && index_fd >= 0) {
 		if (write_locked_index(&the_index, &index_lock, COMMIT_LOCK)) {
+			rollback_lock_file(&index_lock);
 			return error(_("git %s: failed to refresh the index"),
 				_(action_name(opts)));
 		}
@@ -1565,7 +1565,6 @@ static int save_head(const char *head)
 	static struct lock_file head_lock;
 	struct strbuf buf = STRBUF_INIT;
 	int fd;
-	ssize_t written;
 
 	fd = hold_lock_file_for_update(&head_lock, git_path_head_file(), 0);
 	if (fd < 0) {
@@ -1573,9 +1572,7 @@ static int save_head(const char *head)
 		return error_errno(_("could not lock HEAD"));
 	}
 	strbuf_addf(&buf, "%s\n", head);
-	written = write_in_full(fd, buf.buf, buf.len);
-	strbuf_release(&buf);
-	if (written < 0) {
+	if (write_in_full(fd, buf.buf, buf.len) < 0) {
 		rollback_lock_file(&head_lock);
 		return error_errno(_("could not write to '%s'"),
 				   git_path_head_file());
@@ -1611,37 +1608,36 @@ static int rollback_is_safe(void)
 	return !oidcmp(&actual_head, &expected_head);
 }
 
-static int reset_for_rollback(const struct object_id *oid)
+static int reset_for_rollback(const unsigned char *sha1)
 {
 	const char *argv[4];	/* reset --merge <arg> + NULL */
 
 	argv[0] = "reset";
 	argv[1] = "--merge";
-	argv[2] = oid_to_hex(oid);
+	argv[2] = sha1_to_hex(sha1);
 	argv[3] = NULL;
 	return run_command_v_opt(argv, RUN_GIT_CMD);
 }
 
 static int rollback_single_pick(void)
 {
-	struct object_id head_oid;
+	unsigned char head_sha1[20];
 
 	if (!file_exists(git_path_cherry_pick_head()) &&
 	    !file_exists(git_path_revert_head()))
 		return error(_("no cherry-pick or revert in progress"));
-	if (read_ref_full("HEAD", 0, &head_oid, NULL))
+	if (read_ref_full("HEAD", 0, head_sha1, NULL))
 		return error(_("cannot resolve HEAD"));
-	if (is_null_oid(&head_oid))
+	if (is_null_sha1(head_sha1))
 		return error(_("cannot abort from a branch yet to be born"));
-	return reset_for_rollback(&head_oid);
+	return reset_for_rollback(head_sha1);
 }
 
 int sequencer_rollback(struct replay_opts *opts)
 {
 	FILE *f;
-	struct object_id oid;
+	unsigned char sha1[20];
 	struct strbuf buf = STRBUF_INIT;
-	const char *p;
 
 	f = fopen(git_path_head_file(), "r");
 	if (!f && errno == ENOENT) {
@@ -1661,12 +1657,12 @@ int sequencer_rollback(struct replay_opts *opts)
 		goto fail;
 	}
 	fclose(f);
-	if (parse_oid_hex(buf.buf, &oid, &p) || *p != '\0') {
+	if (get_sha1_hex(buf.buf, sha1) || buf.buf[40] != '\0') {
 		error(_("stored pre-cherry-pick HEAD file '%s' is corrupt"),
 			git_path_head_file());
 		goto fail;
 	}
-	if (is_null_oid(&oid)) {
+	if (is_null_sha1(sha1)) {
 		error(_("cannot abort from a branch yet to be born"));
 		goto fail;
 	}
@@ -1676,7 +1672,7 @@ int sequencer_rollback(struct replay_opts *opts)
 		warning(_("You seem to have moved HEAD. "
 			  "Not rewinding, check your HEAD!"));
 	} else
-	if (reset_for_rollback(&oid))
+	if (reset_for_rollback(sha1))
 		goto fail;
 	strbuf_release(&buf);
 	return sequencer_remove_state(opts);
@@ -1810,13 +1806,13 @@ static int make_patch(struct commit *commit, struct replay_opts *opts)
 
 static int intend_to_amend(void)
 {
-	struct object_id head;
+	unsigned char head[20];
 	char *p;
 
-	if (get_oid("HEAD", &head))
+	if (get_sha1("HEAD", head))
 		return error(_("cannot read HEAD"));
 
-	p = oid_to_hex(&head);
+	p = sha1_to_hex(head);
 	return write_message(p, strlen(p), rebase_path_amend(), 1);
 }
 
@@ -2101,10 +2097,10 @@ static int pick_commits(struct todo_list *todo_list, struct replay_opts *opts)
 		if (read_oneliner(&head_ref, rebase_path_head_name(), 0) &&
 				starts_with(head_ref.buf, "refs/")) {
 			const char *msg;
-			struct object_id head, orig;
+			unsigned char head[20], orig[20];
 			int res;
 
-			if (get_oid("HEAD", &head)) {
+			if (get_sha1("HEAD", head)) {
 				res = error(_("cannot read HEAD"));
 cleanup_head_ref:
 				strbuf_release(&head_ref);
@@ -2112,7 +2108,7 @@ cleanup_head_ref:
 				return res;
 			}
 			if (!read_oneliner(&buf, rebase_path_orig_head(), 0) ||
-					get_oid_hex(buf.buf, &orig)) {
+					get_sha1_hex(buf.buf, orig)) {
 				res = error(_("could not read orig-head"));
 				goto cleanup_head_ref;
 			}
@@ -2123,8 +2119,8 @@ cleanup_head_ref:
 			}
 			msg = reflog_message(opts, "finish", "%s onto %s",
 				head_ref.buf, buf.buf);
-			if (update_ref(msg, head_ref.buf, &head, &orig,
-				       REF_NODEREF, UPDATE_REFS_MSG_ON_ERR)) {
+			if (update_ref(msg, head_ref.buf, head, orig,
+					REF_NODEREF, UPDATE_REFS_MSG_ON_ERR)) {
 				res = error(_("could not update %s"),
 					head_ref.buf);
 				goto cleanup_head_ref;
@@ -2151,8 +2147,8 @@ cleanup_head_ref:
 			log_tree_opt.disable_stdin = 1;
 
 			if (read_oneliner(&buf, rebase_path_orig_head(), 0) &&
-			    !get_oid(buf.buf, &orig) &&
-			    !get_oid("HEAD", &head)) {
+			    !get_sha1(buf.buf, orig.hash) &&
+			    !get_sha1("HEAD", head.hash)) {
 				diff_tree_oid(&orig, &head, "",
 					      &log_tree_opt.diffopt);
 				log_tree_diff_flush(&log_tree_opt);
@@ -2227,16 +2223,16 @@ static int commit_staged_changes(struct replay_opts *opts)
 
 	if (file_exists(rebase_path_amend())) {
 		struct strbuf rev = STRBUF_INIT;
-		struct object_id head, to_amend;
+		unsigned char head[20], to_amend[20];
 
-		if (get_oid("HEAD", &head))
+		if (get_sha1("HEAD", head))
 			return error(_("cannot amend non-existing commit"));
 		if (!read_oneliner(&rev, rebase_path_amend(), 0))
 			return error(_("invalid file: '%s'"), rebase_path_amend());
-		if (get_oid_hex(rev.buf, &to_amend))
+		if (get_sha1_hex(rev.buf, to_amend))
 			return error(_("invalid contents: '%s'"),
 				rebase_path_amend());
-		if (oidcmp(&head, &to_amend))
+		if (hashcmp(head, to_amend))
 			return error(_("\nYou have uncommitted changes in your "
 				       "working tree. Please, commit them\n"
 				       "first and then run 'git rebase "
@@ -2288,7 +2284,7 @@ int sequencer_continue(struct replay_opts *opts)
 		struct object_id oid;
 
 		if (read_oneliner(&buf, rebase_path_stopped_sha(), 1) &&
-		    !get_oid_committish(buf.buf, &oid))
+		    !get_sha1_committish(buf.buf, oid.hash))
 			record_in_rewritten(&oid, peek_command(&todo_list, 0));
 		strbuf_release(&buf);
 	}
@@ -2557,7 +2553,7 @@ static enum check_level get_missing_commit_check_level(void)
 		return CHECK_WARN;
 	if (!strcasecmp("error", value))
 		return CHECK_ERROR;
-	warning(_("unrecognized setting %s for option "
+	warning(_("unrecognized setting %s for option"
 		  "rebase.missingCommitsCheck. Ignoring."), value);
 	return CHECK_IGNORE;
 }
@@ -2769,199 +2765,4 @@ int skip_unnecessary_picks(void)
 	printf("%s\n", oid_to_hex(oid));
 
 	return 0;
-}
-
-struct subject2item_entry {
-	struct hashmap_entry entry;
-	int i;
-	char subject[FLEX_ARRAY];
-};
-
-static int subject2item_cmp(const void *fndata,
-			    const struct subject2item_entry *a,
-			    const struct subject2item_entry *b, const void *key)
-{
-	return key ? strcmp(a->subject, key) : strcmp(a->subject, b->subject);
-}
-
-/*
- * Rearrange the todo list that has both "pick commit-id msg" and "pick
- * commit-id fixup!/squash! msg" in it so that the latter is put immediately
- * after the former, and change "pick" to "fixup"/"squash".
- *
- * Note that if the config has specified a custom instruction format, each log
- * message will have to be retrieved from the commit (as the oneline in the
- * script cannot be trusted) in order to normalize the autosquash arrangement.
- */
-int rearrange_squash(void)
-{
-	const char *todo_file = rebase_path_todo();
-	struct todo_list todo_list = TODO_LIST_INIT;
-	struct hashmap subject2item;
-	int res = 0, rearranged = 0, *next, *tail, fd, i;
-	char **subjects;
-
-	fd = open(todo_file, O_RDONLY);
-	if (fd < 0)
-		return error_errno(_("could not open '%s'"), todo_file);
-	if (strbuf_read(&todo_list.buf, fd, 0) < 0) {
-		close(fd);
-		return error(_("could not read '%s'."), todo_file);
-	}
-	close(fd);
-	if (parse_insn_buffer(todo_list.buf.buf, &todo_list) < 0) {
-		todo_list_release(&todo_list);
-		return -1;
-	}
-
-	/*
-	 * The hashmap maps onelines to the respective todo list index.
-	 *
-	 * If any items need to be rearranged, the next[i] value will indicate
-	 * which item was moved directly after the i'th.
-	 *
-	 * In that case, last[i] will indicate the index of the latest item to
-	 * be moved to appear after the i'th.
-	 */
-	hashmap_init(&subject2item, (hashmap_cmp_fn) subject2item_cmp,
-		     NULL, todo_list.nr);
-	ALLOC_ARRAY(next, todo_list.nr);
-	ALLOC_ARRAY(tail, todo_list.nr);
-	ALLOC_ARRAY(subjects, todo_list.nr);
-	for (i = 0; i < todo_list.nr; i++) {
-		struct strbuf buf = STRBUF_INIT;
-		struct todo_item *item = todo_list.items + i;
-		const char *commit_buffer, *subject, *p;
-		size_t subject_len;
-		int i2 = -1;
-		struct subject2item_entry *entry;
-
-		next[i] = tail[i] = -1;
-		if (item->command >= TODO_EXEC) {
-			subjects[i] = NULL;
-			continue;
-		}
-
-		if (is_fixup(item->command)) {
-			todo_list_release(&todo_list);
-			return error(_("the script was already rearranged."));
-		}
-
-		item->commit->util = item;
-
-		parse_commit(item->commit);
-		commit_buffer = get_commit_buffer(item->commit, NULL);
-		find_commit_subject(commit_buffer, &subject);
-		format_subject(&buf, subject, " ");
-		subject = subjects[i] = strbuf_detach(&buf, &subject_len);
-		unuse_commit_buffer(item->commit, commit_buffer);
-		if ((skip_prefix(subject, "fixup! ", &p) ||
-		     skip_prefix(subject, "squash! ", &p))) {
-			struct commit *commit2;
-
-			for (;;) {
-				while (isspace(*p))
-					p++;
-				if (!skip_prefix(p, "fixup! ", &p) &&
-				    !skip_prefix(p, "squash! ", &p))
-					break;
-			}
-
-			if ((entry = hashmap_get_from_hash(&subject2item,
-							   strhash(p), p)))
-				/* found by title */
-				i2 = entry->i;
-			else if (!strchr(p, ' ') &&
-				 (commit2 =
-				  lookup_commit_reference_by_name(p)) &&
-				 commit2->util)
-				/* found by commit name */
-				i2 = (struct todo_item *)commit2->util
-					- todo_list.items;
-			else {
-				/* copy can be a prefix of the commit subject */
-				for (i2 = 0; i2 < i; i2++)
-					if (subjects[i2] &&
-					    starts_with(subjects[i2], p))
-						break;
-				if (i2 == i)
-					i2 = -1;
-			}
-		}
-		if (i2 >= 0) {
-			rearranged = 1;
-			todo_list.items[i].command =
-				starts_with(subject, "fixup!") ?
-				TODO_FIXUP : TODO_SQUASH;
-			if (next[i2] < 0)
-				next[i2] = i;
-			else
-				next[tail[i2]] = i;
-			tail[i2] = i;
-		} else if (!hashmap_get_from_hash(&subject2item,
-						strhash(subject), subject)) {
-			FLEX_ALLOC_MEM(entry, subject, subject, subject_len);
-			entry->i = i;
-			hashmap_entry_init(entry, strhash(entry->subject));
-			hashmap_put(&subject2item, entry);
-		}
-	}
-
-	if (rearranged) {
-		struct strbuf buf = STRBUF_INIT;
-
-		for (i = 0; i < todo_list.nr; i++) {
-			enum todo_command command = todo_list.items[i].command;
-			int cur = i;
-
-			/*
-			 * Initially, all commands are 'pick's. If it is a
-			 * fixup or a squash now, we have rearranged it.
-			 */
-			if (is_fixup(command))
-				continue;
-
-			while (cur >= 0) {
-				int offset = todo_list.items[cur].offset_in_buf;
-				int end_offset = cur + 1 < todo_list.nr ?
-					todo_list.items[cur + 1].offset_in_buf :
-					todo_list.buf.len;
-				char *bol = todo_list.buf.buf + offset;
-				char *eol = todo_list.buf.buf + end_offset;
-
-				/* replace 'pick', by 'fixup' or 'squash' */
-				command = todo_list.items[cur].command;
-				if (is_fixup(command)) {
-					strbuf_addstr(&buf,
-						todo_command_info[command].str);
-					bol += strcspn(bol, " \t");
-				}
-
-				strbuf_add(&buf, bol, eol - bol);
-
-				cur = next[cur];
-			}
-		}
-
-		fd = open(todo_file, O_WRONLY);
-		if (fd < 0)
-			res = error_errno(_("could not open '%s'"), todo_file);
-		else if (write(fd, buf.buf, buf.len) < 0)
-			res = error_errno(_("could not write '%s'"), todo_file);
-		else if (ftruncate(fd, buf.len) < 0)
-			res = error_errno(_("could not truncate '%s'"),
-					   todo_file);
-		close(fd);
-		strbuf_release(&buf);
-	}
-
-	free(next);
-	free(tail);
-	for (i = 0; i < todo_list.nr; i++)
-		free(subjects[i]);
-	free(subjects);
-	hashmap_free(&subject2item, 1);
-	todo_list_release(&todo_list);
-
-	return res;
 }
