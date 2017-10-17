@@ -93,7 +93,7 @@ static int git_branch_config(const char *var, const char *value, void *cb)
 			return config_error_nonbool(var);
 		return color_parse(value, branch_colors[slot]);
 	}
-	return git_default_config(var, value, cb);
+	return git_color_default_config(var, value, cb);
 }
 
 static const char *branch_get_color(enum color_branch ix)
@@ -125,7 +125,7 @@ static int branch_merged(int kind, const char *name,
 		if (upstream &&
 		    (reference_name = reference_name_to_free =
 		     resolve_refdup(upstream, RESOLVE_REF_READING,
-				    oid.hash, NULL)) != NULL)
+				    &oid, NULL)) != NULL)
 			reference_rev = lookup_commit_reference(&oid);
 	}
 	if (!reference_rev)
@@ -217,7 +217,7 @@ static int delete_branches(int argc, const char **argv, int force, int kinds,
 		if (!head_rev)
 			die(_("Couldn't look up commit object for HEAD"));
 	}
-	for (i = 0; i < argc; i++, strbuf_release(&bname)) {
+	for (i = 0; i < argc; i++, strbuf_reset(&bname)) {
 		char *target = NULL;
 		int flags = 0;
 
@@ -241,7 +241,7 @@ static int delete_branches(int argc, const char **argv, int force, int kinds,
 					RESOLVE_REF_READING
 					| RESOLVE_REF_NO_RECURSE
 					| RESOLVE_REF_ALLOW_BAD_NAME,
-					oid.hash, &flags);
+					&oid, &flags);
 		if (!target) {
 			error(remote_branch
 			      ? _("remote-tracking branch '%s' not found.")
@@ -257,7 +257,7 @@ static int delete_branches(int argc, const char **argv, int force, int kinds,
 			goto next;
 		}
 
-		if (delete_ref(NULL, name, is_null_oid(&oid) ? NULL : oid.hash,
+		if (delete_ref(NULL, name, is_null_oid(&oid) ? NULL : &oid,
 			       REF_NODEREF)) {
 			error(remote_branch
 			      ? _("Error deleting remote-tracking branch '%s'")
@@ -282,8 +282,9 @@ static int delete_branches(int argc, const char **argv, int force, int kinds,
 	}
 
 	free(name);
+	strbuf_release(&bname);
 
-	return(ret);
+	return ret;
 }
 
 static int calc_maxwidth(struct ref_array *refs, int remote_bonus)
@@ -353,7 +354,7 @@ static char *build_format(struct ref_filter *filter, int maxwidth, const char *r
 			strbuf_addf(&obname, "%%(objectname:short=%d)", filter->abbrev);
 
 		strbuf_addf(&local, "%%(align:%d,left)%%(refname:lstrip=2)%%(end)", maxwidth);
-		strbuf_addf(&local, "%s", branch_get_color(BRANCH_COLOR_RESET));
+		strbuf_addstr(&local, branch_get_color(BRANCH_COLOR_RESET));
 		strbuf_addf(&local, " %s ", obname.buf);
 
 		if (filter->verbose > 1)
@@ -462,7 +463,6 @@ static void copy_or_rename_branch(const char *oldname, const char *newname, int 
 	struct strbuf oldref = STRBUF_INIT, newref = STRBUF_INIT, logmsg = STRBUF_INIT;
 	struct strbuf oldsection = STRBUF_INIT, newsection = STRBUF_INIT;
 	int recovery = 0;
-	int clobber_head_ok;
 
 	if (!oldname) {
 		if (copy)
@@ -486,9 +486,10 @@ static void copy_or_rename_branch(const char *oldname, const char *newname, int 
 	 * A command like "git branch -M currentbranch currentbranch" cannot
 	 * cause the worktree to become inconsistent with HEAD, so allow it.
 	 */
-	clobber_head_ok = !strcmp(oldname, newname);
-
-	validate_new_branchname(newname, &newref, force, clobber_head_ok);
+	if (!strcmp(oldname, newname))
+		validate_branchname(newname, &newref);
+	else
+		validate_new_branchname(newname, &newref, force);
 
 	reject_rebase_or_bisect_branch(oldref.buf);
 
@@ -513,12 +514,9 @@ static void copy_or_rename_branch(const char *oldname, const char *newname, int 
 				oldref.buf + 11);
 	}
 
-	if (replace_each_worktree_head_symref(oldref.buf, newref.buf, logmsg.buf)) {
-		if (copy)
-			die(_("Branch copied to %s, but HEAD is not updated!"), newname);
-		else
-			die(_("Branch renamed to %s, but HEAD is not updated!"), newname);
-	}
+	if (!copy &&
+	    replace_each_worktree_head_symref(oldref.buf, newref.buf, logmsg.buf))
+		die(_("Branch renamed to %s, but HEAD is not updated!"), newname);
 
 	strbuf_release(&logmsg);
 
@@ -638,7 +636,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 
 	track = git_branch_track;
 
-	head = resolve_refdup("HEAD", 0, head_oid.hash, NULL);
+	head = resolve_refdup("HEAD", 0, &head_oid, NULL);
 	if (!head)
 		die(_("Failed to resolve HEAD as a valid ref."));
 	if (!strcmp(head, "HEAD"))
@@ -746,12 +744,12 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		else if (argc == 2)
 			copy_or_rename_branch(argv[0], argv[1], 0, rename > 1);
 		else
-			die(_("too many branches for a rename operation"));
+			die(_("too many arguments for a rename operation"));
 	} else if (new_upstream) {
 		struct branch *branch = branch_get(argv[0]);
 
 		if (argc > 1)
-			die(_("too many branches to set new upstream"));
+			die(_("too many arguments to set new upstream"));
 
 		if (!branch) {
 			if (!argc || !strcmp(argv[0], "HEAD"))
@@ -774,7 +772,7 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		struct strbuf buf = STRBUF_INIT;
 
 		if (argc > 1)
-			die(_("too many branches to unset upstream"));
+			die(_("too many arguments to unset upstream"));
 
 		if (!branch) {
 			if (!argc || !strcmp(argv[0], "HEAD"))

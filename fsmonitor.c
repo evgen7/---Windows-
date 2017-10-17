@@ -176,7 +176,7 @@ void refresh_fsmonitor(struct index_state *istate)
 			core_fsmonitor, query_success ? "success" : "failure");
 	}
 
-	/* a fsmonitor process can return '*' to indicate all entries are invalid */
+	/* a fsmonitor process can return '/' to indicate all entries are invalid */
 	if (query_success && query_result.buf[0] != '/') {
 		/* Mark all entries returned by the monitor as dirty */
 		buf = query_result.buf;

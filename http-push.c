@@ -1007,7 +1007,7 @@ static int get_oid_hex_from_objpath(const char *path, struct object_id *oid)
 	memcpy(hex, path, 2);
 	path += 2;
 	path++; /* skip '/' */
-	memcpy(hex, path, GIT_SHA1_HEXSZ - 2);
+	memcpy(hex + 2, path, GIT_SHA1_HEXSZ - 2);
 
 	return get_oid_hex(hex, oid);
 }
@@ -1512,6 +1512,7 @@ static int remote_exists(const char *path)
 		break;
 	case HTTP_ERROR:
 		error("unable to access '%s': %s", url, curl_errorstr);
+		/* fallthrough */
 	default:
 		ret = -1;
 	}

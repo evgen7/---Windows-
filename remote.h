@@ -56,6 +56,8 @@ struct remote {
 	 */
 	char *http_proxy;
 	char *http_proxy_authmethod;
+
+	const char *blob_max_bytes;
 };
 
 struct remote *remote_get(const char *name);
@@ -89,7 +91,6 @@ struct ref {
 		force:1,
 		forced_update:1,
 		expect_old_sha1:1,
-		lazy_cas:1,
 		deletion:1;
 
 	enum {
@@ -119,7 +120,6 @@ struct ref {
 		REF_STATUS_REJECT_FETCH_FIRST,
 		REF_STATUS_REJECT_NEEDS_FORCE,
 		REF_STATUS_REJECT_STALE,
-		REF_STATUS_REJECT_LAZY_CAS,
 		REF_STATUS_REJECT_SHALLOW,
 		REF_STATUS_UPTODATE,
 		REF_STATUS_REMOTE_REJECT,
@@ -172,7 +172,6 @@ struct ref *ref_remove_duplicates(struct ref *ref_map);
 int valid_fetch_refspec(const char *refspec);
 struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec);
 extern struct refspec *parse_push_refspec(int nr_refspec, const char **refspec);
-void add_and_parse_fetch_refspec(struct remote *remote, const char *refspec);
 
 void free_refspec(int nr_refspec, struct refspec *refspec);
 
@@ -226,6 +225,8 @@ struct branch {
 struct branch *branch_get(const char *name);
 const char *remote_for_branch(struct branch *branch, int *explicit);
 const char *pushremote_for_branch(struct branch *branch, int *explicit);
+const char *remote_ref_for_branch(struct branch *branch, int for_push,
+				  int *explicit);
 
 int branch_has_merge_config(struct branch *branch);
 int branch_merge_matches(struct branch *, int n, const char *);

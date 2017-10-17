@@ -358,6 +358,9 @@ int git_diff_ui_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 
+	if (git_color_config(var, value, cb) < 0)
+		return -1;
+
 	return git_diff_basic_config(var, value, cb);
 }
 
@@ -712,20 +715,22 @@ static int next_byte(const char **cp, const char **endp,
 	if (*cp > *endp)
 		return -1;
 
-	if (DIFF_XDL_TST(diffopt, IGNORE_WHITESPACE_CHANGE)) {
-		while (*cp < *endp && isspace(**cp))
-			(*cp)++;
-		/*
-		 * After skipping a couple of whitespaces, we still have to
-		 * account for one space.
-		 */
-		return (int)' ';
-	}
+	if (isspace(**cp)) {
+		if (DIFF_XDL_TST(diffopt, IGNORE_WHITESPACE_CHANGE)) {
+			while (*cp < *endp && isspace(**cp))
+				(*cp)++;
+			/*
+			 * After skipping a couple of whitespaces,
+			 * we still have to account for one space.
+			 */
+			return (int)' ';
+		}
 
-	if (DIFF_XDL_TST(diffopt, IGNORE_WHITESPACE)) {
-		while (*cp < *endp && isspace(**cp))
-			(*cp)++;
-		/* return the first non-ws character via the usual below */
+		if (DIFF_XDL_TST(diffopt, IGNORE_WHITESPACE)) {
+			while (*cp < *endp && isspace(**cp))
+				(*cp)++;
+			/* return the first non-ws character via the usual below */
+		}
 	}
 
 	retval = (unsigned char)(**cp);
@@ -1541,7 +1546,7 @@ static void emit_rewrite_diff(const char *name_a,
 
 struct diff_words_buffer {
 	mmfile_t text;
-	long alloc;
+	unsigned long alloc;
 	struct diff_words_orig {
 		const char *begin, *end;
 	} *orig;
@@ -5272,6 +5277,7 @@ static void show_mode_change(struct diff_options *opt, struct diff_filepair *p,
 			strbuf_addch(&sb, ' ');
 			quote_c_style(p->two->path, &sb, NULL, 0);
 		}
+		strbuf_addch(&sb, '\n');
 		emit_diff_symbol(opt, DIFF_SYMBOL_SUMMARY,
 				 sb.buf, sb.len, 0);
 		strbuf_release(&sb);

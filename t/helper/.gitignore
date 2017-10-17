@@ -1,4 +1,3 @@
-/test-abbrev
 /test-chmtime
 /test-ctype
 /test-config
@@ -6,6 +5,7 @@
 /test-delta
 /test-drop-caches
 /test-dump-cache-tree
+/test-dump-fsmonitor
 /test-dump-split-index
 /test-dump-untracked-cache
 /test-fake-ssh

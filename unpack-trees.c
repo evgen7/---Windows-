@@ -15,6 +15,7 @@
 #include "submodule.h"
 #include "submodule-config.h"
 #include "fsmonitor.h"
+#include "fetch-object.h"
 
 /*
  * Error messages expected by scripts out of plumbing commands such as
@@ -370,6 +371,27 @@ static int check_updates(struct unpack_trees_options *o)
 		load_gitmodules_file(index, &state);
 
 	enable_delayed_checkout(&state);
+	if (repository_format_partial_clone && o->update && !o->dry_run) {
+		/*
+		 * Prefetch the objects that are to be checked out in the loop
+		 * below.
+		 */
+		struct oid_array to_fetch = OID_ARRAY_INIT;
+		int fetch_if_missing_store = fetch_if_missing;
+		fetch_if_missing = 0;
+		for (i = 0; i < index->cache_nr; i++) {
+			struct cache_entry *ce = index->cache[i];
+			if ((ce->ce_flags & CE_UPDATE) &&
+			    !S_ISGITLINK(ce->ce_mode)) {
+				if (!has_object_file(&ce->oid))
+					oid_array_append(&to_fetch, &ce->oid);
+			}
+		}
+		if (to_fetch.nr)
+			fetch_objects(repository_format_partial_clone,
+				      &to_fetch);
+		fetch_if_missing = fetch_if_missing_store;
+	}
 	for (i = 0; i < index->cache_nr; i++) {
 		struct cache_entry *ce = index->cache[i];
 
@@ -1456,7 +1478,7 @@ static int verify_uptodate_1(const struct cache_entry *ce,
 		return 0;
 
 	if (!lstat(ce->name, &st)) {
-		int flags = CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_IGNORE_FSMONITOR;
+		int flags = CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE;
 		unsigned changed = ie_match_stat(o->src_index, ce, &st, flags);
 
 		if (submodule_from_ce(ce)) {
@@ -1543,15 +1565,15 @@ static int verify_clean_subdirectory(const struct cache_entry *ce,
 	int cnt = 0;
 
 	if (S_ISGITLINK(ce->ce_mode)) {
-		unsigned char sha1[20];
-		int sub_head = resolve_gitlink_ref(ce->name, "HEAD", sha1);
+		struct object_id oid;
+		int sub_head = resolve_gitlink_ref(ce->name, "HEAD", &oid);
 		/*
 		 * If we are not going to update the submodule, then
 		 * we don't care.
 		 */
-		if (!sub_head && !hashcmp(sha1, ce->oid.hash))
+		if (!sub_head && !oidcmp(&oid, &ce->oid))
 			return 0;
-		return verify_clean_submodule(sub_head ? NULL : sha1_to_hex(sha1),
+		return verify_clean_submodule(sub_head ? NULL : oid_to_hex(&oid),
 					      ce, error_type, o);
 	}
 
@@ -1612,7 +1634,7 @@ static int icase_exists(struct unpack_trees_options *o, const char *name, int le
 	const struct cache_entry *src;
 
 	src = index_file_exists(o->src_index, name, len, 1);
-	return src && !ie_match_stat(o->src_index, src, st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_IGNORE_FSMONITOR);
+	return src && !ie_match_stat(o->src_index, src, st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE);
 }
 
 static int check_ok_to_remove(const char *name, int len, int dtype,
@@ -2136,7 +2158,7 @@ int oneway_merge(const struct cache_entry * const *src,
 		if (o->reset && o->update && !ce_uptodate(old) && !ce_skip_worktree(old)) {
 			struct stat st;
 			if (lstat(old->name, &st) ||
-			    ie_match_stat(o->src_index, old, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE|CE_MATCH_IGNORE_FSMONITOR))
+			    ie_match_stat(o->src_index, old, &st, CE_MATCH_IGNORE_VALID|CE_MATCH_IGNORE_SKIP_WORKTREE))
 				update |= CE_UPDATE;
 		}
 		add_entry(o, old, update, 0);

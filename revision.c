@@ -21,6 +21,7 @@
 #include "bisect.h"
 #include "packfile.h"
 #include "worktree.h"
+#include "argv-array.h"
 
 volatile show_early_output_fn_t show_early_output;
 
@@ -197,6 +198,8 @@ static struct object *get_reference(struct rev_info *revs, const char *name,
 	if (!object) {
 		if (revs->ignore_missing)
 			return object;
+		if (revs->exclude_promisor_objects && is_promisor_object(oid))
+			return NULL;
 		die("bad object %s", name);
 	}
 	object->flags |= flags;
@@ -394,8 +397,16 @@ static struct commit *one_relevant_parent(const struct rev_info *revs,
  * if the whole diff is removal of old data, and otherwise
  * REV_TREE_DIFFERENT (of course if the trees are the same we
  * want REV_TREE_SAME).
- * That means that once we get to REV_TREE_DIFFERENT, we do not
- * have to look any further.
+ *
+ * The only time we care about the distinction is when
+ * remove_empty_trees is in effect, in which case we care only about
+ * whether the whole change is REV_TREE_NEW, or if there's another type
+ * of change. Which means we can stop the diff early in either of these
+ * cases:
+ *
+ *   1. We're not using remove_empty_trees at all.
+ *
+ *   2. We saw anything except REV_TREE_NEW.
  */
 static int tree_difference = REV_TREE_SAME;
 
@@ -406,9 +417,10 @@ static void file_add_remove(struct diff_options *options,
 		    const char *fullpath, unsigned dirty_submodule)
 {
 	int diff = addremove == '+' ? REV_TREE_NEW : REV_TREE_OLD;
+	struct rev_info *revs = options->change_fn_data;
 
 	tree_difference |= diff;
-	if (tree_difference == REV_TREE_DIFFERENT)
+	if (!revs->remove_empty_trees || tree_difference != REV_TREE_NEW)
 		DIFF_OPT_SET(options, HAS_CHANGES);
 }
 
@@ -789,9 +801,17 @@ static int add_parents_to_list(struct rev_info *revs, struct commit *commit,
 
 	for (parent = commit->parents; parent; parent = parent->next) {
 		struct commit *p = parent->item;
-
-		if (parse_commit_gently(p, revs->ignore_missing_links) < 0)
+		int gently = revs->ignore_missing_links ||
+			     revs->exclude_promisor_objects;
+		if (parse_commit_gently(p, gently) < 0) {
+			if (revs->exclude_promisor_objects &&
+			    is_promisor_object(&p->object.oid)) {
+				if (revs->first_parent_only)
+					break;
+				continue;
+			}
 			return -1;
+		}
 		if (revs->show_source && !p->util)
 			p->util = commit->util;
 		p->object.flags |= left_flag;
@@ -1105,7 +1125,7 @@ static void add_rev_cmdline(struct rev_info *revs,
 			    unsigned flags)
 {
 	struct rev_cmdline_info *info = &revs->cmdline;
-	int nr = info->nr;
+	unsigned int nr = info->nr;
 
 	ALLOC_GROW(info->rev, nr + 1, info->alloc);
 	info->rev[nr].item = item;
@@ -1406,6 +1426,7 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 	DIFF_OPT_SET(&revs->pruning, QUICK);
 	revs->pruning.add_remove = file_add_remove;
 	revs->pruning.change = file_change;
+	revs->pruning.change_fn_data = revs;
 	revs->sort_order = REV_SORT_IN_GRAPH_ORDER;
 	revs->dense = 1;
 	revs->prefix = prefix;
@@ -1672,31 +1693,15 @@ int handle_revision_arg(const char *arg_, struct rev_info *revs, int flags, unsi
 	return 0;
 }
 
-struct cmdline_pathspec {
-	int alloc;
-	int nr;
-	const char **path;
-};
-
-static void append_prune_data(struct cmdline_pathspec *prune, const char **av)
-{
-	while (*av) {
-		ALLOC_GROW(prune->path, prune->nr + 1, prune->alloc);
-		prune->path[prune->nr++] = *(av++);
-	}
-}
-
 static void read_pathspec_from_stdin(struct rev_info *revs, struct strbuf *sb,
-				     struct cmdline_pathspec *prune)
+				     struct argv_array *prune)
 {
-	while (strbuf_getline(sb, stdin) != EOF) {
-		ALLOC_GROW(prune->path, prune->nr + 1, prune->alloc);
-		prune->path[prune->nr++] = xstrdup(sb->buf);
-	}
+	while (strbuf_getline(sb, stdin) != EOF)
+		argv_array_push(prune, sb->buf);
 }
 
 static void read_revisions_from_stdin(struct rev_info *revs,
-				      struct cmdline_pathspec *prune)
+				      struct argv_array *prune)
 {
 	struct strbuf sb;
 	int seen_dashdash = 0;
@@ -2103,6 +2108,10 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->limited = 1;
 	} else if (!strcmp(arg, "--ignore-missing")) {
 		revs->ignore_missing = 1;
+	} else if (!strcmp(arg, "--exclude-promisor-objects")) {
+		if (fetch_if_missing)
+			die("BUG: exclude_promisor_objects can only be used when fetch_if_missing is 0");
+		revs->exclude_promisor_objects = 1;
 	} else {
 		int opts = diff_opt_parse(&revs->diffopt, argv, argc, revs->prefix);
 		if (!opts)
@@ -2263,11 +2272,10 @@ static int handle_revision_pseudo_opt(const char *submodule,
 
 static void NORETURN diagnose_missing_default(const char *def)
 {
-	unsigned char sha1[20];
 	int flags;
 	const char *refname;
 
-	refname = resolve_ref_unsafe(def, 0, sha1, &flags);
+	refname = resolve_ref_unsafe(def, 0, NULL, &flags);
 	if (!refname || !(flags & REF_ISSYMREF) || (flags & REF_ISBROKEN))
 		die(_("your current branch appears to be broken"));
 
@@ -2286,10 +2294,9 @@ static void NORETURN diagnose_missing_default(const char *def)
 int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct setup_revision_opt *opt)
 {
 	int i, flags, left, seen_dashdash, read_from_stdin, got_rev_arg = 0, revarg_opt;
-	struct cmdline_pathspec prune_data;
+	struct argv_array prune_data = ARGV_ARRAY_INIT;
 	const char *submodule = NULL;
 
-	memset(&prune_data, 0, sizeof(prune_data));
 	if (opt)
 		submodule = opt->submodule;
 
@@ -2305,7 +2312,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 			argv[i] = NULL;
 			argc = i;
 			if (argv[i + 1])
-				append_prune_data(&prune_data, argv + i + 1);
+				argv_array_pushv(&prune_data, argv + i + 1);
 			seen_dashdash = 1;
 			break;
 		}
@@ -2366,14 +2373,14 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 			for (j = i; j < argc; j++)
 				verify_filename(revs->prefix, argv[j], j == i);
 
-			append_prune_data(&prune_data, argv + i);
+			argv_array_pushv(&prune_data, argv + i);
 			break;
 		}
 		else
 			got_rev_arg = 1;
 	}
 
-	if (prune_data.nr) {
+	if (prune_data.argc) {
 		/*
 		 * If we need to introduce the magic "a lone ':' means no
 		 * pathspec whatsoever", here is the place to do so.
@@ -2388,11 +2395,10 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 		 *	call init_pathspec() to set revs->prune_data here.
 		 * }
 		 */
-		ALLOC_GROW(prune_data.path, prune_data.nr + 1, prune_data.alloc);
-		prune_data.path[prune_data.nr++] = NULL;
 		parse_pathspec(&revs->prune_data, 0, 0,
-			       revs->prefix, prune_data.path);
+			       revs->prefix, prune_data.argv);
 	}
+	argv_array_clear(&prune_data);
 
 	if (revs->def == NULL)
 		revs->def = opt ? opt->def : NULL;
@@ -2848,6 +2854,16 @@ void reset_revision_walk(void)
 	clear_object_flags(SEEN | ADDED | SHOWN);
 }
 
+static int mark_uninteresting(const struct object_id *oid,
+			      struct packed_git *pack,
+			      uint32_t pos,
+			      void *unused)
+{
+	struct object *o = parse_object(oid);
+	o->flags |= UNINTERESTING | SEEN;
+	return 0;
+}
+
 int prepare_revision_walk(struct rev_info *revs)
 {
 	int i;
@@ -2875,6 +2891,11 @@ int prepare_revision_walk(struct rev_info *revs)
 	if (revs->simplify_merges ||
 	    (revs->limited && limiting_can_increase_treesame(revs)))
 		revs->treesame.name = "treesame";
+
+	if (revs->exclude_promisor_objects) {
+		for_each_packed_object(mark_uninteresting, NULL,
+				       FOR_EACH_OBJECT_PROMISOR_ONLY);
+	}
 
 	if (revs->no_walk != REVISION_WALK_NO_WALK_UNSORTED)
 		commit_list_sort_by_date(&revs->commits);

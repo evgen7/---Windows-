@@ -3,7 +3,7 @@
 VERSION_A=.
 VERSION_B=v2.0.0
 
-: ${LIB_GIT_DAEMON_PORT:=5600}
+: ${LIB_GIT_DAEMON_PORT:=5700}
 LIB_GIT_DAEMON_COMMAND='git.b daemon'
 
 test_description='clone and fetch by client who is trying to use a new protocol'

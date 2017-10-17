@@ -188,7 +188,7 @@ static int packet_write_gently(const int fd_out, const char *buf, size_t size)
 	return 0;
 }
 
-void packet_write(const int fd_out, const char *buf, size_t size)
+void packet_write(int fd_out, const char *buf, size_t size)
 {
 	if (packet_write_gently(fd_out, buf, size))
 		die_errno("packet write failed");
@@ -264,7 +264,7 @@ static int get_packet_data(int fd, char **src_buf, size_t *src_size,
 	}
 
 	/* And complain if we didn't get enough bytes to satisfy the read. */
-	if (ret < size) {
+	if (ret != size) {
 		if (options & PACKET_READ_GENTLE_ON_EOF)
 			return -1;
 

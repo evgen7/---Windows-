@@ -4,7 +4,7 @@
 extern struct trace_key trace_fsmonitor;
 
 /*
- * Read the the fsmonitor index extension and (if configured) restore the
+ * Read the fsmonitor index extension and (if configured) restore the
  * CE_FSMONITOR_VALID state.
  */
 extern int read_fsmonitor_extension(struct index_state *istate, const void *data, unsigned long sz);
@@ -35,7 +35,9 @@ extern void tweak_fsmonitor(struct index_state *istate);
 extern void refresh_fsmonitor(struct index_state *istate);
 
 /*
- * Set the given cache entries CE_FSMONITOR_VALID bit.
+ * Set the given cache entries CE_FSMONITOR_VALID bit. This should be
+ * called any time the cache entry has been updated to reflect the
+ * current state of the file on disk.
  */
 static inline void mark_fsmonitor_valid(struct cache_entry *ce)
 {
@@ -46,8 +48,11 @@ static inline void mark_fsmonitor_valid(struct cache_entry *ce)
 }
 
 /*
- * Clear the given cache entry's CE_FSMONITOR_VALID bit and invalidate any
- * corresponding untracked cache directory structures.
+ * Clear the given cache entry's CE_FSMONITOR_VALID bit and invalidate
+ * any corresponding untracked cache directory structures. This should
+ * be called any time git creates or modifies a file that should
+ * trigger an lstat() or invalidate the untracked cache for the
+ * corresponding directory
  */
 static inline void mark_fsmonitor_invalid(struct index_state *istate, struct cache_entry *ce)
 {

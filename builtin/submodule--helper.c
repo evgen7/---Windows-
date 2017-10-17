@@ -13,6 +13,13 @@
 #include "remote.h"
 #include "refs.h"
 #include "connect.h"
+#include "revision.h"
+#include "diffcore.h"
+#include "diff.h"
+
+#define OPT_QUIET (1 << 0)
+#define OPT_CACHED (1 << 1)
+#define OPT_RECURSIVE (1 << 2)
 
 typedef void (*each_submodule_fn)(const struct cache_entry *list_item,
 				  void *cb_data);
@@ -20,9 +27,8 @@ typedef void (*each_submodule_fn)(const struct cache_entry *list_item,
 static char *get_default_remote(void)
 {
 	char *dest = NULL, *ret;
-	unsigned char sha1[20];
 	struct strbuf sb = STRBUF_INIT;
-	const char *refname = resolve_ref_unsafe("HEAD", 0, sha1, NULL);
+	const char *refname = resolve_ref_unsafe("HEAD", 0, NULL, NULL);
 
 	if (!refname)
 		die(_("No such ref: %s"), "HEAD");
@@ -223,6 +229,7 @@ static int resolve_relative_url_test(int argc, const char **argv, const char *pr
 	return 0;
 }
 
+/* the result should be freed by the caller. */
 static char *get_submodule_displaypath(const char *path, const char *prefix)
 {
 	const char *super_prefix = get_super_prefix();
@@ -236,10 +243,7 @@ static char *get_submodule_displaypath(const char *path, const char *prefix)
 		strbuf_release(&sb);
 		return displaypath;
 	} else if (super_prefix) {
-		int len = strlen(super_prefix);
-		const char *format = is_dir_sep(super_prefix[len - 1]) ? "%s%s" : "%s/%s";
-
-		return xstrfmt(format, super_prefix, path);
+		return xstrfmt("%s%s", super_prefix, path);
 	} else {
 		return xstrdup(path);
 	}
@@ -250,26 +254,17 @@ static char *compute_rev_name(const char *sub_path, const char* object_id)
 	struct strbuf sb = STRBUF_INIT;
 	const char ***d;
 
-	static const char *describe_bare[] = {
-		NULL
-	};
+	static const char *describe_bare[] = { NULL };
 
-	static const char *describe_tags[] = {
-		"--tags", NULL
-	};
+	static const char *describe_tags[] = { "--tags", NULL };
 
-	static const char *describe_contains[] = {
-		"--contains", NULL
-	};
+	static const char *describe_contains[] = { "--contains", NULL };
 
-	static const char *describe_all_always[] = {
-		"--all", "--always", NULL
-	};
+	static const char *describe_all_always[] = { "--all", "--always", NULL };
 
-	static const char **describe_argv[] = {
-		describe_bare, describe_tags, describe_contains,
-		describe_all_always, NULL
-	};
+	static const char **describe_argv[] = { describe_bare, describe_tags,
+						describe_contains,
+						describe_all_always, NULL };
 
 	for (d = describe_argv; *d; d++) {
 		struct child_process cp = CHILD_PROCESS_INIT;
@@ -282,7 +277,7 @@ static char *compute_rev_name(const char *sub_path, const char* object_id)
 		argv_array_pushv(&cp.args, *d);
 		argv_array_push(&cp.args, object_id);
 
-		if (!capture_command(&cp, &sb, 0) && sb.len) {
+		if (!capture_command(&cp, &sb, 0)) {
 			strbuf_strip_suffix(&sb, "\n");
 			return strbuf_detach(&sb, NULL);
 		}
@@ -290,21 +285,6 @@ static char *compute_rev_name(const char *sub_path, const char* object_id)
 
 	strbuf_release(&sb);
 	return NULL;
-}
-
-static int get_rev_name(int argc, const char **argv, const char *prefix)
-{
-	char *revname;
-	if (argc != 3)
-		die("get-rev-name only accepts two arguments: <path> <sha1>");
-
-	revname = compute_rev_name(argv[1], argv[2]);
-	if (revname && revname[0])
-		printf(" (%s)", revname);
-	printf("\n");
-
-	free(revname);
-	return 0;
 }
 
 struct module_list {
@@ -426,20 +406,21 @@ static void for_each_listed_submodule(const struct module_list *list,
 
 struct init_cb {
 	const char *prefix;
-	unsigned int quiet: 1;
+	unsigned int flags;
 };
+
 #define INIT_CB_INIT { NULL, 0 }
 
-static void init_submodule(const struct cache_entry *list_item, void *cb_data)
+static void init_submodule(const char *path, const char *prefix,
+			   unsigned int flags)
 {
-	struct init_cb *info = cb_data;
 	const struct submodule *sub;
 	struct strbuf sb = STRBUF_INIT;
 	char *upd = NULL, *url = NULL, *displaypath;
 
-	displaypath = get_submodule_displaypath(list_item->name, info->prefix);
+	displaypath = get_submodule_displaypath(path, prefix);
 
-	sub = submodule_from_path(&null_oid, list_item->name);
+	sub = submodule_from_path(&null_oid, path);
 
 	if (!sub)
 		die(_("No url found for submodule path '%s' in .gitmodules"),
@@ -451,7 +432,7 @@ static void init_submodule(const struct cache_entry *list_item, void *cb_data)
 	 *
 	 * Set active flag for the submodule being initialized
 	 */
-	if (!is_submodule_active(the_repository, list_item->name)) {
+	if (!is_submodule_active(the_repository, path)) {
 		strbuf_addf(&sb, "submodule.%s.active", sub->name);
 		git_config_set_gently(sb.buf, "true");
 		strbuf_reset(&sb);
@@ -493,7 +474,7 @@ static void init_submodule(const struct cache_entry *list_item, void *cb_data)
 		if (git_config_set_gently(sb.buf, url))
 			die(_("Failed to register url for submodule path '%s'"),
 			    displaypath);
-		if (!info->quiet)
+		if (!(flags & OPT_QUIET))
 			fprintf(stderr,
 				_("Submodule '%s' (%s) registered for path '%s'\n"),
 				sub->name, url, displaypath);
@@ -518,6 +499,12 @@ static void init_submodule(const struct cache_entry *list_item, void *cb_data)
 	free(displaypath);
 	free(url);
 	free(upd);
+}
+
+static void init_submodule_cb(const struct cache_entry *list_item, void *cb_data)
+{
+	struct init_cb *info = cb_data;
+	init_submodule(list_item->name, info->prefix, info->flags);
 }
 
 static int module_init(int argc, const char **argv, const char *prefix)
@@ -551,41 +538,33 @@ static int module_init(int argc, const char **argv, const char *prefix)
 		module_list_active(&list);
 
 	info.prefix = prefix;
-	info.quiet = !!quiet;
+	if (quiet)
+		info.flags |= OPT_QUIET;
 
-	for_each_listed_submodule(&list, init_submodule, &info);
+	for_each_listed_submodule(&list, init_submodule_cb, &info);
 
 	return 0;
 }
 
 struct status_cb {
 	const char *prefix;
-	unsigned int quiet: 1;
-	unsigned int recursive: 1;
-	unsigned int cached: 1;
+	unsigned int flags;
 };
-#define STATUS_CB_INIT { NULL, 0, 0, 0 }
 
-static void print_status(struct status_cb *info, char state, const char *path,
+#define STATUS_CB_INIT { NULL, 0 }
+
+static void print_status(unsigned int flags, char state, const char *path,
 			 const struct object_id *oid, const char *displaypath)
 {
-	if (info->quiet)
+	if (flags & OPT_QUIET)
 		return;
 
 	printf("%c%s %s", state, oid_to_hex(oid), displaypath);
 
-	if (state == ' ' || state == '+') {
-		struct argv_array get_rev_args = ARGV_ARRAY_INIT;
+	if (state == ' ' || state == '+')
+		printf(" (%s)", compute_rev_name(path, oid_to_hex(oid)));
 
-		argv_array_pushl(&get_rev_args, "get-rev-name",
-				 path, oid_to_hex(oid), NULL);
-		get_rev_name(get_rev_args.argc, get_rev_args.argv,
-			     info->prefix);
-
-		argv_array_clear(&get_rev_args);
-	} else {
-		printf("\n");
-	}
+	printf("\n");
 }
 
 static int handle_submodule_head_ref(const char *refname,
@@ -599,81 +578,92 @@ static int handle_submodule_head_ref(const char *refname,
 	return 0;
 }
 
-static void status_submodule(const struct cache_entry *list_item, void *cb_data)
+static void status_submodule(const char *path, const struct object_id *ce_oid,
+			     unsigned int ce_flags, const char *prefix,
+			     unsigned int flags)
 {
-	struct status_cb *info = cb_data;
 	char *displaypath;
 	struct argv_array diff_files_args = ARGV_ARRAY_INIT;
+	struct rev_info rev;
+	int diff_files_result;
 
-	if (!submodule_from_path(&null_oid, list_item->name))
+	if (!submodule_from_path(&null_oid, path))
 		die(_("no submodule mapping found in .gitmodules for path '%s'"),
-		      list_item->name);
+		      path);
 
-	displaypath = get_submodule_displaypath(list_item->name, info->prefix);
+	displaypath = get_submodule_displaypath(path, prefix);
 
-	if (ce_stage(list_item)) {
-		print_status(info, 'U', list_item->name,
-			     &null_oid, displaypath);
+	if ((CE_STAGEMASK & ce_flags) >> CE_STAGESHIFT) {
+		print_status(flags, 'U', path, &null_oid, displaypath);
 		goto cleanup;
 	}
 
-	if (!is_submodule_active(the_repository, list_item->name)) {
-		print_status(info, '-', list_item->name, &list_item->oid,
-			     displaypath);
+	if (!is_submodule_active(the_repository, path)) {
+		print_status(flags, '-', path, ce_oid, displaypath);
 		goto cleanup;
 	}
 
 	argv_array_pushl(&diff_files_args, "diff-files",
 			 "--ignore-submodules=dirty", "--quiet", "--",
-			 list_item->name, NULL);
+			 path, NULL);
 
-	if (!cmd_diff_files(diff_files_args.argc, diff_files_args.argv,
-			    info->prefix)) {
-		print_status(info, ' ', list_item->name, &list_item->oid,
+	git_config(git_diff_basic_config, NULL);
+	init_revisions(&rev, prefix);
+	rev.abbrev = 0;
+	diff_files_args.argc = setup_revisions(diff_files_args.argc,
+					       diff_files_args.argv,
+					       &rev, NULL);
+	diff_files_result = run_diff_files(&rev, 0);
+
+	if (!diff_result_code(&rev.diffopt, diff_files_result)) {
+		print_status(flags, ' ', path, ce_oid,
 			     displaypath);
+	} else if (!(flags & OPT_CACHED)) {
+		struct object_id oid;
+
+		if (refs_head_ref(get_submodule_ref_store(path),
+				  handle_submodule_head_ref, &oid))
+			die(_("could not resolve HEAD ref inside the"
+			      "submodule '%s'"), path);
+
+		print_status(flags, '+', path, &oid, displaypath);
 	} else {
-		if (!info->cached) {
-			struct object_id oid;
-			struct ref_store *refs;
-			refs = get_submodule_ref_store(list_item->name);
-
-			if (refs_head_ref(refs, handle_submodule_head_ref, &oid))
-				die(_("could not resolve HEAD ref inside the"
-				      "submodule '%s'"), list_item->name);
-
-			print_status(info, '+', list_item->name, &oid,
-				     displaypath);
-		} else {
-			print_status(info, '+', list_item->name,
-				     &list_item->oid, displaypath);
-		}
+		print_status(flags, '+', path, ce_oid, displaypath);
 	}
 
-	if (info->recursive) {
+	if (flags & OPT_RECURSIVE) {
 		struct child_process cpr = CHILD_PROCESS_INIT;
 
 		cpr.git_cmd = 1;
-		cpr.dir = list_item->name;
+		cpr.dir = path;
 		prepare_submodule_repo_env(&cpr.env_array);
 
-		argv_array_pushl(&cpr.args, "--super-prefix", displaypath,
-				 "submodule--helper", "status", "--recursive",
-				 NULL);
+		argv_array_push(&cpr.args, "--super-prefix");
+		argv_array_pushf(&cpr.args, "%s/", displaypath);
+		argv_array_pushl(&cpr.args, "submodule--helper", "status",
+				 "--recursive", NULL);
 
-		if (info->cached)
+		if (flags & OPT_CACHED)
 			argv_array_push(&cpr.args, "--cached");
 
-		if (info->quiet)
+		if (flags & OPT_QUIET)
 			argv_array_push(&cpr.args, "--quiet");
 
 		if (run_command(&cpr))
-			die(_("failed to recurse into submodule '%s'"),
-			      list_item->name);
+			die(_("failed to recurse into submodule '%s'"), path);
 	}
 
 cleanup:
 	argv_array_clear(&diff_files_args);
 	free(displaypath);
+}
+
+static void status_submodule_cb(const struct cache_entry *list_item,
+				void *cb_data)
+{
+	struct status_cb *info = cb_data;
+	status_submodule(list_item->name, &list_item->oid, list_item->ce_flags,
+			 info->prefix, info->flags);
 }
 
 static int module_status(int argc, const char **argv, const char *prefix)
@@ -682,18 +672,16 @@ static int module_status(int argc, const char **argv, const char *prefix)
 	struct pathspec pathspec;
 	struct module_list list = MODULE_LIST_INIT;
 	int quiet = 0;
-	int cached = 0;
-	int recursive = 0;
 
 	struct option module_status_options[] = {
 		OPT__QUIET(&quiet, N_("Suppress submodule status output")),
-		OPT_BOOL(0, "cached", &cached, N_("Use commit stored in the index instead of the one stored in the submodule HEAD")),
-		OPT_BOOL(0, "recursive", &recursive, N_("Recurse into nested submodules")),
+		OPT_BIT(0, "cached", &info.flags, N_("Use commit stored in the index instead of the one stored in the submodule HEAD"), OPT_CACHED),
+		OPT_BIT(0, "recursive", &info.flags, N_("recurse into nested submodules"), OPT_RECURSIVE),
 		OPT_END()
 	};
 
 	const char *const git_submodule_helper_usage[] = {
-		N_("git submodule status [--quiet] [--cached] [--recursive] [<path>]"),
+		N_("git submodule status [--quiet] [--cached] [--recursive] [<path>...]"),
 		NULL
 	};
 
@@ -704,11 +692,10 @@ static int module_status(int argc, const char **argv, const char *prefix)
 		return 1;
 
 	info.prefix = prefix;
-	info.quiet = !!quiet;
-	info.recursive = !!recursive;
-	info.cached = !!cached;
+	if (quiet)
+		info.flags |= OPT_QUIET;
 
-	for_each_listed_submodule(&list, status_submodule, &info);
+	for_each_listed_submodule(&list, status_submodule_cb, &info);
 
 	return 0;
 }
@@ -1339,8 +1326,7 @@ static const char *remote_submodule_branch(const char *path)
 		return "master";
 
 	if (!strcmp(branch, ".")) {
-		unsigned char sha1[20];
-		const char *refname = resolve_ref_unsafe("HEAD", 0, sha1, NULL);
+		const char *refname = resolve_ref_unsafe("HEAD", 0, NULL, NULL);
 
 		if (!refname)
 			die(_("No such ref: %s"), "HEAD");
@@ -1396,7 +1382,7 @@ static int push_check(int argc, const char **argv, const char *prefix)
 	argv++;
 	argc--;
 	/* Get the submodule's head ref and determine if it is detached */
-	head = resolve_refdup("HEAD", 0, head_oid.hash, NULL);
+	head = resolve_refdup("HEAD", 0, &head_oid, NULL);
 	if (!head)
 		die(_("Failed to resolve HEAD as a valid ref."));
 	if (!strcmp(head, "HEAD"))
@@ -1439,6 +1425,7 @@ static int push_check(int argc, const char **argv, const char *prefix)
 						break;
 					die("HEAD does not match the named branch in the superproject");
 				}
+				/* fallthrough */
 			default:
 				die("src refspec '%s' must name a ref",
 				    rs->src);
@@ -1509,7 +1496,6 @@ static struct cmd_struct commands[] = {
 	{"relative-path", resolve_relative_path, 0},
 	{"resolve-relative-url", resolve_relative_url, 0},
 	{"resolve-relative-url-test", resolve_relative_url_test, 0},
-	{"get-rev-name", get_rev_name, 0},
 	{"init", module_init, SUPPORT_SUPER_PREFIX},
 	{"status", module_status, SUPPORT_SUPER_PREFIX},
 	{"remote-branch", resolve_remote_submodule_branch, 0},

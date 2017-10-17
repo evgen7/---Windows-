@@ -8,12 +8,12 @@ Backward compatibility notes and other notable changes.
    more explicit '.' for that instead.  The hope is that existing
    users will not mind this change, and eventually the warning can be
    turned into a hard error, upgrading the deprecation into removal of
-   this (mis)feature.  That is now scheduled to happen in the upcoming
-   release.
+   this (mis)feature.  That is now scheduled to happen in Git v2.16,
+   the next major release after this one.
 
  * Git now avoids blindly falling back to ".git" when the setup
    sequence said we are _not_ in Git repository.  A corner case that
-   happens to work right now may be broken by a call to die("BUG").
+   happens to work right now may be broken by a call to BUG().
    We've tried hard to locate such cases and fixed them, but there
    might still be cases that need to be addressed--bug reports are
    greatly appreciated.
@@ -61,6 +61,10 @@ UI, Workflows & Features
    other options to make it easier for scripts to grab existing
    trailer lines from a commit log message.
 
+ * The "--format=%(trailers)" option "git log" and its friends take
+   learned to take the 'unfold' and 'only' modifiers to normalize its
+   output, e.g. "git log --format=%(trailers:only,unfold)".
+
  * "gitweb" shows a link to visit the 'raw' contents of blbos in the
    history overview page.
 
@@ -79,6 +83,25 @@ UI, Workflows & Features
 
  * The codepath to call external process filter for smudge/clean
    operation learned to show the progress meter.
+
+ * "git rev-parse" learned "--is-shallow-repository", that is to be
+   used in a way similar to existing "--is-bare-repository" and
+   friends.
+
+ * "git describe --match <pattern>" has been taught to play well with
+   the "--all" option.
+
+ * "git branch" learned "-c/-C" to create a new branch by copying an
+   existing one.
+
+ * Some commands (most notably "git status") makes an opportunistic
+   update when performing a read-only operation to help optimize later
+   operations in the same repository.  The new "--no-optional-locks"
+   option can be passed to Git to disable them.
+
+ * "git for-each-ref --format=..." learned a new format element,
+   %(trailers), to show only the commit log trailer part of the log
+   message.
 
 
 Performance, Internal Implementation, Development Support etc.
@@ -166,6 +189,55 @@ Performance, Internal Implementation, Development Support etc.
  * The codepath for "git merge-recursive" has been cleaned up.
 
  * Many leaks of strbuf have been fixed.
+
+ * "git imap-send" has our own implementation of the protocol and also
+   can use more recent libCurl with the imap protocol support.  Update
+   the latter so that it can use the credential subsystem, and then
+   make it the default option to use, so that we can eventually
+   deprecate and remove the former.
+
+ * "make style" runs git-clang-format to help developers by pointing
+   out coding style issues.
+
+ * A test to demonstrate "git mv" failing to adjust nested submodules
+   has been added.
+   (merge c514167df2 hv/mv-nested-submodules-test later to maint).
+
+ * On Cygwin, "ulimit -s" does not report failure but it does not work
+   at all, which causes an unexpected success of some tests that
+   expect failures under a limited stack situation.  This has been
+   fixed.
+
+ * Many codepaths have been updated to squelch -Wimplicit-fallthrough
+   warnings from Gcc 7 (which is a good code hygiene).
+
+ * Add a helper for DLL loading in anticipation for its need in a
+   future topic RSN.
+
+ * "git status --ignored", when noticing that a directory without any
+   tracked path is ignored, still enumerated all the ignored paths in
+   the directory, which is unnecessary.  The codepath has been
+   optimized to avoid this overhead.
+
+ * The final batch to "git rebase -i" updates to move more code from
+   the shell script to C has been merged.
+
+ * Operations that do not touch (majority of) packed refs have been
+   optimized by making accesses to packed-refs file lazy; we no longer
+   pre-parse everything, and an access to a single ref in the
+   packed-refs does not touch majority of irrelevant refs, either.
+
+ * Add comment to clarify that the style file is meant to be used with
+   clang-5 and the rules are still work in progress.
+
+ * Many variables that points at a region of memory that will live
+   throughout the life of the program have been marked with UNLEAK
+   marker to help the leak checkers concentrate on real leaks..
+
+ * Plans for weaning us off of SHA-1 has been documented.
+
+ * A new "oidmap" API has been introduced and oidset API has been
+   rewritten to use it.
 
 
 Also contains various documentation updates and code clean-ups.
@@ -296,6 +368,135 @@ Fixes since v2.14
    to match the behaviour of the former.
    (merge c818e74332 rk/commit-tree-make-F-verbatim later to maint).
 
+ * Many codepaths did not diagnose write failures correctly when disks
+   go full, due to their misuse of write_in_full() helper function,
+   which have been corrected.
+   (merge f48ecd38cb jk/write-in-full-fix later to maint).
+
+ * "git help co" now says "co is aliased to ...", not "git co is".
+   (merge b3a8076e0d ks/help-alias-label later to maint).
+
+ * "git archive", especially when used with pathspec, stored an empty
+   directory in its output, even though Git itself never does so.
+   This has been fixed.
+   (merge 4318094047 rs/archive-excluded-directory later to maint).
+
+ * API error-proofing which happens to also squelch warnings from GCC.
+   (merge c788c54cde tg/refs-allowed-flags later to maint).
+
+ * The explanation of the cut-line in the commit log editor has been
+   slightly tweaked.
+   (merge 8c4b1a3593 ks/commit-do-not-touch-cut-line later to maint).
+
+ * "git gc" tries to avoid running two instances at the same time by
+   reading and writing pid/host from and to a lock file; it used to
+   use an incorrect fscanf() format when reading, which has been
+   corrected.
+   (merge afe2fab72c aw/gc-lockfile-fscanf-fix later to maint).
+
+ * The scripts to drive TravisCI has been reorganized and then an
+   optimization to avoid spending cycles on a branch whose tip is
+   tagged has been implemented.
+   (merge 8376eb4a8f ls/travis-scriptify later to maint).
+
+ * The test linter has been taught that we do not like "echo -e".
+   (merge 1a6d46895d tb/test-lint-echo-e later to maint).
+
+ * Code cmp.std.c nitpick.
+   (merge ac7da78ede mh/for-each-string-list-item-empty-fix later to maint).
+
+ * A regression fix for 2.11 that made the code to read the list of
+   alternate object stores overrun the end of the string.
+   (merge f0f7bebef7 jk/info-alternates-fix later to maint).
+
+ * "git describe --match" learned to take multiple patterns in v2.13
+   series, but the feature ignored the patterns after the first one
+   and did not work at all.  This has been fixed.
+   (merge da769d2986 jk/describe-omit-some-refs later to maint).
+
+ * "git filter-branch" cannot reproduce a history with a tag without
+   the tagger field, which only ancient versions of Git allowed to be
+   created.  This has been corrected.
+   (merge b2c1ca6b4b ic/fix-filter-branch-to-handle-tag-without-tagger later to maint).
+
+ * "git cat-file --textconv" started segfaulting recently, which
+   has been corrected.
+   (merge cc0ea7c9e5 jk/diff-blob later to maint).
+
+ * The built-in pattern to detect the "function header" for HTML did
+   not match <H1>..<H6> elements without any attributes, which has
+   been fixed.
+   (merge 9c03caca2c ik/userdiff-html-h-element-fix later to maint).
+
+ * "git mailinfo" was loose in decoding quoted printable and produced
+   garbage when the two letters after the equal sign are not
+   hexadecimal.  This has been fixed.
+   (merge c8cf423eab rs/mailinfo-qp-decode-fix later to maint).
+
+ * The machinery to create xdelta used in pack files received the
+   sizes of the data in size_t, but lost the higher bits of them by
+   storing them in "unsigned int" during the computation, which is
+   fixed.
+
+ * The delta format used in the packfile cannot reference data at
+   offset larger than what can be expressed in 4-byte, but the
+   generator for the data failed to make sure the offset does not
+   overflow.  This has been corrected.
+
+ * The documentation for '-X<option>' for merges was misleadingly
+   written to suggest that "-s theirs" exists, which is not the case.
+   (merge c25d98b2a7 jc/merge-x-theirs-docfix later to maint).
+
+ * "git fast-export" with -M/-C option issued "copy" instruction on a
+   path that is simultaneously modified, which was incorrect.
+   (merge b3e8ca89cf jt/fast-export-copy-modify-fix later to maint).
+
+ * Many codepaths have been updated to squelch -Wsign-compare
+   warnings.
+   (merge 071bcaab64 rj/no-sign-compare later to maint).
+
+ * Memory leaks in various codepaths have been plugged.
+   (merge 4d01a7fa65 ma/leakplugs later to maint).
+
+ * Recent versions of "git rev-parse --parseopt" did not parse the
+   option specification that does not have the optional flags (*=?!)
+   correctly, which has been corrected.
+   (merge a6304fa4c2 bc/rev-parse-parseopt-fix later to maint).
+
+ * The checkpoint command "git fast-import" did not flush updates to
+   refs and marks unless at least one object was created since the
+   last checkpoint, which has been corrected, as these things can
+   happen without any new object getting created.
+   (merge 30e215a65c er/fast-import-dump-refs-on-checkpoint later to maint).
+
+ * Spell the name of our system as "Git" in the output from
+   request-pull script.
+   (merge e66d7c37a5 ar/request-pull-phrasofix later to maint).
+
+ * Fixes for a handful memory access issues identified by valgrind.
+   (merge 2944a94c6b tg/memfixes later to maint).
+
+ * Backports a moral equivalent of 2015 fix to the poll() emulation
+   from the upstream gnulib to fix occasional breakages on HPE NonStop.
+   (merge 61b2a1acaa rb/compat-poll-fix later to maint).
+
+ * Users with "color.ui = always" in their configuration were broken
+   by a recent change that made plumbing commands to pay attention to
+   them as the patch created internally by "git add -p" were colored
+   (heh) and made unusable.  Fix this regression by redefining
+   'always' to mean the same thing as 'auto'.
+   (merge 6be4595edb jk/ui-color-always-to-auto-maint later to maint).
+
+ * In the "--format=..." option of the "git for-each-ref" command (and
+   its friends, i.e. the listing mode of "git branch/tag"), "%(atom:)"
+   (e.g. "%(refname:)", "%(body:)" used to error out.  Instead, treat
+   them as if the colon and an empty string that follows it were not
+   there.
+   (merge bea4dbeafd tb/ref-filter-empty-modifier later to maint).
+
+ * An ancient bug that made Git misbehave with creation/renaming of
+   refs has been fixed.
+
  * Other minor doc, test and build updates and code cleanups.
    (merge f094b89a4d ma/parse-maybe-bool later to maint).
    (merge 39b00fa4d4 jk/drop-sha1-entry-pos later to maint).
@@ -309,3 +510,27 @@ Fixes since v2.14
    (merge 276d0e35c0 ma/split-symref-update-fix later to maint).
    (merge 3bc4b8f7c7 bb/doc-eol-dirty later to maint).
    (merge c1bb33c99c jk/system-path-cleanup later to maint).
+   (merge ab46e6fc72 cc/subprocess-handshake-missing-capabilities later to maint).
+   (merge f7a32dd97f kd/doc-for-each-ref later to maint).
+   (merge be94568bc7 ez/doc-duplicated-words-fix later to maint).
+   (merge 01e4be6c3d ks/test-readme-phrasofix later to maint).
+   (merge 217bb56d4f hn/typofix later to maint).
+   (merge c08fd6388c jk/doc-read-tree-table-asciidoctor-fix later to maint).
+   (merge c3342b362e ks/doc-use-camelcase-for-config-name later to maint).
+   (merge 0bca165fdb jk/validate-headref-fix later to maint).
+   (merge 93dbefb389 mr/doc-negative-pathspec later to maint).
+   (merge 5e633326e4 ad/doc-markup-fix later to maint).
+   (merge 9ca356fa8b rs/cocci-de-paren-call-params later to maint).
+   (merge 7099153e8d rs/tag-null-pointer-arith-fix later to maint).
+   (merge 0e187d758c rs/run-command-use-alloc-array later to maint).
+   (merge e0222159fa jn/strbuf-doc-re-reuse later to maint).
+   (merge 97487ea11a rs/qsort-s later to maint).
+   (merge a9155c50bd sb/branch-avoid-repeated-strbuf-release later to maint).
+   (merge f777623514 ks/branch-tweak-error-message-for-extra-args later to maint).
+   (merge 33f3c683ec ks/verify-filename-non-option-error-message-tweak later to maint).
+   (merge b3ea7dd32d jk/sha1-loose-object-info-fix later to maint).
+   (merge 2720f6db5d rs/fsck-null-return-from-lookup later to maint).
+   (merge 99b7b687a6 rs/rs-mailmap later to maint).
+   (merge 7823655082 tb/complete-describe later to maint).
+   (merge 7cbbf9d6a2 ls/filter-process-delayed later to maint).
+   (merge b59698aef3 jc/doc-checkout later to maint).

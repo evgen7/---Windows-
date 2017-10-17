@@ -82,6 +82,8 @@ static int cmd_dropcaches(void)
 	HANDLE hProcess = GetCurrentProcess();
 	HANDLE hToken;
 	HMODULE ntdll;
+	DWORD(WINAPI *NtSetSystemInformation)(INT, PVOID, ULONG);
+	SYSTEM_MEMORY_LIST_COMMAND command;
 	int status;
 
 	if (!OpenProcessToken(hProcess, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &hToken))
@@ -96,12 +98,12 @@ static int cmd_dropcaches(void)
 	if (!ntdll)
 		return error("Can't load ntdll.dll, wrong Windows version?");
 
-	DWORD(WINAPI *NtSetSystemInformation)(INT, PVOID, ULONG) =
+	NtSetSystemInformation =
 		(DWORD(WINAPI *)(INT, PVOID, ULONG))GetProcAddress(ntdll, "NtSetSystemInformation");
 	if (!NtSetSystemInformation)
 		return error("Can't get function addresses, wrong Windows version?");
 
-	SYSTEM_MEMORY_LIST_COMMAND command = MemoryPurgeStandbyList;
+	command = MemoryPurgeStandbyList;
 	status = NtSetSystemInformation(
 		SystemMemoryListInformation,
 		&command,

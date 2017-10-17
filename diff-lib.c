@@ -37,7 +37,7 @@ static int check_removed(const struct cache_entry *ce, struct stat *st)
 	if (has_symlink_leading_path(ce->name, ce_namelen(ce)))
 		return 1;
 	if (S_ISDIR(st->st_mode)) {
-		unsigned char sub[20];
+		struct object_id sub;
 
 		/*
 		 * If ce is already a gitlink, we can have a plain
@@ -51,7 +51,7 @@ static int check_removed(const struct cache_entry *ce, struct stat *st)
 		 * a directory --- the blob was removed!
 		 */
 		if (!S_ISGITLINK(ce->ce_mode) &&
-		    resolve_gitlink_ref(ce->name, "HEAD", sub))
+		    resolve_gitlink_ref(ce->name, "HEAD", &sub))
 			return 1;
 	}
 	return 0;
@@ -551,7 +551,6 @@ int index_differs_from(const char *def, int diff_flags,
 	rev.diffopt.flags |= diff_flags;
 	rev.diffopt.ita_invisible_in_index = ita_invisible_in_index;
 	run_diff_index(&rev, 1);
-	if (rev.pending.alloc)
-		free(rev.pending.objects);
+	object_array_clear(&rev.pending);
 	return (DIFF_OPT_TST(&rev.diffopt, HAS_CHANGES) != 0);
 }

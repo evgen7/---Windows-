@@ -97,7 +97,7 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 		return !has_object_file(&oid);
 
 	case 'w':
-		if (!path[0])
+		if (!path)
 			die("git cat-file --filters %s: <object> must be "
 			    "<sha1:path>", obj_name);
 
@@ -107,12 +107,13 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 		break;
 
 	case 'c':
-		if (!path[0])
+		if (!path)
 			die("git cat-file --textconv %s: <object> must be <sha1:path>",
 			    obj_name);
 
 		if (textconv_object(path, obj_context.mode, &oid, 1, &buf, &size))
 			break;
+		/* else fallthrough */
 
 	case 'p':
 		type = sha1_object_info(oid.hash, NULL);
@@ -474,6 +475,8 @@ static int batch_objects(struct batch_options *opt)
 
 		for_each_loose_object(batch_loose_object, &sa, 0);
 		for_each_packed_object(batch_packed_object, &sa, 0);
+		if (repository_format_partial_clone)
+			warning("This repository has extensions.partialClone set. Some objects may not be loaded.");
 
 		cb.opt = opt;
 		cb.expand = &data;

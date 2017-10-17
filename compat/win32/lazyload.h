@@ -1,7 +1,19 @@
 #ifndef LAZYLOAD_H
 #define LAZYLOAD_H
 
-/* simplify loading of DLL functions */
+/*
+ * A pair of macros to simplify loading of DLL functions. Example:
+ *
+ *   DECLARE_PROC_ADDR(kernel32.dll, BOOL, CreateHardLinkW,
+ *                     LPCWSTR, LPCWSTR, LPSECURITY_ATTRIBUTES);
+ *
+ *   if (!INIT_PROC_ADDR(CreateHardLinkW))
+ *           return error("Could not find CreateHardLinkW() function";
+ *
+ *   if (!CreateHardLinkW(source, target, NULL))
+ *           return error("could not create hardlink from %S to %S",
+ *                        source, target);
+ */
 
 struct proc_addr {
 	const char *const dll;
@@ -20,6 +32,7 @@ struct proc_addr {
  * Loads a function from a DLL (once-only).
  * Returns non-NULL function pointer on success.
  * Returns NULL + errno == ENOSYS on failure.
+ * This function is not thread-safe.
  */
 #define INIT_PROC_ADDR(function) \
 	(function = get_proc_addr(&proc_addr_##function))

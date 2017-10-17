@@ -31,7 +31,7 @@ static void add_head_info(struct worktree *wt)
 	target = refs_resolve_ref_unsafe(get_worktree_ref_store(wt),
 					 "HEAD",
 					 0,
-					 wt->head_sha1, &flags);
+					 &wt->head_oid, &flags);
 	if (!target)
 		return;
 
@@ -394,7 +394,6 @@ const struct worktree *find_shared_symref(const char *symref,
 	for (i = 0; worktrees[i]; i++) {
 		struct worktree *wt = worktrees[i];
 		const char *symref_target;
-		unsigned char sha1[20];
 		struct ref_store *refs;
 		int flags;
 
@@ -414,7 +413,7 @@ const struct worktree *find_shared_symref(const char *symref,
 
 		refs = get_worktree_ref_store(wt);
 		symref_target = refs_resolve_ref_unsafe(refs, symref, 0,
-							sha1, &flags);
+							NULL, &flags);
 		if ((flags & REF_ISSYMREF) && !strcmp(symref_target, target)) {
 			existing = wt;
 			break;

@@ -2,7 +2,7 @@
 #include "config.h"
 #include "protocol.h"
 
-enum protocol_version parse_protocol_version(const char *value)
+static enum protocol_version parse_protocol_version(const char *value)
 {
 	if (!strcmp(value, "0"))
 		return protocol_v0;
@@ -33,6 +33,13 @@ enum protocol_version determine_protocol_version_server(void)
 	const char *git_protocol = getenv(GIT_PROTOCOL_ENVIRONMENT);
 	enum protocol_version version = protocol_v0;
 
+	/*
+	 * Determine which protocol version the client has requested.  Since
+	 * multiple 'version' keys can be sent by the client, indicating that
+	 * the client is okay to speak any of them, select the greatest version
+	 * that the client has requested.  This is due to the assumption that
+	 * the most recent protocol version will be the most state-of-the-art.
+	 */
 	if (git_protocol) {
 		struct string_list list = STRING_LIST_INIT_DUP;
 		const struct string_list_item *item;

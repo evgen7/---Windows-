@@ -203,17 +203,16 @@ static int builtin_diff_combined(struct rev_info *revs,
 
 static void refresh_index_quietly(void)
 {
-	struct lock_file *lock_file;
+	struct lock_file lock_file = LOCK_INIT;
 	int fd;
 
-	lock_file = xcalloc(1, sizeof(struct lock_file));
-	fd = hold_locked_index(lock_file, 0);
+	fd = hold_locked_index(&lock_file, 0);
 	if (fd < 0)
 		return;
 	discard_cache();
 	read_cache();
 	refresh_cache(REFRESH_QUIET|REFRESH_UNMERGED);
-	update_index_if_able(&the_index, lock_file);
+	update_index_if_able(&the_index, &lock_file);
 }
 
 static int builtin_diff_files(struct rev_info *revs, int argc, const char **argv)
@@ -464,5 +463,8 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 	result = diff_result_code(&rev.diffopt, result);
 	if (1 < rev.diffopt.skip_stat_unmatch)
 		refresh_index_quietly();
+	UNLEAK(rev);
+	UNLEAK(ent);
+	UNLEAK(blob);
 	return result;
 }

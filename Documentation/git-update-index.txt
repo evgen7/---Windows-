@@ -476,7 +476,7 @@ inform it as to what files have been modified. This enables git to avoid
 having to lstat() every file to find modified files.
 
 When used in conjunction with the untracked cache, it can further improve
-performance by avoiding the cost of scaning the entire working directory
+performance by avoiding the cost of scanning the entire working directory
 looking for new files.
 
 If you want to enable (or disable) this feature, it is easier to use

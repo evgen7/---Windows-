@@ -26,7 +26,7 @@ test_expect_success 'clone with git:// using protocol v1' '
 	test_cmp expect actual &&
 
 	# Client requested to use protocol v1
-	grep "version=1" log &&
+	grep "clone> .*\\\0\\\0version=1\\\0$" log &&
 	# Server responded using protocol v1
 	grep "clone< version 1" log
 '
@@ -37,12 +37,12 @@ test_expect_success 'fetch with git:// using protocol v1' '
 	GIT_TRACE_PACKET=1 git -C daemon_child -c protocol.version=1 \
 		fetch 2>log &&
 
-	git -C daemon_child log -1 --format=%s FETCH_HEAD >actual &&
+	git -C daemon_child log -1 --format=%s origin/master >actual &&
 	git -C "$daemon_parent" log -1 --format=%s >expect &&
 	test_cmp expect actual &&
 
 	# Client requested to use protocol v1
-	grep "version=1" log &&
+	grep "fetch> .*\\\0\\\0version=1\\\0$" log &&
 	# Server responded using protocol v1
 	grep "fetch< version 1" log
 '
@@ -56,7 +56,7 @@ test_expect_success 'pull with git:// using protocol v1' '
 	test_cmp expect actual &&
 
 	# Client requested to use protocol v1
-	grep "version=1" log &&
+	grep "fetch> .*\\\0\\\0version=1\\\0$" log &&
 	# Server responded using protocol v1
 	grep "fetch< version 1" log
 '
@@ -64,8 +64,8 @@ test_expect_success 'pull with git:// using protocol v1' '
 test_expect_success 'push with git:// using protocol v1' '
 	test_commit -C daemon_child three &&
 
-	# Since the repository being served isnt bare we need to push to
-	# another branch explicitly to avoid mangling the master branch
+	# Push to another branch, as the target repository has the
+	# master branch checked out and we cannot push into it.
 	GIT_TRACE_PACKET=1 git -C daemon_child -c protocol.version=1 \
 		push origin HEAD:client_branch 2>log &&
 
@@ -74,7 +74,7 @@ test_expect_success 'push with git:// using protocol v1' '
 	test_cmp expect actual &&
 
 	# Client requested to use protocol v1
-	grep "version=1" log &&
+	grep "push> .*\\\0\\\0version=1\\\0$" log &&
 	# Server responded using protocol v1
 	grep "push< version 1" log
 '
@@ -106,7 +106,7 @@ test_expect_success 'fetch with file:// using protocol v1' '
 	GIT_TRACE_PACKET=1 git -C file_child -c protocol.version=1 \
 		fetch 2>log &&
 
-	git -C file_child log -1 --format=%s FETCH_HEAD >actual &&
+	git -C file_child log -1 --format=%s origin/master >actual &&
 	git -C file_parent log -1 --format=%s >expect &&
 	test_cmp expect actual &&
 
@@ -129,8 +129,8 @@ test_expect_success 'pull with file:// using protocol v1' '
 test_expect_success 'push with file:// using protocol v1' '
 	test_commit -C file_child three &&
 
-	# Since the repository being served isnt bare we need to push to
-	# another branch explicitly to avoid mangling the master branch
+	# Push to another branch, as the target repository has the
+	# master branch checked out and we cannot push into it.
 	GIT_TRACE_PACKET=1 git -C file_child -c protocol.version=1 \
 		push origin HEAD:client_branch 2>log &&
 
@@ -145,8 +145,10 @@ test_expect_success 'push with file:// using protocol v1' '
 # Test protocol v1 with 'ssh://' transport
 #
 test_expect_success 'setup ssh wrapper' '
-	GIT_SSH="$GIT_BUILD_DIR/t/helper/test-fake-ssh$X" &&
+	GIT_SSH="$GIT_BUILD_DIR/t/helper/test-fake-ssh" &&
 	export GIT_SSH &&
+	GIT_SSH_VARIANT=ssh &&
+	export GIT_SSH_VARIANT &&
 	export TRASH_DIRECTORY &&
 	>"$TRASH_DIRECTORY"/ssh-output
 '
@@ -182,7 +184,7 @@ test_expect_success 'fetch with ssh:// using protocol v1' '
 		fetch 2>log &&
 	expect_ssh git-upload-pack &&
 
-	git -C ssh_child log -1 --format=%s FETCH_HEAD >actual &&
+	git -C ssh_child log -1 --format=%s origin/master >actual &&
 	git -C ssh_parent log -1 --format=%s >expect &&
 	test_cmp expect actual &&
 
@@ -206,8 +208,8 @@ test_expect_success 'pull with ssh:// using protocol v1' '
 test_expect_success 'push with ssh:// using protocol v1' '
 	test_commit -C ssh_child three &&
 
-	# Since the repository being served isnt bare we need to push to
-	# another branch explicitly to avoid mangling the master branch
+	# Push to another branch, as the target repository has the
+	# master branch checked out and we cannot push into it.
 	GIT_TRACE_PACKET=1 git -C ssh_child -c protocol.version=1 \
 		push origin HEAD:client_branch 2>log &&
 	expect_ssh git-receive-pack &&
@@ -251,7 +253,7 @@ test_expect_success 'fetch with http:// using protocol v1' '
 	GIT_TRACE_PACKET=1 git -C http_child -c protocol.version=1 \
 		fetch 2>log &&
 
-	git -C http_child log -1 --format=%s FETCH_HEAD >actual &&
+	git -C http_child log -1 --format=%s origin/master >actual &&
 	git -C "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" log -1 --format=%s >expect &&
 	test_cmp expect actual &&
 
@@ -274,8 +276,8 @@ test_expect_success 'pull with http:// using protocol v1' '
 test_expect_success 'push with http:// using protocol v1' '
 	test_commit -C http_child three &&
 
-	# Since the repository being served isnt bare we need to push to
-	# another branch explicitly to avoid mangling the master branch
+	# Push to another branch, as the target repository has the
+	# master branch checked out and we cannot push into it.
 	GIT_TRACE_PACKET=1 git -C http_child -c protocol.version=1 \
 		push origin HEAD:client_branch && #2>log &&
 

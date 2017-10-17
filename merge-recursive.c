@@ -1026,10 +1026,19 @@ static int merge_file_1(struct merge_options *o,
 						       &b->oid,
 						       !o->call_depth);
 		} else if (S_ISLNK(a->mode)) {
-			oidcpy(&result->oid, &a->oid);
-
-			if (!oid_eq(&a->oid, &b->oid))
-				result->clean = 0;
+			switch (o->recursive_variant) {
+			case MERGE_RECURSIVE_NORMAL:
+				oidcpy(&result->oid, &a->oid);
+				if (!oid_eq(&a->oid, &b->oid))
+					result->clean = 0;
+				break;
+			case MERGE_RECURSIVE_OURS:
+				oidcpy(&result->oid, &a->oid);
+				break;
+			case MERGE_RECURSIVE_THEIRS:
+				oidcpy(&result->oid, &b->oid);
+				break;
+			}
 		} else
 			die("BUG: unsupported object type in the tree");
 	}
@@ -2162,7 +2171,7 @@ int merge_recursive_generic(struct merge_options *o,
 			    struct commit **result)
 {
 	int clean;
-	struct lock_file *lock = xcalloc(1, sizeof(struct lock_file));
+	struct lock_file lock = LOCK_INIT;
 	struct commit *head_commit = get_ref(head, o->branch1);
 	struct commit *next_commit = get_ref(merge, o->branch2);
 	struct commit_list *ca = NULL;
@@ -2178,14 +2187,14 @@ int merge_recursive_generic(struct merge_options *o,
 		}
 	}
 
-	hold_locked_index(lock, LOCK_DIE_ON_ERROR);
+	hold_locked_index(&lock, LOCK_DIE_ON_ERROR);
 	clean = merge_recursive(o, head_commit, next_commit, ca,
 			result);
 	if (clean < 0)
 		return clean;
 
 	if (active_cache_changed &&
-	    write_locked_index(&the_index, lock, COMMIT_LOCK))
+	    write_locked_index(&the_index, &lock, COMMIT_LOCK))
 		return err(o, _("Unable to write index."));
 
 	return clean ? 0 : 1;

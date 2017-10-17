@@ -27,6 +27,7 @@ int warn_ambiguous_refs = 1;
 int warn_on_object_refname_ambiguity = 1;
 int ref_paranoia = -1;
 int repository_format_precious_objects;
+char *repository_format_partial_clone;
 const char *git_commit_encoding;
 const char *git_log_output_encoding;
 const char *apply_default_whitespace;
@@ -338,4 +339,9 @@ int get_shared_repository(void)
 void reset_shared_repository(void)
 {
 	need_shared_repository_from_config = 1;
+}
+
+int use_optional_locks(void)
+{
+	return git_env_bool(GIT_OPTIONAL_LOCKS_ENVIRONMENT, 1);
 }

@@ -248,7 +248,6 @@ static int check_to_send_update(const struct ref *ref, const struct send_pack_ar
 	case REF_STATUS_REJECT_FETCH_FIRST:
 	case REF_STATUS_REJECT_NEEDS_FORCE:
 	case REF_STATUS_REJECT_STALE:
-	case REF_STATUS_REJECT_LAZY_CAS:
 	case REF_STATUS_REJECT_NODELETE:
 		return CHECK_REF_STATUS_REJECTED;
 	case REF_STATUS_UPTODATE:
@@ -498,7 +497,7 @@ int send_pack(struct send_pack_args *args,
 				strbuf_release(&cap_buf);
 				return atomic_push_failure(args, remote_refs, ref);
 			}
-			/* Fallthrough for non atomic case. */
+			/* else fallthrough */
 		default:
 			continue;
 		}

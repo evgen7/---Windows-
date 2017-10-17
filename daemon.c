@@ -582,6 +582,9 @@ static void canonicalize_client(struct strbuf *out, const char *in)
 
 /*
  * Read the host as supplied by the client connection.
+ *
+ * Returns a pointer to the character after the NUL byte terminating the host
+ * arguemnt, or 'extra_args' if there is no host arguemnt.
  */
 static char *parse_host_arg(struct hostinfo *hi, char *extra_args, int buflen)
 {
@@ -615,12 +618,16 @@ static char *parse_host_arg(struct hostinfo *hi, char *extra_args, int buflen)
 	return extra_args;
 }
 
-static void parse_extra_args(struct argv_array *env, const char *extra_args,
-			     int buflen)
+static void parse_extra_args(struct hostinfo *hi, struct argv_array *env,
+			     char *extra_args, int buflen)
 {
 	const char *end = extra_args + buflen;
 	struct strbuf git_protocol = STRBUF_INIT;
 
+	/* First look for the host argument */
+	extra_args = parse_host_arg(hi, extra_args, buflen);
+
+	/* Look for additional arguments places after a second NUL byte */
 	for (; extra_args < end; extra_args += strlen(extra_args) + 1) {
 		const char *arg = extra_args;
 
@@ -759,14 +766,9 @@ static int execute(void)
 		pktlen--;
 	}
 
-	if (len != pktlen) {
-		const char *extra_args;
-		/* retrieve host */
-		extra_args = parse_host_arg(&hi, line + len + 1, pktlen - len - 1);
-
-		/* parse additional args hidden behind a second NUL byte */
-		parse_extra_args(&env, extra_args + 1, pktlen - (extra_args - line) - 1);
-	}
+	/* parse additional args hidden behind a NUL byte */
+	if (len != pktlen)
+		parse_extra_args(&hi, &env, line + len + 1, pktlen - len - 1);
 
 	for (i = 0; i < ARRAY_SIZE(daemon_service); i++) {
 		struct daemon_service *s = &(daemon_service[i]);

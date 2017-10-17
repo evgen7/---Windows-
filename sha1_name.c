@@ -153,11 +153,13 @@ static void unique_in_pack(struct packed_git *p,
 	uint32_t num, last, i, first = 0;
 	const struct object_id *current = NULL;
 
-	open_pack_index(p);
+	if (open_pack_index(p) || !p->num_objects)
+		return;
+
 	num = p->num_objects;
 	last = num;
 	while (first < last) {
-		uint32_t mid = (first + last) / 2;
+		uint32_t mid = first + (last - first) / 2;
 		const unsigned char *current;
 		int cmp;
 
@@ -478,16 +480,18 @@ struct min_abbrev_data {
 	unsigned int init_len;
 	unsigned int cur_len;
 	char *hex;
+	const unsigned char *hash;
 };
 
-static inline char get_hex_char_from_oid(const struct object_id *oid, int i)
+static inline char get_hex_char_from_oid(const struct object_id *oid,
+					 unsigned int pos)
 {
 	static const char hex[] = "0123456789abcdef";
 
-	if ((i & 1) == 0)
-		return hex[oid->hash[i >> 1] >> 4];
+	if ((pos & 1) == 0)
+		return hex[oid->hash[pos >> 1] >> 4];
 	else
-		return hex[oid->hash[i >> 1] & 0xf];
+		return hex[oid->hash[pos >> 1] & 0xf];
 }
 
 static int extend_abbrev_len(const struct object_id *oid, void *cb_data)
@@ -502,6 +506,67 @@ static int extend_abbrev_len(const struct object_id *oid, void *cb_data)
 		mad->cur_len = i + 1;
 
 	return 0;
+}
+
+static void find_abbrev_len_for_pack(struct packed_git *p,
+				     struct min_abbrev_data *mad)
+{
+	int match = 0;
+	uint32_t num, last, first = 0;
+	struct object_id oid;
+
+	if (open_pack_index(p) || !p->num_objects)
+		return;
+
+	num = p->num_objects;
+	last = num;
+	while (first < last) {
+		uint32_t mid = first + (last - first) / 2;
+		const unsigned char *current;
+		int cmp;
+
+		current = nth_packed_object_sha1(p, mid);
+		cmp = hashcmp(mad->hash, current);
+		if (!cmp) {
+			match = 1;
+			first = mid;
+			break;
+		}
+		if (cmp > 0) {
+			first = mid + 1;
+			continue;
+		}
+		last = mid;
+	}
+
+	/*
+	 * first is now the position in the packfile where we would insert
+	 * mad->hash if it does not exist (or the position of mad->hash if
+	 * it does exist). Hence, we consider a maximum of three objects
+	 * nearby for the abbreviation length.
+	 */
+	mad->init_len = 0;
+	if (!match) {
+		nth_packed_object_oid(&oid, p, first);
+		extend_abbrev_len(&oid, mad);
+	} else if (first < num - 1) {
+		nth_packed_object_oid(&oid, p, first + 1);
+		extend_abbrev_len(&oid, mad);
+	}
+	if (first > 0) {
+		nth_packed_object_oid(&oid, p, first - 1);
+		extend_abbrev_len(&oid, mad);
+	}
+	mad->init_len = mad->cur_len;
+}
+
+static void find_abbrev_len_packed(struct min_abbrev_data *mad)
+{
+	struct packed_git *p;
+
+	prepare_packed_git();
+	for (p = packed_git; p; p = p->next)
+		find_abbrev_len_for_pack(p, mad);
 }
 
 int find_unique_abbrev_r(char *hex, const unsigned char *sha1, int len)
@@ -535,19 +600,21 @@ int find_unique_abbrev_r(char *hex, const unsigned char *sha1, int len)
 	if (len == GIT_SHA1_HEXSZ || !len)
 		return GIT_SHA1_HEXSZ;
 
-	if (init_object_disambiguation(hex, len, &ds) < 0)
-		return -1;
-
 	mad.init_len = len;
 	mad.cur_len = len;
 	mad.hex = hex;
+	mad.hash = sha1;
+
+	find_abbrev_len_packed(&mad);
+
+	if (init_object_disambiguation(hex, mad.cur_len, &ds) < 0)
+		return -1;
 
 	ds.fn = extend_abbrev_len;
 	ds.always_call_fn = 1;
-	ds.cb_data = (void*)&mad;
+	ds.cb_data = (void *)&mad;
 
 	find_short_object_filename(&ds);
-	find_short_packed_object(&ds);
 	(void)finish_object_disambiguation(&ds, &oid_ret);
 
 	hex[mad.cur_len] = 0;
@@ -639,7 +706,7 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 
 	if (len == GIT_SHA1_HEXSZ && !get_oid_hex(str, oid)) {
 		if (warn_ambiguous_refs && warn_on_object_refname_ambiguity) {
-			refs_found = dwim_ref(str, len, tmp_oid.hash, &real_ref);
+			refs_found = dwim_ref(str, len, &tmp_oid, &real_ref);
 			if (refs_found > 0) {
 				warning(warn_msg, len, str);
 				if (advice_object_name_warning)
@@ -690,11 +757,11 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 
 	if (!len && reflog_len)
 		/* allow "@{...}" to mean the current branch reflog */
-		refs_found = dwim_ref("HEAD", 4, oid->hash, &real_ref);
+		refs_found = dwim_ref("HEAD", 4, oid, &real_ref);
 	else if (reflog_len)
-		refs_found = dwim_log(str, len, oid->hash, &real_ref);
+		refs_found = dwim_log(str, len, oid, &real_ref);
 	else
-		refs_found = dwim_ref(str, len, oid->hash, &real_ref);
+		refs_found = dwim_ref(str, len, oid, &real_ref);
 
 	if (!refs_found)
 		return -1;
@@ -733,7 +800,7 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 				return -1;
 			}
 		}
-		if (read_ref_at(real_ref, flags, at_time, nth, oid->hash, NULL,
+		if (read_ref_at(real_ref, flags, at_time, nth, oid, NULL,
 				&co_time, &co_tz, &co_cnt)) {
 			if (!len) {
 				if (starts_with(real_ref, "refs/heads/")) {
@@ -1365,13 +1432,29 @@ void strbuf_branchname(struct strbuf *sb, const char *name, unsigned allowed)
 	strbuf_add(sb, name + used, len - used);
 }
 
-int strbuf_check_branch_ref(struct strbuf *sb, const char *name)
+static int strbuf_check_branch_ref_format(struct strbuf *sb)
 {
-	strbuf_branchname(sb, name, INTERPRET_BRANCH_LOCAL);
-	if (name[0] == '-')
+	if (*sb->buf == '-' || !strcmp(sb->buf, "HEAD"))
 		return -1;
 	strbuf_splice(sb, 0, 0, "refs/heads/", 11);
 	return check_refname_format(sb->buf, 0);
+}
+
+int check_branch_ref_format(const char *name)
+{
+	struct strbuf sb = STRBUF_INIT;
+	int result;
+
+	strbuf_addstr(&sb, name);
+	result = strbuf_check_branch_ref_format(&sb);
+	strbuf_release(&sb);
+	return result;
+}
+
+int strbuf_check_branch_ref(struct strbuf *sb, const char *name)
+{
+	strbuf_branchname(sb, name, INTERPRET_BRANCH_LOCAL);
+	return strbuf_check_branch_ref_format(sb);
 }
 
 /*

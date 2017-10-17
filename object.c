@@ -252,7 +252,7 @@ struct object *parse_object(const struct object_id *oid)
 	if (obj && obj->parsed)
 		return obj;
 
-	if ((obj && obj->type == OBJ_BLOB) ||
+	if ((obj && obj->type == OBJ_BLOB && has_object_file(oid)) ||
 	    (!obj && has_object_file(oid) &&
 	     sha1_object_info(oid->hash, NULL) == OBJ_BLOB)) {
 		if (check_sha1_signature(repl, NULL, 0, NULL) < 0) {
@@ -351,6 +351,19 @@ static void object_array_release_entry(struct object_array_entry *ent)
 	if (ent->name != object_array_slopbuf)
 		free(ent->name);
 	free(ent->path);
+}
+
+struct object *object_array_pop(struct object_array *array)
+{
+	struct object *ret;
+
+	if (!array->nr)
+		return NULL;
+
+	ret = array->objects[array->nr - 1].item;
+	object_array_release_entry(&array->objects[array->nr - 1]);
+	array->nr--;
+	return ret;
 }
 
 void object_array_filter(struct object_array *array,

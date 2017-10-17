@@ -161,8 +161,16 @@ test_expect_success 'check-ref-format --branch from subdir' '
 	test "$refname" = "$sha1"
 '
 
-test_expect_success 'check-ref-format --branch from non-repo' '
+test_expect_success 'check-ref-format --branch @{-1} from non-repo' '
 	test_must_fail nongit git check-ref-format --branch @{-1}
+'
+
+test_expect_success 'check-ref-format --branch master in non-repo' '
+	nongit git check-ref-format --branch master
+'
+
+test_expect_success 'check-ref-format --branch -naster in repo' '
+	test_must_fail git check-ref-format --branch -naster
 '
 
 valid_ref_normalized() {

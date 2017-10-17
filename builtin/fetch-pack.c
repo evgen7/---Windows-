@@ -4,6 +4,7 @@
 #include "remote.h"
 #include "connect.h"
 #include "sha1-array.h"
+#include "config.h"
 
 static const char fetch_pack_usage[] =
 "git fetch-pack [--all] [--stdin] [--quiet | -q] [--keep | -k] [--thin] "
@@ -52,6 +53,8 @@ int cmd_fetch_pack(int argc, const char **argv, const char *prefix)
 	struct fetch_pack_args args;
 	struct oid_array shallow = OID_ARRAY_INIT;
 	struct string_list deepen_not = STRING_LIST_INIT_DUP;
+
+	fetch_if_missing = 0;
 
 	packet_trace_identity("fetch-pack");
 
@@ -141,6 +144,24 @@ int cmd_fetch_pack(int argc, const char **argv, const char *prefix)
 		}
 		if (!strcmp("--update-shallow", arg)) {
 			args.update_shallow = 1;
+			continue;
+		}
+		if (!strcmp("--from-promisor", arg)) {
+			args.from_promisor = 1;
+			continue;
+		}
+		if (!strcmp("--no-haves", arg)) {
+			args.no_haves = 1;
+			continue;
+		}
+		if (skip_prefix(arg, "--blob-max-bytes=", &arg)) {
+			unsigned long *ptr = xmalloc(sizeof(*ptr));
+			if (!git_parse_ulong(arg, ptr)) {
+				error("Invalid --blob-max-bytes value: %s",
+				      arg);
+				usage(fetch_pack_usage);
+			}
+			args.blob_max_bytes = ptr;
 			continue;
 		}
 		usage(fetch_pack_usage);

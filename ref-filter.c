@@ -76,12 +76,15 @@ static struct used_atom {
 		char color[COLOR_MAXLEN];
 		struct align align;
 		struct {
-			enum { RR_REF, RR_TRACK, RR_TRACKSHORT } option;
+			enum {
+				RR_REF, RR_TRACK, RR_TRACKSHORT, RR_REMOTE_NAME, RR_REMOTE_REF
+			} option;
 			struct refname_atom refname;
-			unsigned int nobracket : 1;
+			unsigned int nobracket : 1, push : 1, push_remote : 1;
 		} remote_ref;
 		struct {
 			enum { C_BARE, C_BODY, C_BODY_DEP, C_LINES, C_SIG, C_SUB, C_TRAILERS } option;
+			struct process_trailer_options trailer_opts;
 			unsigned int nlines;
 		} contents;
 		struct {
@@ -137,6 +140,9 @@ static void remote_ref_atom_parser(const struct ref_format *format, struct used_
 	struct string_list params = STRING_LIST_INIT_DUP;
 	int i;
 
+	if (!strcmp(atom->name, "push") || starts_with(atom->name, "push:"))
+		atom->u.remote_ref.push = 1;
+
 	if (!arg) {
 		atom->u.remote_ref.option = RR_REF;
 		refname_atom_parser_internal(&atom->u.remote_ref.refname,
@@ -156,7 +162,13 @@ static void remote_ref_atom_parser(const struct ref_format *format, struct used_
 			atom->u.remote_ref.option = RR_TRACKSHORT;
 		else if (!strcmp(s, "nobracket"))
 			atom->u.remote_ref.nobracket = 1;
-		else {
+		else if (!strcmp(s, "remotename")) {
+			atom->u.remote_ref.option = RR_REMOTE_NAME;
+			atom->u.remote_ref.push_remote = 1;
+		} else if (!strcmp(s, "remoteref")) {
+			atom->u.remote_ref.option = RR_REMOTE_REF;
+			atom->u.remote_ref.push_remote = 1;
+		} else {
 			atom->u.remote_ref.option = RR_REF;
 			refname_atom_parser_internal(&atom->u.remote_ref.refname,
 						     arg, atom->name);
@@ -182,9 +194,23 @@ static void subject_atom_parser(const struct ref_format *format, struct used_ato
 
 static void trailers_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
 {
-	if (arg)
-		die(_("%%(trailers) does not take arguments"));
+	struct string_list params = STRING_LIST_INIT_DUP;
+	int i;
+
+	if (arg) {
+		string_list_split(&params, arg, ',', -1);
+		for (i = 0; i < params.nr; i++) {
+			const char *s = params.items[i].string;
+			if (!strcmp(s, "unfold"))
+				atom->u.contents.trailer_opts.unfold = 1;
+			else if (!strcmp(s, "only"))
+				atom->u.contents.trailer_opts.only_trailers = 1;
+			else
+				die(_("unknown %%(trailers) argument: %s"), s);
+		}
+	}
 	atom->u.contents.option = C_TRAILERS;
+	string_list_clear(&params, 0);
 }
 
 static void contents_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
@@ -197,9 +223,10 @@ static void contents_atom_parser(const struct ref_format *format, struct used_at
 		atom->u.contents.option = C_SIG;
 	else if (!strcmp(arg, "subject"))
 		atom->u.contents.option = C_SUB;
-	else if (!strcmp(arg, "trailers"))
-		atom->u.contents.option = C_TRAILERS;
-	else if (skip_prefix(arg, "lines=", &arg)) {
+	else if (skip_prefix(arg, "trailers", &arg)) {
+		skip_prefix(arg, ":", &arg);
+		trailers_atom_parser(format, atom, *arg ? arg : NULL);
+	} else if (skip_prefix(arg, "lines=", &arg)) {
 		atom->u.contents.option = C_LINES;
 		if (strtoul_ui(arg, 10, &atom->u.contents.nlines))
 			die(_("positive value expected contents:lines=%s"), arg);
@@ -295,9 +322,7 @@ static void if_atom_parser(const struct ref_format *format, struct used_atom *at
 
 static void head_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
 {
-	struct object_id unused;
-
-	atom->u.head = resolve_refdup("HEAD", RESOLVE_REF_READING, unused.hash, NULL);
+	atom->u.head = resolve_refdup("HEAD", RESOLVE_REF_READING, NULL, NULL);
 }
 
 static struct {
@@ -415,8 +440,16 @@ static int parse_ref_filter_atom(const struct ref_format *format,
 	REALLOC_ARRAY(used_atom, used_atom_cnt);
 	used_atom[at].name = xmemdupz(atom, ep - atom);
 	used_atom[at].type = valid_atom[i].cmp_type;
-	if (arg)
+	if (arg) {
 		arg = used_atom[at].name + (arg - atom) + 1;
+		if (!*arg) {
+			/*
+			 * Treat empty sub-arguments list as NULL (i.e.,
+			 * "%(atom:)" is equivalent to "%(atom)").
+			 */
+			arg = NULL;
+		}
+	}
 	memset(&used_atom[at].u, 0, sizeof(used_atom[at].u));
 	if (valid_atom[i].parser)
 		valid_atom[i].parser(format, &used_atom[at], arg);
@@ -1042,7 +1075,7 @@ static void grab_sub_body_contents(struct atom_value *val, int deref, struct obj
 			name++;
 		if (strcmp(name, "subject") &&
 		    strcmp(name, "body") &&
-		    strcmp(name, "trailers") &&
+		    !starts_with(name, "trailers") &&
 		    !starts_with(name, "contents"))
 			continue;
 		if (!subpos)
@@ -1067,13 +1100,12 @@ static void grab_sub_body_contents(struct atom_value *val, int deref, struct obj
 			append_lines(&s, subpos, contents_end - subpos, atom->u.contents.nlines);
 			v->s = strbuf_detach(&s, NULL);
 		} else if (atom->u.contents.option == C_TRAILERS) {
-			struct trailer_info info;
+			struct strbuf s = STRBUF_INIT;
 
-			/* Search for trailer info */
-			trailer_info_get(&info, subpos);
-			v->s = xmemdupz(info.trailer_start,
-					info.trailer_end - info.trailer_start);
-			trailer_info_release(&info);
+			/* Format the trailer info according to the trailer_opts given */
+			format_trailers_from_commit(&s, subpos, &atom->u.contents.trailer_opts);
+
+			v->s = strbuf_detach(&s, NULL);
 		} else if (atom->u.contents.option == C_BARE)
 			v->s = xstrdup(subpos);
 	}
@@ -1247,6 +1279,23 @@ static void fill_remote_ref_details(struct used_atom *atom, const char *refname,
 			*s = ">";
 		else
 			*s = "<>";
+	} else if (atom->u.remote_ref.option == RR_REMOTE_NAME) {
+		int explicit;
+		const char *remote = atom->u.remote_ref.push ?
+			pushremote_for_branch(branch, &explicit) :
+			remote_for_branch(branch, &explicit);
+		if (explicit)
+			*s = xstrdup(remote);
+		else
+			*s = "";
+	} else if (atom->u.remote_ref.option == RR_REMOTE_REF) {
+		int explicit, for_push = starts_with(atom->name, "push");
+		const char *merge = remote_ref_for_branch(branch, for_push,
+							  &explicit);
+		if (explicit)
+			*s = xstrdup(merge);
+		else
+			*s = "";
 	} else
 		die("BUG: unhandled RR_* enum");
 }
@@ -1317,9 +1366,8 @@ static void populate_value(struct ref_array_item *ref)
 	ref->value = xcalloc(used_atom_cnt, sizeof(struct atom_value));
 
 	if (need_symref && (ref->flag & REF_ISSYMREF) && !ref->symref) {
-		struct object_id unused1;
 		ref->symref = resolve_refdup(ref->refname, RESOLVE_REF_READING,
-					     unused1.hash, NULL);
+					     NULL, NULL);
 		if (!ref->symref)
 			ref->symref = "";
 	}
@@ -1357,16 +1405,20 @@ static void populate_value(struct ref_array_item *ref)
 			if (refname)
 				fill_remote_ref_details(atom, refname, branch, &v->s);
 			continue;
-		} else if (starts_with(name, "push")) {
+		} else if (atom->u.remote_ref.push) {
 			const char *branch_name;
 			if (!skip_prefix(ref->refname, "refs/heads/",
 					 &branch_name))
 				continue;
 			branch = branch_get(branch_name);
 
-			refname = branch_get_push(branch, NULL);
-			if (!refname)
-				continue;
+			if (atom->u.remote_ref.push_remote)
+				refname = NULL;
+			else {
+				refname = branch_get_push(branch, NULL);
+				if (!refname)
+					continue;
+			}
 			fill_remote_ref_details(atom, refname, branch, &v->s);
 			continue;
 		} else if (starts_with(name, "color:")) {

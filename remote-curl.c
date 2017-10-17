@@ -24,6 +24,7 @@ struct options {
 	char *deepen_since;
 	struct string_list deepen_not;
 	struct string_list push_options;
+	char *blob_max_bytes;
 	unsigned progress : 1,
 		check_self_contained_and_connected : 1,
 		cloning : 1,
@@ -33,7 +34,9 @@ struct options {
 		thin : 1,
 		/* One of the SEND_PACK_PUSH_CERT_* constants. */
 		push_cert : 2,
-		deepen_relative : 1;
+		deepen_relative : 1,
+		from_promisor : 1,
+		no_haves : 1;
 };
 static struct options options;
 static struct string_list cas_options = STRING_LIST_INIT_DUP;
@@ -153,6 +156,15 @@ static int set_option(const char *name, const char *value)
 			git_curl_ipresolve = CURL_IPRESOLVE_WHATEVER;
 		else
 			return -1;
+		return 0;
+	} else if (!strcmp(name, "from-promisor")) {
+		options.from_promisor = 1;
+		return 0;
+	} else if (!strcmp(name, "no-haves")) {
+		options.no_haves = 1;
+		return 0;
+	} else if (!strcmp(name, "blob-max-bytes")) {
+		options.blob_max_bytes = xstrdup(value);
 		return 0;
 	} else {
 		return 1 /* unsupported */;
@@ -815,6 +827,13 @@ static int fetch_git(struct discovery *heads,
 				 options.deepen_not.items[i].string);
 	if (options.deepen_relative && options.depth)
 		argv_array_push(&args, "--deepen-relative");
+	if (options.from_promisor)
+		argv_array_push(&args, "--from-promisor");
+	if (options.no_haves)
+		argv_array_push(&args, "--no-haves");
+	if (options.blob_max_bytes)
+		argv_array_pushf(&args, "--blob-max-bytes=%s",
+				 options.blob_max_bytes);
 	argv_array_push(&args, url.buf);
 
 	for (i = 0; i < nr_heads; i++) {

@@ -121,15 +121,13 @@ static void status_printf_more(struct wt_status *s, const char *color,
 
 void wt_status_prepare(struct wt_status *s)
 {
-	struct object_id oid;
-
 	memset(s, 0, sizeof(*s));
 	memcpy(s->color_palette, default_wt_status_colors,
 	       sizeof(default_wt_status_colors));
 	s->show_untracked_files = SHOW_NORMAL_UNTRACKED_FILES;
 	s->use_color = -1;
 	s->relative_paths = 1;
-	s->branch = resolve_refdup("HEAD", 0, oid.hash, NULL);
+	s->branch = resolve_refdup("HEAD", 0, NULL, NULL);
 	s->reference = "HEAD";
 	s->fp = stdout;
 	s->index_file = get_index_file();
@@ -1451,7 +1449,7 @@ static void wt_status_get_detached_from(struct wt_status_state *state)
 		return;
 	}
 
-	if (dwim_ref(cb.buf.buf, cb.buf.len, oid.hash, &ref) == 1 &&
+	if (dwim_ref(cb.buf.buf, cb.buf.len, &oid, &ref) == 1 &&
 	    /* sha1 is a commit? match without further lookup */
 	    (!oidcmp(&cb.noid, &oid) ||
 	     /* perhaps sha1 is a tag, try to dereference to a commit */
@@ -2325,14 +2323,14 @@ int has_uncommitted_changes(int ignore_submodules)
  */
 int require_clean_work_tree(const char *action, const char *hint, int ignore_submodules, int gently)
 {
-	struct lock_file *lock_file = xcalloc(1, sizeof(*lock_file));
+	struct lock_file lock_file = LOCK_INIT;
 	int err = 0, fd;
 
-	fd = hold_locked_index(lock_file, 0);
+	fd = hold_locked_index(&lock_file, 0);
 	refresh_cache(REFRESH_QUIET);
 	if (0 <= fd)
-		update_index_if_able(&the_index, lock_file);
-	rollback_lock_file(lock_file);
+		update_index_if_able(&the_index, &lock_file);
+	rollback_lock_file(&lock_file);
 
 	if (has_unstaged_changes(ignore_submodules)) {
 		/* TRANSLATORS: the action is e.g. "pull with rebase" */

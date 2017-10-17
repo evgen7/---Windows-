@@ -183,8 +183,8 @@ static inline uint32_t get_be32(const void *ptr)
 static inline uint64_t get_be64(const void *ptr)
 {
 	const unsigned char *p = ptr;
-	return	(uint64_t)get_be32(p[0]) << 32 |
-		(uint64_t)get_be32(p[4]) <<  0;
+	return	(uint64_t)get_be32(&p[0]) << 32 |
+		(uint64_t)get_be32(&p[4]) <<  0;
 }
 
 static inline void put_be32(void *ptr, uint32_t value)
