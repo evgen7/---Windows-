@@ -1390,16 +1390,30 @@ static enum path_treatment treat_directory(struct dir_struct *dir,
 	case index_nonexistent:
 		if (dir->flags & DIR_SHOW_OTHER_DIRECTORIES)
 			break;
+		if (exclude &&
+			(dir->flags & DIR_SHOW_IGNORED_TOO) &&
+			(dir->flags & DIR_SHOW_IGNORED_DIRECTORY)) {
+
+			/*
+			 * This is an excluded directory, and we are only
+			 * showing the name of a excluded directory.
+			 * Check to see if there are any contained files
+			 * to determine if the directory is empty or not.
+			 */
+			if (read_directory_recursive(dir, istate, dirname, len,
+				untracked, 1, 1, pathspec) == path_excluded)
+				return path_excluded;
+			return path_none;
+		}
 		if (!(dir->flags & DIR_NO_GITLINKS)) {
 			struct object_id oid;
 			if (resolve_gitlink_ref(dirname, "HEAD", &oid) == 0)
-				return path_untracked;
+				return exclude ? path_excluded : path_untracked;
 		}
 		return path_recurse;
 	}
 
 	/* This is the "show_other_directories" case */
-
 	if (!(dir->flags & DIR_HIDE_EMPTY_DIRECTORIES))
 		return exclude ? path_excluded : path_untracked;
 
@@ -1413,6 +1427,7 @@ static enum path_treatment treat_directory(struct dir_struct *dir,
 	return read_directory_recursive(dir, istate, dirname, len,
 					untracked, 1, exclude, pathspec);
 }
+
 
 /*
  * This is an inexact early pruning of any recursive directory
