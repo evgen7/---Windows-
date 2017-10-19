@@ -586,12 +586,6 @@ static inline void strbuf_complete_line(struct strbuf *sb)
 }
 
 /*
- * NEEDSWORK: the following two functions should not be in this file;
- * these are about refnames, and should be declared next to
- * interpret_branch_name() in cache.h
- */
-
-/*
  * Copy "name" to "sb", expanding any special @-marks as handled by
  * interpret_branch_name(). The result is a non-qualified branch name
  * (so "foo" or "origin/master" instead of "refs/heads/foo" or

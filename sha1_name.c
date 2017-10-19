@@ -1432,29 +1432,16 @@ void strbuf_branchname(struct strbuf *sb, const char *name, unsigned allowed)
 	strbuf_add(sb, name + used, len - used);
 }
 
-static int strbuf_check_branch_ref_format(struct strbuf *sb)
+int strbuf_check_branch_ref(struct strbuf *sb, const char *name)
 {
-	if (*sb->buf == '-' || !strcmp(sb->buf, "HEAD"))
+	if (startup_info->have_repository)
+		strbuf_branchname(sb, name, INTERPRET_BRANCH_LOCAL);
+	else
+		strbuf_addstr(sb, name);
+	if (*name == '-' || !strcmp(name, "HEAD"))
 		return -1;
 	strbuf_splice(sb, 0, 0, "refs/heads/", 11);
 	return check_refname_format(sb->buf, 0);
-}
-
-int check_branch_ref_format(const char *name)
-{
-	struct strbuf sb = STRBUF_INIT;
-	int result;
-
-	strbuf_addstr(&sb, name);
-	result = strbuf_check_branch_ref_format(&sb);
-	strbuf_release(&sb);
-	return result;
-}
-
-int strbuf_check_branch_ref(struct strbuf *sb, const char *name)
-{
-	strbuf_branchname(sb, name, INTERPRET_BRANCH_LOCAL);
-	return strbuf_check_branch_ref_format(sb);
 }
 
 /*

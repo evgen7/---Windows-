@@ -25,8 +25,8 @@ endif::git-pull[]
 The format of a <refspec> parameter is an optional plus
 `+`, followed by the source <src>, followed
 by a colon `:`, followed by the destination ref <dst>.
-The colon can be omitted when <dst> is empty.  <src> is most
-typically a ref, but it can also be an fully spelled hex object
+The colon can be omitted when <dst> is empty.  <src> is
+typically a ref, but it can also be a fully spelled hex object
 name.
 +
 `tag <tag>` means the same as `refs/tags/<tag>:refs/tags/<tag>`;

@@ -144,6 +144,11 @@ test_expect_success "check-ref-format --branch @{-1}" '
 	refname2=$(git check-ref-format --branch @{-2}) &&
 	test "$refname2" = master'
 
+test_expect_success 'check-ref-format --branch -naster' '
+	test_must_fail git check-ref-format --branch -naster >actual &&
+	test_must_be_empty actual
+'
+
 test_expect_success 'check-ref-format --branch from subdir' '
 	mkdir subdir &&
 
@@ -162,15 +167,14 @@ test_expect_success 'check-ref-format --branch from subdir' '
 '
 
 test_expect_success 'check-ref-format --branch @{-1} from non-repo' '
-	test_must_fail nongit git check-ref-format --branch @{-1}
+	nongit test_must_fail git check-ref-format --branch @{-1} >actual &&
+	test_must_be_empty actual
 '
 
-test_expect_success 'check-ref-format --branch master in non-repo' '
-	nongit git check-ref-format --branch master
-'
-
-test_expect_success 'check-ref-format --branch -naster in repo' '
-	test_must_fail git check-ref-format --branch -naster
+test_expect_success 'check-ref-format --branch master from non-repo' '
+	echo master >expect &&
+	nongit git check-ref-format --branch master >actual &&
+	test_cmp expect actual
 '
 
 valid_ref_normalized() {
