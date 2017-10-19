@@ -7,12 +7,12 @@
 #include "builtin.h"
 #include "exec_cmd.h"
 #include "parse-options.h"
-#include "revision.h"
 #include "diff.h"
 #include "hashmap.h"
 #include "argv-array.h"
 #include "run-command.h"
 
+#define SEEN		(1u << 0)
 #define MAX_TAGS	(FLAG_BITS - 1)
 
 static const char * const describe_usage[] = {
@@ -181,7 +181,7 @@ static int get_name(const char *path, const struct object_id *oid, int flag, voi
 	}
 
 	/* Is it annotated? */
-	if (!peel_ref(path, &peeled)) {
+	if (!peel_ref(path, peeled.hash)) {
 		is_annotated = !!oidcmp(oid, &peeled);
 	} else {
 		oidcpy(&peeled, oid);
@@ -543,9 +543,7 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			}
 		} else if (dirty) {
 			static struct lock_file index_lock;
-			struct rev_info revs;
-			struct argv_array args = ARGV_ARRAY_INIT;
-			int fd, result;
+			int fd;
 
 			read_cache_preload(NULL);
 			refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED,
@@ -554,13 +552,8 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			if (0 <= fd)
 				update_index_if_able(&the_index, &index_lock);
 
-			init_revisions(&revs, prefix);
-			argv_array_pushv(&args, diff_index_args);
-			if (setup_revisions(args.argc, args.argv, &revs, NULL) != 1)
-				BUG("malformed internal diff-index command line");
-			result = run_diff_index(&revs, 0);
-
-			if (!diff_result_code(&revs.diffopt, result))
+			if (!cmd_diff_index(ARRAY_SIZE(diff_index_args) - 1,
+					    diff_index_args, prefix))
 				suffix = NULL;
 			else
 				suffix = dirty;

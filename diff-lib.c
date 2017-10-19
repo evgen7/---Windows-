@@ -12,7 +12,6 @@
 #include "refs.h"
 #include "submodule.h"
 #include "dir.h"
-#include "fsmonitor.h"
 
 /*
  * diff-files
@@ -37,7 +36,7 @@ static int check_removed(const struct cache_entry *ce, struct stat *st)
 	if (has_symlink_leading_path(ce->name, ce_namelen(ce)))
 		return 1;
 	if (S_ISDIR(st->st_mode)) {
-		struct object_id sub;
+		unsigned char sub[20];
 
 		/*
 		 * If ce is already a gitlink, we can have a plain
@@ -51,7 +50,7 @@ static int check_removed(const struct cache_entry *ce, struct stat *st)
 		 * a directory --- the blob was removed!
 		 */
 		if (!S_ISGITLINK(ce->ce_mode) &&
-		    resolve_gitlink_ref(ce->name, "HEAD", &sub))
+		    resolve_gitlink_ref(ce->name, "HEAD", sub))
 			return 1;
 	}
 	return 0;
@@ -217,7 +216,7 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 			} else if (revs->diffopt.ita_invisible_in_index &&
 				   ce_intent_to_add(ce)) {
 				diff_addremove(&revs->diffopt, '+', ce->ce_mode,
-					       current_hash->empty_tree, 0,
+					       &empty_tree_oid, 0,
 					       ce->name, 0);
 				continue;
 			}
@@ -229,7 +228,6 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 
 		if (!changed && !dirty_submodule) {
 			ce_mark_uptodate(ce);
-			mark_fsmonitor_valid(ce);
 			if (!DIFF_OPT_TST(&revs->diffopt, FIND_COPIES_HARDER))
 				continue;
 		}

@@ -8,7 +8,7 @@ struct worktree {
 	char *id;
 	char *head_ref;		/* NULL if HEAD is broken or detached */
 	char *lock_reason;	/* internal use */
-	struct object_id head_oid;
+	unsigned char head_sha1[20];
 	int is_detached;
 	int is_bare;
 	int is_current;
@@ -58,17 +58,6 @@ extern int is_main_worktree(const struct worktree *wt);
  * otherwise.
  */
 extern const char *is_worktree_locked(struct worktree *wt);
-
-/*
- * Return zero if the worktree is in good condition.
- */
-extern int validate_worktree(const struct worktree *wt, int quiet);
-
-/*
- * Update worktrees/xxx/gitdir with the new path.
- */
-extern int update_worktree_location(struct worktree *wt,
-				    const char *path_);
 
 /*
  * Free up the memory for worktree(s)

@@ -1449,7 +1449,7 @@ static void wt_status_get_detached_from(struct wt_status_state *state)
 		return;
 	}
 
-	if (dwim_ref(cb.buf.buf, cb.buf.len, &oid, &ref) == 1 &&
+	if (dwim_ref(cb.buf.buf, cb.buf.len, oid.hash, &ref) == 1 &&
 	    /* sha1 is a commit? match without further lookup */
 	    (!oidcmp(&cb.noid, &oid) ||
 	     /* perhaps sha1 is a tag, try to dereference to a commit */
@@ -1758,7 +1758,6 @@ static void wt_shortstatus_other(struct string_list_item *it,
 static void wt_shortstatus_print_tracking(struct wt_status *s)
 {
 	struct branch *branch;
-	struct wt_status_state state;
 	const char *header_color = color(WT_STATUS_HEADER, s);
 	const char *branch_color_local = color(WT_STATUS_LOCAL_BRANCH, s);
 	const char *branch_color_remote = color(WT_STATUS_REMOTE_BRANCH, s);
@@ -1783,7 +1782,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	if (!strcmp(s->branch, "HEAD")) {
 		color_fprintf(s->fp, color(WT_STATUS_NOBRANCH, s), "%s",
 			      LABEL(N_("HEAD (no branch)")));
-		goto in_progress;
+		goto conclude;
 	}
 
 	skip_prefix(branch_name, "refs/heads/", &branch_name);
@@ -1794,7 +1793,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 
 	if (stat_tracking_info(branch, &num_ours, &num_theirs, &base) < 0) {
 		if (!base)
-			goto in_progress;
+			goto conclude;
 
 		upstream_is_gone = 1;
 	}
@@ -1805,7 +1804,7 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	free(short_base);
 
 	if (!upstream_is_gone && !num_ours && !num_theirs)
-		goto in_progress;
+		goto conclude;
 
 	color_fprintf(s->fp, header_color, " [");
 	if (upstream_is_gone) {
@@ -1824,31 +1823,6 @@ static void wt_shortstatus_print_tracking(struct wt_status *s)
 	}
 
 	color_fprintf(s->fp, header_color, "]");
-
- in_progress:
-	if (!s->show_in_progress)
-		goto conclude;
-	memset(&state, 0, sizeof(state));
-	wt_status_get_state(&state,
-			    s->branch && !strcmp(s->branch, "HEAD"));
-	if (state.merge_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("MERGING")));
-	else if (state.am_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("AM")));
-	else if (state.rebase_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REBASE-m")));
-	else if (state.rebase_interactive_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REBASE-i")));
-	else if (state.cherry_pick_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("CHERRY-PICKING")));
-	else if (state.revert_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("REVERTING")));
-	if (state.bisect_in_progress)
-		color_fprintf(s->fp, header_color, "; %s", LABEL(N_("BISECTING")));
-	free(state.branch);
-	free(state.onto);
-	free(state.detached_from);
-
  conclude:
 	fputc(s->null_termination ? '\0' : '\n', s->fp);
 }
@@ -2323,14 +2297,14 @@ int has_uncommitted_changes(int ignore_submodules)
  */
 int require_clean_work_tree(const char *action, const char *hint, int ignore_submodules, int gently)
 {
-	struct lock_file lock_file = LOCK_INIT;
+	struct lock_file *lock_file = xcalloc(1, sizeof(*lock_file));
 	int err = 0, fd;
 
-	fd = hold_locked_index(&lock_file, 0);
+	fd = hold_locked_index(lock_file, 0);
 	refresh_cache(REFRESH_QUIET);
 	if (0 <= fd)
-		update_index_if_able(&the_index, &lock_file);
-	rollback_lock_file(&lock_file);
+		update_index_if_able(&the_index, lock_file);
+	rollback_lock_file(lock_file);
 
 	if (has_unstaged_changes(ignore_submodules)) {
 		/* TRANSLATORS: the action is e.g. "pull with rebase" */

@@ -36,8 +36,9 @@ enum apply_verbosity {
 struct apply_state {
 	const char *prefix;
 
-	/* Lock file */
-	struct lock_file lock_file;
+	/* These are lock_file related */
+	struct lock_file *lock_file;
+	int newfd;
 
 	/* These control what gets looked at and modified */
 	int apply; /* this is not a dry-run */
@@ -115,7 +116,8 @@ extern int apply_parse_options(int argc, const char **argv,
 			       int *force_apply, int *options,
 			       const char * const *apply_usage);
 extern int init_apply_state(struct apply_state *state,
-			    const char *prefix);
+			    const char *prefix,
+			    struct lock_file *lock_file);
 extern void clear_apply_state(struct apply_state *state);
 extern int check_apply_state(struct apply_state *state, int force_apply);
 

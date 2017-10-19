@@ -55,7 +55,6 @@ static int recurse_submodules_default = RECURSE_SUBMODULES_ON_DEMAND;
 static int shown_url = 0;
 static int refmap_alloc, refmap_nr;
 static const char **refmap_array;
-static const char *blob_max_bytes;
 
 static int git_fetch_config(const char *k, const char *v, void *cb)
 {
@@ -161,8 +160,6 @@ static struct option builtin_fetch_options[] = {
 			TRANSPORT_FAMILY_IPV4),
 	OPT_SET_INT('6', "ipv6", &family, N_("use IPv6 addresses only"),
 			TRANSPORT_FAMILY_IPV6),
-	OPT_STRING(0, "blob-max-bytes", &blob_max_bytes, N_("bytes"),
-		   N_("do not fetch blobs above this size")),
 	OPT_END()
 };
 
@@ -460,8 +457,8 @@ static int s_update_ref(const char *action,
 	transaction = ref_transaction_begin(&err);
 	if (!transaction ||
 	    ref_transaction_update(transaction, ref->name,
-				   &ref->new_oid,
-				   check_old ? &ref->old_oid : NULL,
+				   ref->new_oid.hash,
+				   check_old ? ref->old_oid.hash : NULL,
 				   0, msg, &err))
 		goto fail;
 
@@ -730,7 +727,7 @@ static int update_local_ref(struct ref *ref,
 	}
 }
 
-static int iterate_ref_map(void *cb_data, struct object_id *oid)
+static int iterate_ref_map(void *cb_data, unsigned char sha1[20])
 {
 	struct ref **rm = cb_data;
 	struct ref *ref = *rm;
@@ -740,7 +737,7 @@ static int iterate_ref_map(void *cb_data, struct object_id *oid)
 	if (!ref)
 		return -1; /* end of the list */
 	*rm = ref->next;
-	oidcpy(oid, &ref->old_oid);
+	hashcpy(sha1, ref->old_oid.hash);
 	return 0;
 }
 
@@ -1047,14 +1044,6 @@ static struct transport *prepare_transport(struct remote *remote, int deepen)
 		set_option(transport, TRANS_OPT_DEEPEN_RELATIVE, "yes");
 	if (update_shallow)
 		set_option(transport, TRANS_OPT_UPDATE_SHALLOW, "yes");
-	if (blob_max_bytes) {
-		set_option(transport, TRANS_OPT_BLOB_MAX_BYTES, blob_max_bytes);
-		set_option(transport, TRANS_OPT_FROM_PROMISOR, "1");
-	} else if (remote->blob_max_bytes) {
-		set_option(transport, TRANS_OPT_BLOB_MAX_BYTES,
-			   remote->blob_max_bytes);
-		set_option(transport, TRANS_OPT_FROM_PROMISOR, "1");
-	}
 	return transport;
 }
 
@@ -1333,13 +1322,11 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 {
 	int i;
 	struct string_list list = STRING_LIST_INIT_DUP;
-	struct remote *remote = NULL;
+	struct remote *remote;
 	int result = 0;
 	struct argv_array argv_gc_auto = ARGV_ARRAY_INIT;
 
 	packet_trace_identity("fetch");
-
-	fetch_if_missing = 0;
 
 	/* Record the command line for the reflog */
 	strbuf_addstr(&default_rla, "fetch");
@@ -1374,23 +1361,23 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	if (depth || deepen_since || deepen_not.nr)
 		deepen = 1;
 
-	if (blob_max_bytes && !repository_format_partial_clone)
-		die("--blob-max-bytes can only be used when extensions.partialClone is set");
-
 	if (all) {
 		if (argc == 1)
 			die(_("fetch --all does not take a repository argument"));
 		else if (argc > 1)
 			die(_("fetch --all does not make sense with refspecs"));
 		(void) for_each_remote(get_one_remote_for_fetch, &list);
+		result = fetch_multiple(&list);
 	} else if (argc == 0) {
 		/* No arguments -- use default remote */
 		remote = remote_get(NULL);
+		result = fetch_one(remote, argc, argv);
 	} else if (multiple) {
 		/* All arguments are assumed to be remotes or groups */
 		for (i = 0; i < argc; i++)
 			if (!add_remote_or_group(argv[i], &list))
 				die(_("No such remote or remote group: %s"), argv[i]);
+		result = fetch_multiple(&list);
 	} else {
 		/* Single remote or group */
 		(void) add_remote_or_group(argv[0], &list);
@@ -1398,23 +1385,12 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 			/* More than one remote */
 			if (argc > 1)
 				die(_("Fetching a group and specifying refspecs does not make sense"));
+			result = fetch_multiple(&list);
 		} else {
 			/* Zero or one remotes */
 			remote = remote_get(argv[0]);
-			argc--;
-			argv++;
+			result = fetch_one(remote, argc-1, argv+1);
 		}
-	}
-
-	if (remote) {
-		if (blob_max_bytes &&
-		    strcmp(remote->name, repository_format_partial_clone))
-			die(_("--blob-max-bytes can only be used with the remote configured in core.partialClone"));
-		result = fetch_one(remote, argc, argv);
-	} else {
-		if (blob_max_bytes)
-			die(_("--blob-max-bytes can only be used with the remote configured in core.partialClone"));
-		result = fetch_multiple(&list);
 	}
 
 	if (!result && (recurse_submodules != RECURSE_SUBMODULES_OFF)) {

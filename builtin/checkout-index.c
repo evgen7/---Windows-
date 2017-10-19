@@ -129,6 +129,8 @@ static const char * const builtin_checkout_index_usage[] = {
 	NULL
 };
 
+static struct lock_file lock_file;
+
 static int option_parse_stage(const struct option *opt,
 			      const char *arg, int unset)
 {
@@ -148,7 +150,7 @@ static int option_parse_stage(const struct option *opt,
 int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 {
 	int i;
-	struct lock_file lock_file = LOCK_INIT;
+	int newfd = -1;
 	int all = 0;
 	int read_from_stdin = 0;
 	int prefix_length;
@@ -204,7 +206,7 @@ int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 	if (index_opt && !state.base_dir_len && !to_tempfile) {
 		state.refresh_cache = 1;
 		state.istate = &the_index;
-		hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
+		newfd = hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 	}
 
 	/* Check out named files first */
@@ -249,7 +251,7 @@ int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 	if (all)
 		checkout_all(prefix, prefix_length);
 
-	if (is_lock_file_locked(&lock_file) &&
+	if (0 <= newfd &&
 	    write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
 		die("Unable to write new index file");
 	return 0;

@@ -198,8 +198,6 @@ static struct object *get_reference(struct rev_info *revs, const char *name,
 	if (!object) {
 		if (revs->ignore_missing)
 			return object;
-		if (revs->exclude_promisor_objects && is_promisor_object(oid))
-			return NULL;
 		die("bad object %s", name);
 	}
 	object->flags |= flags;
@@ -397,16 +395,8 @@ static struct commit *one_relevant_parent(const struct rev_info *revs,
  * if the whole diff is removal of old data, and otherwise
  * REV_TREE_DIFFERENT (of course if the trees are the same we
  * want REV_TREE_SAME).
- *
- * The only time we care about the distinction is when
- * remove_empty_trees is in effect, in which case we care only about
- * whether the whole change is REV_TREE_NEW, or if there's another type
- * of change. Which means we can stop the diff early in either of these
- * cases:
- *
- *   1. We're not using remove_empty_trees at all.
- *
- *   2. We saw anything except REV_TREE_NEW.
+ * That means that once we get to REV_TREE_DIFFERENT, we do not
+ * have to look any further.
  */
 static int tree_difference = REV_TREE_SAME;
 
@@ -417,10 +407,9 @@ static void file_add_remove(struct diff_options *options,
 		    const char *fullpath, unsigned dirty_submodule)
 {
 	int diff = addremove == '+' ? REV_TREE_NEW : REV_TREE_OLD;
-	struct rev_info *revs = options->change_fn_data;
 
 	tree_difference |= diff;
-	if (!revs->remove_empty_trees || tree_difference != REV_TREE_NEW)
+	if (tree_difference == REV_TREE_DIFFERENT)
 		DIFF_OPT_SET(options, HAS_CHANGES);
 }
 
@@ -801,17 +790,9 @@ static int add_parents_to_list(struct rev_info *revs, struct commit *commit,
 
 	for (parent = commit->parents; parent; parent = parent->next) {
 		struct commit *p = parent->item;
-		int gently = revs->ignore_missing_links ||
-			     revs->exclude_promisor_objects;
-		if (parse_commit_gently(p, gently) < 0) {
-			if (revs->exclude_promisor_objects &&
-			    is_promisor_object(&p->object.oid)) {
-				if (revs->first_parent_only)
-					break;
-				continue;
-			}
+
+		if (parse_commit_gently(p, revs->ignore_missing_links) < 0)
 			return -1;
-		}
 		if (revs->show_source && !p->util)
 			p->util = commit->util;
 		p->object.flags |= left_flag;
@@ -1426,7 +1407,6 @@ void init_revisions(struct rev_info *revs, const char *prefix)
 	DIFF_OPT_SET(&revs->pruning, QUICK);
 	revs->pruning.add_remove = file_add_remove;
 	revs->pruning.change = file_change;
-	revs->pruning.change_fn_data = revs;
 	revs->sort_order = REV_SORT_IN_GRAPH_ORDER;
 	revs->dense = 1;
 	revs->prefix = prefix;
@@ -2108,10 +2088,6 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 		revs->limited = 1;
 	} else if (!strcmp(arg, "--ignore-missing")) {
 		revs->ignore_missing = 1;
-	} else if (!strcmp(arg, "--exclude-promisor-objects")) {
-		if (fetch_if_missing)
-			die("BUG: exclude_promisor_objects can only be used when fetch_if_missing is 0");
-		revs->exclude_promisor_objects = 1;
 	} else {
 		int opts = diff_opt_parse(&revs->diffopt, argv, argc, revs->prefix);
 		if (!opts)
@@ -2854,16 +2830,6 @@ void reset_revision_walk(void)
 	clear_object_flags(SEEN | ADDED | SHOWN);
 }
 
-static int mark_uninteresting(const struct object_id *oid,
-			      struct packed_git *pack,
-			      uint32_t pos,
-			      void *unused)
-{
-	struct object *o = parse_object(oid);
-	o->flags |= UNINTERESTING | SEEN;
-	return 0;
-}
-
 int prepare_revision_walk(struct rev_info *revs)
 {
 	int i;
@@ -2891,11 +2857,6 @@ int prepare_revision_walk(struct rev_info *revs)
 	if (revs->simplify_merges ||
 	    (revs->limited && limiting_can_increase_treesame(revs)))
 		revs->treesame.name = "treesame";
-
-	if (revs->exclude_promisor_objects) {
-		for_each_packed_object(mark_uninteresting, NULL,
-				       FOR_EACH_OBJECT_PROMISOR_ONLY);
-	}
 
 	if (revs->no_walk != REVISION_WALK_NO_WALK_UNSORTED)
 		commit_list_sort_by_date(&revs->commits);

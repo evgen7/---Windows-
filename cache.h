@@ -14,7 +14,6 @@
 #include "hash.h"
 #include "path.h"
 #include "sha1-array.h"
-#include "repository.h"
 
 #ifndef platform_SHA_CTX
 /*
@@ -77,44 +76,6 @@ unsigned long git_deflate_bound(git_zstream *, unsigned long);
 struct object_id {
 	unsigned char hash[GIT_MAX_RAWSZ];
 };
-
-#define GIT_HASH_SHA1 0
-
-typedef void (*git_hash_init_fn)(void *ctx);
-typedef void (*git_hash_update_fn)(void *ctx, const void *in, size_t len);
-typedef void (*git_hash_final_fn)(unsigned char *hash, void *ctx);
-
-struct git_hash_algo {
-	/* The name of the algorithm, as appears in the config file. */
-	const char *name;
-
-	/* The size of a hash context (e.g. git_SHA_CTX). */
-	size_t ctxsz;
-
-	/* The length of the hash in bytes. */
-	size_t rawsz;
-
-	/* The length of the hash in hex characters. */
-	size_t hexsz;
-
-	/* The hash initialization function. */
-	git_hash_init_fn init_fn;
-
-	/* The hash update function. */
-	git_hash_update_fn update_fn;
-
-	/* The hash finalization function. */
-	git_hash_final_fn final_fn;
-
-	/* The OID of the empty tree. */
-	const struct object_id *empty_tree;
-
-	/* The OID of the empty blob. */
-	const struct object_id *empty_blob;
-};
-extern const struct git_hash_algo hash_algos[1];
-
-#define current_hash the_repository->hash_algo
 
 #if defined(DT_UNKNOWN) && !defined(NO_D_TYPE_IN_DIRENT)
 #define DTYPE(de)	((de)->d_type)
@@ -243,7 +204,6 @@ struct cache_entry {
 #define CE_ADDED             (1 << 19)
 
 #define CE_HASHED            (1 << 20)
-#define CE_FSMONITOR_VALID   (1 << 21)
 #define CE_WT_REMOVE         (1 << 22) /* remove in work directory */
 #define CE_CONFLICTED        (1 << 23)
 
@@ -367,7 +327,6 @@ static inline unsigned int canon_mode(unsigned int mode)
 #define CACHE_TREE_CHANGED	(1 << 5)
 #define SPLIT_INDEX_ORDERED	(1 << 6)
 #define UNTRACKED_CHANGED	(1 << 7)
-#define FSMONITOR_CHANGED	(1 << 8)
 
 struct split_index;
 struct untracked_cache;
@@ -386,7 +345,6 @@ struct index_state {
 	struct hashmap dir_hash;
 	unsigned char sha1[20];
 	struct untracked_cache *untracked;
-	uint64_t fsmonitor_last_update;
 };
 
 extern struct index_state the_index;
@@ -487,16 +445,6 @@ static inline enum object_type object_type(unsigned int mode)
 #define GIT_ICASE_PATHSPECS_ENVIRONMENT "GIT_ICASE_PATHSPECS"
 #define GIT_QUARANTINE_ENVIRONMENT "GIT_QUARANTINE_PATH"
 #define GIT_OPTIONAL_LOCKS_ENVIRONMENT "GIT_OPTIONAL_LOCKS"
-
-/*
- * Environment variable used in handshaking the wire protocol.
- * Contains a colon ':' separated list of keys with optional values
- * 'key[=value]'.  Presence of unknown keys and values must be
- * ignored.
- */
-#define GIT_PROTOCOL_ENVIRONMENT "GIT_PROTOCOL"
-/* HTTP header used to handshake the wire protocol */
-#define GIT_PROTOCOL_HEADER "Git-Protocol"
 
 /*
  * This environment variable is expected to contain a boolean indicating
@@ -654,28 +602,9 @@ extern int do_read_index(struct index_state *istate, const char *path,
 extern int read_index_from(struct index_state *, const char *path);
 extern int is_index_unborn(struct index_state *);
 extern int read_index_unmerged(struct index_state *);
-
-/* For use with `write_locked_index()`. */
 #define COMMIT_LOCK		(1 << 0)
-
-/*
- * Write the index while holding an already-taken lock. Close the lock,
- * and if `COMMIT_LOCK` is given, commit it.
- *
- * Unless a split index is in use, write the index into the lockfile.
- *
- * With a split index, write the shared index to a temporary file,
- * adjust its permissions and rename it into place, then write the
- * split index to the lockfile. If the temporary file for the shared
- * index cannot be created, fall back to the behavior described in
- * the previous paragraph.
- *
- * With `COMMIT_LOCK`, the lock is always committed or rolled back.
- * Without it, the lock is closed, but neither committed nor rolled
- * back.
- */
+#define CLOSE_LOCK		(1 << 1)
 extern int write_locked_index(struct index_state *, struct lock_file *lock, unsigned flags);
-
 extern int discard_index(struct index_state *);
 extern void move_index_extensions(struct index_state *dst, struct index_state *src);
 extern int unmerged_index(const struct index_state *);
@@ -752,10 +681,8 @@ extern void *read_blob_data_from_index(const struct index_state *, const char *,
 #define CE_MATCH_IGNORE_MISSING		0x08
 /* enable stat refresh */
 #define CE_MATCH_REFRESH		0x10
-/* don't refresh_fsmonitor state or do stat comparison even if CE_FSMONITOR_VALID is true */
-#define CE_MATCH_IGNORE_FSMONITOR 0X20
-extern int ie_match_stat(struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
-extern int ie_modified(struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
+extern int ie_match_stat(const struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
+extern int ie_modified(const struct index_state *, const struct cache_entry *, struct stat *, unsigned int);
 
 #define HASH_WRITE_OBJECT 1
 #define HASH_FORMAT_CHECK 2
@@ -789,10 +716,6 @@ extern void fill_stat_cache_info(struct cache_entry *ce, struct stat *st);
 extern int refresh_index(struct index_state *, unsigned int flags, const struct pathspec *pathspec, char *seen, const char *header_msg);
 extern struct cache_entry *refresh_cache_entry(struct cache_entry *, unsigned int);
 
-/*
- * Opportunistically update the index but do not complain if we can't.
- * The lockfile is always committed or rolled back.
- */
 extern void update_index_if_able(struct index_state *, struct lock_file *);
 
 extern int hold_locked_index(struct lock_file *, int);
@@ -852,7 +775,6 @@ extern int core_apply_sparse_checkout;
 extern int precomposed_unicode;
 extern int protect_hfs;
 extern int protect_ntfs;
-extern const char *core_fsmonitor;
 
 /*
  * Include broken refs in all ref iterations, which will
@@ -938,14 +860,11 @@ extern int grafts_replace_parents;
 #define GIT_REPO_VERSION 0
 #define GIT_REPO_VERSION_READ 1
 extern int repository_format_precious_objects;
-extern char *repository_format_partial_clone;
 
 struct repository_format {
 	int version;
 	int precious_objects;
-	char *partial_clone;
 	int is_bare;
-	int hash_algo;
 	char *work_tree;
 	struct string_list unknown_extensions;
 };
@@ -1078,22 +997,22 @@ extern const struct object_id empty_blob_oid;
 
 static inline int is_empty_blob_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, current_hash->empty_blob->hash);
+	return !hashcmp(sha1, EMPTY_BLOB_SHA1_BIN);
 }
 
 static inline int is_empty_blob_oid(const struct object_id *oid)
 {
-	return !oidcmp(oid, current_hash->empty_blob);
+	return !hashcmp(oid->hash, EMPTY_BLOB_SHA1_BIN);
 }
 
 static inline int is_empty_tree_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, current_hash->empty_tree->hash);
+	return !hashcmp(sha1, EMPTY_TREE_SHA1_BIN);
 }
 
 static inline int is_empty_tree_oid(const struct object_id *oid)
 {
-	return !oidcmp(oid, current_hash->empty_tree);
+	return !hashcmp(oid->hash, EMPTY_TREE_SHA1_BIN);
 }
 
 /* set default permissions by passing mode arguments to open(2) */
@@ -1666,8 +1585,7 @@ extern struct packed_git {
 	unsigned pack_local:1,
 		 pack_keep:1,
 		 freshened:1,
-		 do_not_close:1,
-		 pack_promisor:1;
+		 do_not_close:1;
 	unsigned char sha1[20];
 	struct revindex_entry *revindex;
 	/* something like ".git/objects/pack/xxxxx.pack" */
@@ -1805,14 +1723,6 @@ struct object_info {
 /* Do not retry packed storage after checking packed and loose storage */
 #define OBJECT_INFO_QUICK 8
 extern int sha1_object_info_extended(const unsigned char *, struct object_info *, unsigned flags);
-
-/*
- * Set this to 0 to prevent sha1_object_info_extended() from fetching missing
- * blobs. This has a difference only if extensions.partialClone is set.
- *
- * Its default value is 1.
- */
-extern int fetch_if_missing;
 
 /* Dumb servers support */
 extern int update_server_info(int);

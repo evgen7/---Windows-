@@ -203,16 +203,17 @@ static int builtin_diff_combined(struct rev_info *revs,
 
 static void refresh_index_quietly(void)
 {
-	struct lock_file lock_file = LOCK_INIT;
+	struct lock_file *lock_file;
 	int fd;
 
-	fd = hold_locked_index(&lock_file, 0);
+	lock_file = xcalloc(1, sizeof(struct lock_file));
+	fd = hold_locked_index(lock_file, 0);
 	if (fd < 0)
 		return;
 	discard_cache();
 	read_cache();
 	refresh_cache(REFRESH_QUIET|REFRESH_UNMERGED);
-	update_index_if_able(&the_index, &lock_file);
+	update_index_if_able(&the_index, lock_file);
 }
 
 static int builtin_diff_files(struct rev_info *revs, int argc, const char **argv)
@@ -379,7 +380,7 @@ int cmd_diff(int argc, const char **argv, const char *prefix)
 				add_head_to_pending(&rev);
 				if (!rev.pending.nr) {
 					struct tree *tree;
-					tree = lookup_tree(current_hash->empty_tree);
+					tree = lookup_tree(&empty_tree_oid);
 					add_pending_object(&rev, &tree->object, "HEAD");
 				}
 				break;
