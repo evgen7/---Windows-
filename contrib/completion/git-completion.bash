@@ -1250,7 +1250,8 @@ _git_checkout ()
 	--*)
 		__gitcomp "
 			--quiet --ours --theirs --track --no-track --merge
-			--conflict= --orphan --patch
+			--conflict= --orphan --patch --detach --ignore-skip-worktree-bits
+			--recurse-submodules --no-recurse-submodules
 			"
 		;;
 	*)
@@ -2350,6 +2351,7 @@ _git_config ()
 		advice.rmHints
 		advice.statusHints
 		advice.statusUoption
+		advice.ignoredHook
 		alias.
 		am.keepcr
 		am.threeWay
@@ -3084,7 +3086,7 @@ _git_whatchanged ()
 
 _git_worktree ()
 {
-	local subcommands="add list lock prune unlock"
+	local subcommands="add list lock move prune remove unlock"
 	local subcommand="$(__git_find_on_cmdline "$subcommands")"
 	if [ -z "$subcommand" ]; then
 		__gitcomp "$subcommands"
@@ -3101,6 +3103,9 @@ _git_worktree ()
 			;;
 		prune,--*)
 			__gitcomp "--dry-run --expire --verbose"
+			;;
+		remove,--*)
+			__gitcomp "--force"
 			;;
 		*)
 			;;

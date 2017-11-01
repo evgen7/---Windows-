@@ -29,6 +29,7 @@
 #include "mergesort.h"
 #include "quote.h"
 #include "packfile.h"
+#include "fetch-object.h"
 
 const unsigned char null_sha1[GIT_MAX_RAWSZ];
 const struct object_id null_oid;
@@ -37,6 +38,49 @@ const struct object_id empty_tree_oid = {
 };
 const struct object_id empty_blob_oid = {
 	EMPTY_BLOB_SHA1_BIN_LITERAL
+};
+
+static inline void git_hash_sha1_init(void *ctx)
+{
+	git_SHA1_Init((git_SHA_CTX *)ctx);
+}
+
+static inline void git_hash_sha1_update(void *ctx, const void *data, size_t len)
+{
+	git_SHA1_Update((git_SHA_CTX *)ctx, data, len);
+}
+
+static inline void git_hash_sha1_final(unsigned char *hash, void *ctx)
+{
+	git_SHA1_Final(hash, (git_SHA_CTX *)ctx);
+}
+
+const struct git_hash_algo hash_algos[GIT_HASH_NALGOS] = {
+	{
+		NULL,
+		0x00000000,
+		0,
+		0,
+		0,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+	},
+	{
+		"sha-1",
+		/* "sha1", big-endian */
+		0x73686131,
+		sizeof(git_SHA_CTX),
+		GIT_SHA1_RAWSZ,
+		GIT_SHA1_HEXSZ,
+		git_hash_sha1_init,
+		git_hash_sha1_update,
+		git_hash_sha1_final,
+		&empty_tree_oid,
+		&empty_blob_oid,
+	},
 };
 
 /*
@@ -73,6 +117,18 @@ static struct cached_object *find_cached_object(const unsigned char *sha1)
 		return &empty_tree;
 	return NULL;
 }
+
+
+static enum safe_crlf get_safe_crlf(unsigned flags)
+{
+	if (flags & HASH_RENORMALIZE)
+		return SAFE_CRLF_RENORMALIZE;
+	else if (flags & HASH_WRITE_OBJECT)
+		return safe_crlf;
+	else
+		return SAFE_CRLF_FALSE;
+}
+
 
 int mkdir_in_gitdir(const char *path)
 {
@@ -456,19 +512,19 @@ struct alternate_object_database *alloc_alt_odb(const char *dir)
 
 void add_to_alternates_file(const char *reference)
 {
-	struct lock_file *lock = xcalloc(1, sizeof(struct lock_file));
+	struct lock_file lock = LOCK_INIT;
 	char *alts = git_pathdup("objects/info/alternates");
 	FILE *in, *out;
+	int found = 0;
 
-	hold_lock_file_for_update(lock, alts, LOCK_DIE_ON_ERROR);
-	out = fdopen_lock_file(lock, "w");
+	hold_lock_file_for_update(&lock, alts, LOCK_DIE_ON_ERROR);
+	out = fdopen_lock_file(&lock, "w");
 	if (!out)
 		die_errno("unable to fdopen alternates lockfile");
 
 	in = fopen(alts, "r");
 	if (in) {
 		struct strbuf line = STRBUF_INIT;
-		int found = 0;
 
 		while (strbuf_getline(&line, in) != EOF) {
 			if (!strcmp(reference, line.buf)) {
@@ -480,18 +536,15 @@ void add_to_alternates_file(const char *reference)
 
 		strbuf_release(&line);
 		fclose(in);
-
-		if (found) {
-			rollback_lock_file(lock);
-			lock = NULL;
-		}
 	}
 	else if (errno != ENOENT)
 		die_errno("unable to read alternates file");
 
-	if (lock) {
+	if (found) {
+		rollback_lock_file(&lock);
+	} else {
 		fprintf_or_die(out, "%s\n", reference);
-		if (commit_lock_file(lock))
+		if (commit_lock_file(&lock))
 			die_errno("unable to move new alternates file into place");
 		if (alt_odb_tail)
 			link_alt_odb_entries(reference, '\n', NULL, 0);
@@ -1144,6 +1197,8 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 	return (status < 0) ? status : 0;
 }
 
+int fetch_if_missing = 1;
+
 int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi, unsigned flags)
 {
 	static struct object_info blank_oi = OBJECT_INFO_INIT;
@@ -1152,6 +1207,7 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 	const unsigned char *real = (flags & OBJECT_INFO_LOOKUP_REPLACE) ?
 				    lookup_replace_object(sha1) :
 				    sha1;
+	int already_retried = 0;
 
 	if (!oi)
 		oi = &blank_oi;
@@ -1176,28 +1232,36 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 		}
 	}
 
-	if (!find_pack_entry(real, &e)) {
-		/* Most likely it's a loose object. */
-		if (!sha1_loose_object_info(real, oi, flags))
-			return 0;
+retry:
+	if (find_pack_entry(real, &e))
+		goto found_packed;
 
-		/* Not a loose object; someone else may have just packed it. */
-		if (flags & OBJECT_INFO_QUICK) {
-			return -1;
-		} else {
-			reprepare_packed_git();
-			if (!find_pack_entry(real, &e))
-				return -1;
-		}
+	/* Most likely it's a loose object. */
+	if (!sha1_loose_object_info(real, oi, flags))
+		return 0;
+
+	/* Not a loose object; someone else may have just packed it. */
+	reprepare_packed_git();
+	if (find_pack_entry(real, &e))
+		goto found_packed;
+
+	/* Check if it is a missing object */
+	if (fetch_if_missing && repository_format_partial_clone &&
+	    !already_retried) {
+		fetch_object(repository_format_partial_clone, real);
+		already_retried = 1;
+		goto retry;
 	}
 
+	return -1;
+
+found_packed:
 	if (oi == &blank_oi)
 		/*
 		 * We know that the caller doesn't actually need the
 		 * information below, so return early.
 		 */
 		return 0;
-
 	rtype = packed_object_info(e.p, e.offset, oi);
 	if (rtype < 0) {
 		mark_bad_packed_object(e.p, real);
@@ -1664,7 +1728,7 @@ static void check_tag(const void *buf, size_t size)
 		die("corrupt tag");
 }
 
-static int index_mem(unsigned char *sha1, void *buf, size_t size,
+static int index_mem(struct object_id *oid, void *buf, size_t size,
 		     enum object_type type,
 		     const char *path, unsigned flags)
 {
@@ -1680,7 +1744,7 @@ static int index_mem(unsigned char *sha1, void *buf, size_t size,
 	if ((type == OBJ_BLOB) && path) {
 		struct strbuf nbuf = STRBUF_INIT;
 		if (convert_to_git(&the_index, path, buf, size, &nbuf,
-				   write_object ? safe_crlf : SAFE_CRLF_FALSE)) {
+				   get_safe_crlf(flags))) {
 			buf = strbuf_detach(&nbuf, &size);
 			re_allocated = 1;
 		}
@@ -1695,15 +1759,15 @@ static int index_mem(unsigned char *sha1, void *buf, size_t size,
 	}
 
 	if (write_object)
-		ret = write_sha1_file(buf, size, typename(type), sha1);
+		ret = write_sha1_file(buf, size, typename(type), oid->hash);
 	else
-		ret = hash_sha1_file(buf, size, typename(type), sha1);
+		ret = hash_sha1_file(buf, size, typename(type), oid->hash);
 	if (re_allocated)
 		free(buf);
 	return ret;
 }
 
-static int index_stream_convert_blob(unsigned char *sha1, int fd,
+static int index_stream_convert_blob(struct object_id *oid, int fd,
 				     const char *path, unsigned flags)
 {
 	int ret;
@@ -1714,26 +1778,26 @@ static int index_stream_convert_blob(unsigned char *sha1, int fd,
 	assert(would_convert_to_git_filter_fd(path));
 
 	convert_to_git_filter_fd(&the_index, path, fd, &sbuf,
-				 write_object ? safe_crlf : SAFE_CRLF_FALSE);
+				 get_safe_crlf(flags));
 
 	if (write_object)
 		ret = write_sha1_file(sbuf.buf, sbuf.len, typename(OBJ_BLOB),
-				      sha1);
+				      oid->hash);
 	else
 		ret = hash_sha1_file(sbuf.buf, sbuf.len, typename(OBJ_BLOB),
-				     sha1);
+				     oid->hash);
 	strbuf_release(&sbuf);
 	return ret;
 }
 
-static int index_pipe(unsigned char *sha1, int fd, enum object_type type,
+static int index_pipe(struct object_id *oid, int fd, enum object_type type,
 		      const char *path, unsigned flags)
 {
 	struct strbuf sbuf = STRBUF_INIT;
 	int ret;
 
 	if (strbuf_read(&sbuf, fd, 4096) >= 0)
-		ret = index_mem(sha1, sbuf.buf, sbuf.len, type,	path, flags);
+		ret = index_mem(oid, sbuf.buf, sbuf.len, type, path, flags);
 	else
 		ret = -1;
 	strbuf_release(&sbuf);
@@ -1742,14 +1806,14 @@ static int index_pipe(unsigned char *sha1, int fd, enum object_type type,
 
 #define SMALL_FILE_SIZE (32*1024)
 
-static int index_core(unsigned char *sha1, int fd, size_t size,
+static int index_core(struct object_id *oid, int fd, size_t size,
 		      enum object_type type, const char *path,
 		      unsigned flags)
 {
 	int ret;
 
 	if (!size) {
-		ret = index_mem(sha1, "", size, type, path, flags);
+		ret = index_mem(oid, "", size, type, path, flags);
 	} else if (size <= SMALL_FILE_SIZE) {
 		char *buf = xmalloc(size);
 		ssize_t read_result = read_in_full(fd, buf, size);
@@ -1760,11 +1824,11 @@ static int index_core(unsigned char *sha1, int fd, size_t size,
 			ret = error("short read while indexing %s",
 				    path ? path : "<unknown>");
 		else
-			ret = index_mem(sha1, buf, size, type, path, flags);
+			ret = index_mem(oid, buf, size, type, path, flags);
 		free(buf);
 	} else {
 		void *buf = xmmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-		ret = index_mem(sha1, buf, size, type, path, flags);
+		ret = index_mem(oid, buf, size, type, path, flags);
 		munmap(buf, size);
 	}
 	return ret;
@@ -1802,12 +1866,12 @@ int index_fd(struct object_id *oid, int fd, struct stat *st,
 	 * die() for large files.
 	 */
 	if (type == OBJ_BLOB && path && would_convert_to_git_filter_fd(path))
-		ret = index_stream_convert_blob(oid->hash, fd, path, flags);
+		ret = index_stream_convert_blob(oid, fd, path, flags);
 	else if (!S_ISREG(st->st_mode))
-		ret = index_pipe(oid->hash, fd, type, path, flags);
+		ret = index_pipe(oid, fd, type, path, flags);
 	else if (st->st_size <= big_file_threshold || type != OBJ_BLOB ||
 		 (path && would_convert_to_git(&the_index, path)))
-		ret = index_core(oid->hash, fd, xsize_t(st->st_size), type, path,
+		ret = index_core(oid, fd, xsize_t(st->st_size), type, path,
 				 flags);
 	else
 		ret = index_stream(oid, fd, xsize_t(st->st_size), type, path,
@@ -1841,7 +1905,7 @@ int index_path(struct object_id *oid, const char *path, struct stat *st, unsigne
 		strbuf_release(&sb);
 		break;
 	case S_IFDIR:
-		return resolve_gitlink_ref(path, "HEAD", oid->hash);
+		return resolve_gitlink_ref(path, "HEAD", oid);
 	default:
 		return error("%s: unsupported file type", path);
 	}
@@ -1884,6 +1948,7 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	DIR *dir;
 	struct dirent *de;
 	int r = 0;
+	struct object_id oid;
 
 	if (subdir_nr > 0xff)
 		BUG("invalid loose object subdirectory: %x", subdir_nr);
@@ -1901,6 +1966,8 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 		return r;
 	}
 
+	oid.hash[0] = subdir_nr;
+
 	while ((de = readdir(dir))) {
 		if (is_dot_or_dotdot(de->d_name))
 			continue;
@@ -1908,20 +1975,15 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 		strbuf_setlen(path, baselen);
 		strbuf_addf(path, "/%s", de->d_name);
 
-		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2)  {
-			char hex[GIT_MAX_HEXSZ+1];
-			struct object_id oid;
-
-			xsnprintf(hex, sizeof(hex), "%02x%s",
-				  subdir_nr, de->d_name);
-			if (!get_oid_hex(hex, &oid)) {
-				if (obj_cb) {
-					r = obj_cb(&oid, path->buf, data);
-					if (r)
-						break;
-				}
-				continue;
+		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2 &&
+		    !hex_to_bytes(oid.hash + 1, de->d_name,
+				  GIT_SHA1_RAWSZ - 1)) {
+			if (obj_cb) {
+				r = obj_cb(&oid, path->buf, data);
+				if (r)
+					break;
 			}
+			continue;
 		}
 
 		if (cruft_cb) {

@@ -12,6 +12,7 @@
 #include "bisect.h"
 #include "progress.h"
 #include "reflog-walk.h"
+#include "packfile.h"
 
 static const char rev_list_usage[] =
 "git rev-list [OPTION] <commit-id>... [ -- paths... ]\n"
@@ -258,14 +259,14 @@ static int show_bisect_vars(struct rev_list_info *info, int reaches, int all)
 }
 
 static int show_object_fast(
-	const unsigned char *sha1,
+	const struct object_id *oid,
 	enum object_type type,
 	int exclude,
 	uint32_t name_hash,
 	struct packed_git *found_pack,
 	off_t found_offset)
 {
-	fprintf(stdout, "%s\n", sha1_to_hex(sha1));
+	fprintf(stdout, "%s\n", oid_to_hex(oid));
 	return 1;
 }
 
@@ -287,6 +288,18 @@ int cmd_rev_list(int argc, const char **argv, const char *prefix)
 	init_revisions(&revs, prefix);
 	revs.abbrev = DEFAULT_ABBREV;
 	revs.commit_format = CMIT_FMT_UNSPECIFIED;
+
+	/*
+	 * Scan the argument list before invoking setup_revisions(), so that we
+	 * know if fetch_if_missing needs to be set to 0.
+	 */
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--exclude-promisor-objects")) {
+			fetch_if_missing = 0;
+			break;
+		}
+	}
+
 	argc = setup_revisions(argc, argv, &revs, NULL);
 
 	memset(&info, 0, sizeof(info));
@@ -294,7 +307,7 @@ int cmd_rev_list(int argc, const char **argv, const char *prefix)
 	if (revs.bisect)
 		bisect_list = 1;
 
-	if (DIFF_OPT_TST(&revs.diffopt, QUICK))
+	if (revs.diffopt.flags.quick)
 		info.flags |= REV_LIST_QUIET;
 	for (i = 1 ; i < argc; i++) {
 		const char *arg = argv[i];

@@ -308,9 +308,10 @@ test_expect_success 'clone checking out a tag' '
 
 setup_ssh_wrapper () {
 	test_expect_success 'setup ssh wrapper' '
+		rm -f "$TRASH_DIRECTORY/ssh$X" &&
 		cp "$GIT_BUILD_DIR/t/helper/test-fake-ssh$X" \
-			"$TRASH_DIRECTORY/ssh-wrapper$X" &&
-		GIT_SSH="$TRASH_DIRECTORY/ssh-wrapper$X" &&
+			"$TRASH_DIRECTORY/ssh$X" &&
+		GIT_SSH="$TRASH_DIRECTORY/ssh$X" &&
 		export GIT_SSH &&
 		export TRASH_DIRECTORY &&
 		>"$TRASH_DIRECTORY"/ssh-output
@@ -318,7 +319,8 @@ setup_ssh_wrapper () {
 }
 
 copy_ssh_wrapper_as () {
-	cp "$TRASH_DIRECTORY/ssh-wrapper$X" "${1%$X}$X" &&
+	rm -f "${1%$X}$X" &&
+	cp "$TRASH_DIRECTORY/ssh$X" "${1%$X}$X" &&
 	GIT_SSH="${1%$X}$X" &&
 	export GIT_SSH
 }
@@ -362,9 +364,52 @@ test_expect_success 'bracketed hostnames are still ssh' '
 	expect_ssh "-p 123" myhost src
 '
 
-test_expect_success 'uplink is not treated as putty' '
+test_expect_success 'OpenSSH variant passes -4' '
+	git clone -4 "[myhost:123]:src" ssh-ipv4-clone &&
+	expect_ssh "-4 -p 123" myhost src
+'
+
+test_expect_success 'variant can be overridden' '
+	copy_ssh_wrapper_as "$TRASH_DIRECTORY/putty" &&
+	git -c ssh.variant=putty clone -4 "[myhost:123]:src" ssh-putty-clone &&
+	expect_ssh "-4 -P 123" myhost src
+'
+
+test_expect_success 'variant=auto picks based on basename' '
+	copy_ssh_wrapper_as "$TRASH_DIRECTORY/plink" &&
+	git -c ssh.variant=auto clone -4 "[myhost:123]:src" ssh-auto-clone &&
+	expect_ssh "-4 -P 123" myhost src
+'
+
+test_expect_success 'simple does not support -4/-6' '
+	copy_ssh_wrapper_as "$TRASH_DIRECTORY/simple" &&
+	test_must_fail git clone -4 "myhost:src" ssh-4-clone-simple
+'
+
+test_expect_success 'simple does not support port' '
+	copy_ssh_wrapper_as "$TRASH_DIRECTORY/simple" &&
+	test_must_fail git clone "[myhost:123]:src" ssh-bracket-clone-simple
+'
+
+test_expect_success 'uplink is treated as simple' '
 	copy_ssh_wrapper_as "$TRASH_DIRECTORY/uplink" &&
-	git clone "[myhost:123]:src" ssh-bracket-clone-uplink &&
+	test_when_finished "rm \"$TRASH_DIRECTORY/uplink$X\"" &&
+	test_must_fail git clone "[myhost:123]:src" ssh-bracket-clone-uplink &&
+	git clone "myhost:src" ssh-clone-uplink &&
+	expect_ssh myhost src
+'
+
+test_expect_success 'OpenSSH-like uplink is treated as ssh' '
+	write_script "$TRASH_DIRECTORY/uplink" <<-EOF &&
+	if test "\$1" = "-G"
+	then
+		exit 0
+	fi &&
+	exec "\$TRASH_DIRECTORY/ssh$X" "\$@"
+	EOF
+	GIT_SSH="$TRASH_DIRECTORY/uplink" &&
+	export GIT_SSH &&
+	git clone "[myhost:123]:src" ssh-bracket-clone-sshlike-uplink &&
 	expect_ssh "-p 123" myhost src
 '
 
@@ -570,5 +615,106 @@ test_expect_success 'GIT_TRACE_PACKFILE produces a usable pack' '
 	git init --bare replay.git &&
 	git -C replay.git index-pack -v --stdin <tmp.pack
 '
+
+partial_clone () {
+	SERVER="$1" &&
+	URL="$2" &&
+
+	rm -rf "$SERVER" client &&
+	test_create_repo "$SERVER" &&
+	test_commit -C "$SERVER" one &&
+	HASH1=$(git hash-object "$SERVER/one.t") &&
+	git -C "$SERVER" revert HEAD &&
+	test_commit -C "$SERVER" two &&
+	HASH2=$(git hash-object "$SERVER/two.t") &&
+	test_config -C "$SERVER" uploadpack.advertiseblobmaxbytes 1 &&
+	test_config -C "$SERVER" uploadpack.allowanysha1inwant 1 &&
+
+	git clone --blob-max-bytes=0 "$URL" client &&
+
+	git -C client fsck &&
+
+	# Ensure that unneeded blobs are not inadvertently fetched.
+	test_config -C client extensions.partialclone "not a remote" &&
+	test_must_fail git -C client cat-file -e "$HASH1" &&
+
+	# But this blob was fetched, because clone performs an initial checkout
+	git -C client cat-file -e "$HASH2"
+}
+
+test_expect_success 'partial clone' '
+	partial_clone server "file://$(pwd)/server"
+'
+
+test_expect_success 'partial clone: warn if server does not support blob-max-bytes' '
+	rm -rf server client &&
+	test_create_repo server &&
+	test_commit -C server one &&
+
+	git clone --blob-max-bytes=0 "file://$(pwd)/server" client 2> err &&
+
+	test_i18ngrep "blob-max-bytes not recognized by server" err
+'
+
+test_expect_success 'batch missing blob request during checkout' '
+	rm -rf server client &&
+
+	test_create_repo server &&
+	echo a >server/a &&
+	echo b >server/b &&
+	git -C server add a b &&
+
+	git -C server commit -m x &&
+	echo aa >server/a &&
+	echo bb >server/b &&
+	git -C server add a b &&
+	git -C server commit -m x &&
+
+	test_config -C server uploadpack.advertiseblobmaxbytes 1 &&
+	test_config -C server uploadpack.allowanysha1inwant 1 &&
+
+	git clone --blob-max-bytes=0 "file://$(pwd)/server" client &&
+
+	# Ensure that there is only one negotiation by checking that there is
+	# only "done" line sent. ("done" marks the end of negotiation.)
+	GIT_TRACE_PACKET="$(pwd)/trace" git -C client checkout HEAD^ &&
+	grep "git> done" trace >done_lines &&
+	test_line_count = 1 done_lines
+'
+
+test_expect_success 'batch missing blob request does not inadvertently try to fetch gitlinks' '
+	rm -rf server client &&
+
+	test_create_repo repo_for_submodule &&
+	test_commit -C repo_for_submodule x &&
+
+	test_create_repo server &&
+	echo a >server/a &&
+	echo b >server/b &&
+	git -C server add a b &&
+	git -C server commit -m x &&
+
+	echo aa >server/a &&
+	echo bb >server/b &&
+	# Also add a gitlink pointing to an arbitrary repository
+	git -C server submodule add "$(pwd)/repo_for_submodule" c &&
+	git -C server add a b c &&
+	git -C server commit -m x &&
+
+	test_config -C server uploadpack.advertiseblobmaxbytes 1 &&
+	test_config -C server uploadpack.allowanysha1inwant 1 &&
+
+	# Make sure that it succeeds
+	git clone --blob-max-bytes=0 "file://$(pwd)/server" client
+'
+
+. "$TEST_DIRECTORY"/lib-httpd.sh
+start_httpd
+
+test_expect_success 'partial clone using HTTP' '
+	partial_clone "$HTTPD_DOCUMENT_ROOT_PATH/server" "$HTTPD_URL/smart/server"
+'
+
+stop_httpd
 
 test_done
