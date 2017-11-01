@@ -1364,6 +1364,7 @@ static int git_status_config(const char *k, const char *v, void *cb)
 
 int cmd_status(int argc, const char **argv, const char *prefix)
 {
+	static int no_lock_index = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1397,11 +1398,19 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("ignore changes to submodules, optional when: all, dirty, untracked. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
 		OPT_COLUMN(0, "column", &s.colopts, N_("list untracked files in columns")),
+		OPT_BOOL(0, "no-lock-index", &no_lock_index,
+			 N_("do not lock the index")),
 		OPT_END(),
 	};
 
 	if (argc == 2 && !strcmp(argv[1], "-h"))
 		usage_with_options(builtin_status_usage, builtin_status_options);
+
+	if (no_lock_index) {
+		warning("--no-lock-index is deprecated, use --no-optional-locks"
+			" instead");
+		setenv(GIT_OPTIONAL_LOCKS_ENVIRONMENT, "false", 1);
+	}
 
 	status_init_config(&s, git_status_config);
 	argc = parse_options(argc, argv, prefix,
@@ -1409,6 +1418,11 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 			     builtin_status_usage, 0);
 	finalize_colopts(&s.colopts, -1);
 	finalize_deferred_config(&s);
+
+	if (no_lock_index)
+		setenv("GIT_LOCK_INDEX", "false", 1);
+	else if (!git_parse_maybe_bool(getenv("GIT_LOCK_INDEX")))
+		no_lock_index = 1;
 
 	handle_untracked_files_arg(&s);
 	handle_ignored_arg(&s);
@@ -1421,6 +1435,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
+	enable_fscache(1);
 	read_cache_preload(&s.pathspec);
 	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
 
