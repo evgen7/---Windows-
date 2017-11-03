@@ -226,10 +226,11 @@ static struct commit_list *best_bisection_sorted(struct commit_list *list, int n
 		add_name_decoration(DECORATION_NONE, buf.buf, obj);
 
 		p->item = array[i].commit;
-		p = p->next;
+		if (i < cnt - 1)
+			p = p->next;
 	}
-	if (p)
-		p->next = NULL;
+	free_commit_list(p->next);
+	p->next = NULL;
 	strbuf_release(&buf);
 	free(array);
 	return list;
@@ -380,8 +381,10 @@ struct commit_list *find_bisection(struct commit_list *list,
 		unsigned flags = p->item->object.flags;
 
 		next = p->next;
-		if (flags & UNINTERESTING)
+		if (flags & UNINTERESTING) {
+			free(p);
 			continue;
+		}
 		p->next = last;
 		last = p;
 		if (!(flags & TREESAME))
@@ -397,8 +400,12 @@ struct commit_list *find_bisection(struct commit_list *list,
 	/* Do the real work of finding bisection commit. */
 	best = do_find_bisection(list, nr, weights, find_all);
 	if (best) {
-		if (!find_all)
+		if (!find_all) {
+			list->item = best->item;
+			free_commit_list(list->next);
+			best = list;
 			best->next = NULL;
+		}
 		*reaches = weight(best);
 	}
 	free(weights);
