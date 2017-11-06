@@ -55,6 +55,7 @@ int cmd_fetch_pack(int argc, const char **argv, const char *prefix)
 	struct string_list deepen_not = STRING_LIST_INIT_DUP;
 
 	fetch_if_missing = 0;
+	git_config(git_default_config, NULL);
 
 	packet_trace_identity("fetch-pack");
 
