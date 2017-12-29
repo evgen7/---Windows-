@@ -7,8 +7,7 @@
 #include "fsmonitor.h"
 
 #ifdef NO_PTHREADS
-static void preload_index(struct index_state *index,
-			  const struct pathspec *pathspec)
+void preload_index(struct index_state *index, const struct pathspec *pathspec)
 {
 	; /* nothing */
 }
@@ -73,8 +72,7 @@ static void *preload_thread(void *_data)
 	return NULL;
 }
 
-static void preload_index(struct index_state *index,
-			  const struct pathspec *pathspec)
+void preload_index(struct index_state *index, const struct pathspec *pathspec)
 {
 	int threads, i, work, offset;
 	struct thread_data data[MAX_PARALLEL];
@@ -92,6 +90,7 @@ static void preload_index(struct index_state *index,
 	offset = 0;
 	work = DIV_ROUND_UP(index->cache_nr, threads);
 	memset(&data, 0, sizeof(data));
+	enable_fscache(1);
 	for (i = 0; i < threads; i++) {
 		struct thread_data *p = data+i;
 		p->index = index;
@@ -108,6 +107,7 @@ static void preload_index(struct index_state *index,
 		if (pthread_join(p->pthread, NULL))
 			die("unable to join threaded lstat");
 	}
+	enable_fscache(0);
 }
 #endif
 

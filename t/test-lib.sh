@@ -49,17 +49,25 @@ export ASAN_OPTIONS
 : ${LSAN_OPTIONS=abort_on_error=1}
 export LSAN_OPTIONS
 
+if test ! -f "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
+then
+	echo >&2 'error: GIT-BUILD-OPTIONS missing (has Git been built?).'
+	exit 1
+fi
+. "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
+export PERL_PATH SHELL_PATH
+
+test -z "$MSVC_DEPS" ||
+PATH="$GIT_BUILD_DIR/$MSVC_DEPS/bin:$PATH"
+
 ################################################################
 # It appears that people try to run tests without building...
-"$GIT_BUILD_DIR/git" >/dev/null
+"$GIT_BUILD_DIR/git$X" >/dev/null
 if test $? != 1
 then
 	echo >&2 'error: you do not seem to have built git yet.'
 	exit 1
 fi
-
-. "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
-export PERL_PATH SHELL_PATH
 
 # if --tee was passed, write the output not only to the terminal, but
 # additionally to the file test-results/$BASENAME.out, too.
@@ -99,23 +107,18 @@ EDITOR=:
 # /usr/xpg4/bin/sh and /bin/ksh to bail out.  So keep the unsets
 # deriving from the command substitution clustered with the other
 # ones.
-unset VISUAL EMAIL LANGUAGE COLUMNS $("$PERL_PATH" -e '
-	my @env = keys %ENV;
-	my $ok = join("|", qw(
-		TRACE
-		DEBUG
-		TEST
-		.*_TEST
-		PROVE
-		VALGRIND
-		UNZIP
-		PERF_
-		CURL_VERBOSE
-		TRACE_CURL
-	));
-	my @vars = grep(/^GIT_/ && !/^GIT_($ok)/o, @env);
-	print join("\n", @vars);
-')
+unset VISUAL EMAIL LANGUAGE COLUMNS $(env | sed -n \
+	-e '/^GIT_TRACE/d' \
+	-e '/^GIT_DEBUG/d' \
+	-e '/^GIT_TEST/d' \
+	-e '/^GIT_.*_TEST/d' \
+	-e '/^GIT_PROVE/d' \
+	-e '/^GIT_VALGRIND/d' \
+	-e '/^GIT_UNZIP/d' \
+	-e '/^GIT_PERF_/d' \
+	-e '/^GIT_CURL_VERBOSE/d' \
+	-e '/^GIT_TRACE_CURL/d' \
+	-e 's/^\(GIT_[^=]*\)=.*/\1/p')
 unset XDG_CONFIG_HOME
 unset GITPERLLIB
 GIT_AUTHOR_EMAIL=author@example.com
@@ -609,6 +612,20 @@ test_eval_ () {
 	#
 	# The test itself is run with stderr put back to &4 (so either to
 	# /dev/null, or to the original stderr if --verbose was used).
+	if test -n "$TEST_NO_REDIRECT"
+	then
+		test_eval_inner_ "$@"
+		test_eval_ret_=$?
+		if test "$trace" = t
+		then
+			set +x
+			if test "$test_eval_ret_" != 0
+			then
+				say_color error >&4 "error: last command exited with \$?=$test_eval_ret_"
+			fi
+		fi
+		return $test_eval_ret_
+	fi
 	{
 		test_eval_inner_ "$@" </dev/null >&3 2>&4
 		test_eval_ret_=$?
@@ -885,7 +902,7 @@ elif test -n "$GIT_TEST_INSTALLED"
 then
 	GIT_EXEC_PATH=$($GIT_TEST_INSTALLED/git --exec-path)  ||
 	error "Cannot run git from $GIT_TEST_INSTALLED."
-	PATH=$GIT_TEST_INSTALLED:$GIT_BUILD_DIR:$PATH
+	PATH=$GIT_TEST_INSTALLED:$GIT_BUILD_DIR/t/helper:$PATH
 	GIT_EXEC_PATH=${GIT_TEST_EXEC_PATH:-$GIT_EXEC_PATH}
 else # normal case, use ../bin-wrappers only unless $with_dashes:
 	git_bin_dir="$GIT_BUILD_DIR/bin-wrappers"
@@ -1007,7 +1024,7 @@ case $uname_s in
 	test_set_prereq NATIVE_CRLF
 	test_set_prereq SED_STRIPS_CR
 	test_set_prereq GREP_STRIPS_CR
-	GIT_TEST_CMP=mingw_test_cmp
+	GIT_TEST_CMP="test-helper --cmp"
 	;;
 *CYGWIN*)
 	test_set_prereq POSIXPERM
