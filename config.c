@@ -1000,7 +1000,7 @@ int git_config_expiry_date(timestamp_t *timestamp, const char *var, const char *
 	return 0;
 }
 
-static int git_default_core_config(const char *var, const char *value, void *cb)
+static int git_default_core_config(const char *var, const char *value)
 {
 	/* This needs a better name */
 	if (!strcmp(var, "core.filemode")) {
@@ -1252,7 +1252,7 @@ static int git_default_core_config(const char *var, const char *value, void *cb)
 	}
 
 	/* Add other config variables here and to Documentation/config.txt. */
-	return platform_core_config(var, value, cb);
+	return 0;
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1337,13 +1337,13 @@ static int git_default_mailmap_config(const char *var, const char *value)
 	return 0;
 }
 
-int git_default_config(const char *var, const char *value, void *cb)
+int git_default_config(const char *var, const char *value, void *dummy)
 {
 	if (starts_with(var, "core."))
-		return git_default_core_config(var, value, cb);
+		return git_default_core_config(var, value);
 
 	if (starts_with(var, "user."))
-		return git_ident_config(var, value, cb);
+		return git_ident_config(var, value, dummy);
 
 	if (starts_with(var, "i18n."))
 		return git_default_i18n_config(var, value);
