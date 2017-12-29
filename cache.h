@@ -78,62 +78,7 @@ struct object_id {
 	unsigned char hash[GIT_MAX_RAWSZ];
 };
 
-/*
- * Note that these constants are suitable for indexing the hash_algos array and
- * comparing against each other, but are otherwise arbitrary, so they should not
- * be exposed to the user or serialized to disk.  To know whether a
- * git_hash_algo struct points to some usable hash function, test the format_id
- * field for being non-zero.  Use the name field for user-visible situations and
- * the format_id field for fixed-length fields on disk.
- */
-/* An unknown hash function. */
-#define GIT_HASH_UNKNOWN 0
-/* SHA-1 */
-#define GIT_HASH_SHA1 1
-/* Number of algorithms supported (including unknown). */
-#define GIT_HASH_NALGOS (GIT_HASH_SHA1 + 1)
-
-typedef void (*git_hash_init_fn)(void *ctx);
-typedef void (*git_hash_update_fn)(void *ctx, const void *in, size_t len);
-typedef void (*git_hash_final_fn)(unsigned char *hash, void *ctx);
-
-struct git_hash_algo {
-	/*
-	 * The name of the algorithm, as appears in the config file and in
-	 * messages.
-	 */
-	const char *name;
-
-	/* A four-byte version identifier, used in pack indices. */
-	uint32_t format_id;
-
-	/* The size of a hash context (e.g. git_SHA_CTX). */
-	size_t ctxsz;
-
-	/* The length of the hash in binary. */
-	size_t rawsz;
-
-	/* The length of the hash in hex characters. */
-	size_t hexsz;
-
-	/* The hash initialization function. */
-	git_hash_init_fn init_fn;
-
-	/* The hash update function. */
-	git_hash_update_fn update_fn;
-
-	/* The hash finalization function. */
-	git_hash_final_fn final_fn;
-
-	/* The OID of the empty tree. */
-	const struct object_id *empty_tree;
-
-	/* The OID of the empty blob. */
-	const struct object_id *empty_blob;
-};
-extern const struct git_hash_algo hash_algos[GIT_HASH_NALGOS];
-
-#define current_hash the_repository->hash_algo
+#define the_hash_algo the_repository->hash_algo
 
 #if defined(DT_UNKNOWN) && !defined(NO_D_TYPE_IN_DIRENT)
 #define DTYPE(de)	((de)->d_type)
@@ -668,7 +613,6 @@ extern int daemonize(void);
 /* Initialize and use the cache information */
 struct lock_file;
 extern int read_index(struct index_state *);
-extern void preload_index(struct index_state *, const struct pathspec *pathspec);
 extern int read_index_preload(struct index_state *, const struct pathspec *pathspec);
 extern int do_read_index(struct index_state *istate, const char *path,
 			 int must_exist); /* for testting only! */
@@ -897,6 +841,14 @@ int use_optional_locks(void);
 extern char comment_line_char;
 extern int auto_comment_line_char;
 
+/* Windows only */
+enum hide_dotfiles_type {
+	HIDE_DOTFILES_FALSE = 0,
+	HIDE_DOTFILES_TRUE,
+	HIDE_DOTFILES_DOTGITONLY
+};
+extern enum hide_dotfiles_type hide_dotfiles;
+
 enum log_refs_config {
 	LOG_REFS_UNSET = -1,
 	LOG_REFS_NONE = 0,
@@ -953,12 +905,10 @@ extern int grafts_replace_parents;
 #define GIT_REPO_VERSION 0
 #define GIT_REPO_VERSION_READ 1
 extern int repository_format_precious_objects;
-extern char *repository_format_partial_clone;
 
 struct repository_format {
 	int version;
 	int precious_objects;
-	char *partial_clone;
 	int is_bare;
 	int hash_algo;
 	char *work_tree;
@@ -1093,22 +1043,22 @@ extern const struct object_id empty_blob_oid;
 
 static inline int is_empty_blob_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, current_hash->empty_blob->hash);
+	return !hashcmp(sha1, the_hash_algo->empty_blob->hash);
 }
 
 static inline int is_empty_blob_oid(const struct object_id *oid)
 {
-	return !oidcmp(oid, current_hash->empty_blob);
+	return !oidcmp(oid, the_hash_algo->empty_blob);
 }
 
 static inline int is_empty_tree_sha1(const unsigned char *sha1)
 {
-	return !hashcmp(sha1, current_hash->empty_tree->hash);
+	return !hashcmp(sha1, the_hash_algo->empty_tree->hash);
 }
 
 static inline int is_empty_tree_oid(const struct object_id *oid)
 {
-	return !oidcmp(oid, current_hash->empty_tree);
+	return !oidcmp(oid, the_hash_algo->empty_tree);
 }
 
 /* set default permissions by passing mode arguments to open(2) */
@@ -1541,6 +1491,7 @@ extern const char *ident_default_name(void);
 extern const char *ident_default_email(void);
 extern const char *git_editor(void);
 extern const char *git_pager(int stdout_is_tty);
+extern int is_terminal_dumb(void);
 extern int git_ident_config(const char *, const char *, void *);
 extern void reset_ident_date(void);
 
@@ -1688,8 +1639,7 @@ extern struct packed_git {
 	unsigned pack_local:1,
 		 pack_keep:1,
 		 freshened:1,
-		 do_not_close:1,
-		 pack_promisor:1;
+		 do_not_close:1;
 	unsigned char sha1[20];
 	struct revindex_entry *revindex;
 	/* something like ".git/objects/pack/xxxxx.pack" */
@@ -1827,14 +1777,6 @@ struct object_info {
 /* Do not retry packed storage after checking packed and loose storage */
 #define OBJECT_INFO_QUICK 8
 extern int sha1_object_info_extended(const unsigned char *, struct object_info *, unsigned flags);
-
-/*
- * Set this to 0 to prevent sha1_object_info_extended() from fetching missing
- * blobs. This has a difference only if extensions.partialClone is set.
- *
- * Its default value is 1.
- */
-extern int fetch_if_missing;
 
 /* Dumb servers support */
 extern int update_server_info(int);
@@ -2031,7 +1973,10 @@ void sleep_millisec(int millisec);
  */
 void safe_create_dir(const char *dir, int share);
 
-/* Return 1 if the file is empty or does not exists, 0 otherwise. */
-extern int is_empty_or_missing_file(const char *filename);
+/*
+ * Should we print an ellipsis after an abbreviated SHA-1 value
+ * when doing diff-raw output or indicating a detached HEAD?
+ */
+extern int print_sha1_ellipsis(void);
 
 #endif /* CACHE_H */

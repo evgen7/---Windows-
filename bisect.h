@@ -4,13 +4,12 @@
 /*
  * Find bisection. If something is found, `reaches` will be the number of
  * commits that the best commit reaches. `all` will be the count of
- * non-SAMETREE commits. If `find_all` is set, all non-SAMETREE commits are
- * returned sorted, otherwise only a single best commit is returned. The
- * original list will be left in an undefined state and should not be examined.
+ * non-SAMETREE commits. If nothing is found, `list` will be NULL.
+ * Otherwise, it will be either all non-SAMETREE commits or the single
+ * best commit, as chosen by `find_all`.
  */
-extern struct commit_list *find_bisection(struct commit_list *list,
-					  int *reaches, int *all,
-					  int find_all);
+extern void find_bisection(struct commit_list **list, int *reaches, int *all,
+			   int find_all);
 
 extern struct commit_list *filter_skipped(struct commit_list *list,
 					  struct commit_list **tried,

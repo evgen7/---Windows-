@@ -8,7 +8,6 @@
 #include "strbuf.h"
 #include "string-list.h"
 #include "argv-array.h"
-#include "packfile.h"
 
 static int delta_base_offset = 1;
 static int pack_kept_objects = -1;
@@ -84,8 +83,7 @@ static void remove_pack_on_signal(int signo)
 
 /*
  * Adds all packs hex strings to the fname list, which do not
- * have a corresponding .keep or .promisor file. These packs are not to
- * be kept if we are going to pack everything into one file.
+ * have a corresponding .keep file.
  */
 static void get_non_kept_pack_filenames(struct string_list *fname_list)
 {
@@ -103,8 +101,7 @@ static void get_non_kept_pack_filenames(struct string_list *fname_list)
 
 		fname = xmemdupz(e->d_name, len);
 
-		if (!file_exists(mkpath("%s/%s.keep", packdir, fname)) &&
-		    !file_exists(mkpath("%s/%s.promisor", packdir, fname)))
+		if (!file_exists(mkpath("%s/%s.keep", packdir, fname)))
 			string_list_append_nodup(fname_list, fname);
 		else
 			free(fname);
@@ -235,7 +232,6 @@ int cmd_repack(int argc, const char **argv, const char *prefix)
 	argv_array_push(&cmd.args, "--all");
 	argv_array_push(&cmd.args, "--reflog");
 	argv_array_push(&cmd.args, "--indexed-objects");
-	argv_array_push(&cmd.args, "--exclude-promisor-objects");
 	if (window)
 		argv_array_pushf(&cmd.args, "--window=%s", window);
 	if (window_memory)
@@ -307,8 +303,6 @@ int cmd_repack(int argc, const char **argv, const char *prefix)
 
 	if (!names.nr && !quiet)
 		printf("Nothing new to pack.\n");
-
-	close_all_packs();
 
 	/*
 	 * Ok we have prepared all new packfiles.

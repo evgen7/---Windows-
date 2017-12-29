@@ -3,15 +3,14 @@ git-describe(1)
 
 NAME
 ----
-git-describe - Describe a commit or blob using the graph relations
-
+git-describe - Give an object a human readable name based on an available ref
 
 SYNOPSIS
 --------
 [verse]
 'git describe' [--all] [--tags] [--contains] [--abbrev=<n>] [<commit-ish>...]
 'git describe' [--all] [--tags] [--contains] [--abbrev=<n>] --dirty[=<mark>]
-'git describe' [<options>] <blob-ish>
+'git describe' <blob>
 
 DESCRIPTION
 -----------
@@ -27,13 +26,9 @@ see the -a and -s options to linkgit:git-tag[1].
 
 If the given object refers to a blob, it will be described
 as `<commit-ish>:<path>`, such that the blob can be found
-at `<path>` in the `<commit-ish>`. Note, that the commit is likely
-not the commit that introduced the blob, but the one that was found
-first; to find the commit that introduced the blob, you need to find
-the commit that last touched the path, e.g.
-`git log <commit-description> -- <path>`.
-As blobs do not point at the commits they are contained in,
-describing blobs is slow as we have to walk the whole graph.
+at `<path>` in the `<commit-ish>`, which itself describes the
+first commit in which this blob occurs in a reverse revision walk
+from HEAD.
 
 OPTIONS
 -------
@@ -196,6 +191,14 @@ has the fewest commits different from the input commit-ish will be
 selected and output.  Here fewest commits different is defined as
 the number of commits which would be shown by `git log tag..input`
 will be the smallest number of commits possible.
+
+BUGS
+----
+
+Tree objects as well as tag objects not pointing at commits, cannot be described.
+When describing blobs, the lightweight tags pointing at blobs are ignored,
+but the blob is still described as <committ-ish>:<path> despite the lightweight
+tag being favorable.
 
 GIT
 ---

@@ -11,6 +11,28 @@ int starts_with(const char *str, const char *prefix)
 			return 0;
 }
 
+int skip_to_optional_arg_default(const char *str, const char *prefix,
+				 const char **arg, const char *def)
+{
+	const char *p;
+
+	if (!skip_prefix(str, prefix, &p))
+		return 0;
+
+	if (!*p) {
+		if (arg)
+			*arg = def;
+		return 1;
+	}
+
+	if (*p != '=')
+		return 0;
+
+	if (arg)
+		*arg = p + 1;
+	return 1;
+}
+
 /*
  * Used as the default ->buf value, so that people can always assume
  * buf is non NULL and ->buf is NUL terminated even for a freshly
@@ -386,12 +408,15 @@ ssize_t strbuf_read(struct strbuf *sb, int fd, size_t hint)
 
 ssize_t strbuf_read_once(struct strbuf *sb, int fd, size_t hint)
 {
+	size_t oldalloc = sb->alloc;
 	ssize_t cnt;
 
 	strbuf_grow(sb, hint ? hint : 8192);
 	cnt = xread(fd, sb->buf + sb->len, sb->alloc - sb->len - 1);
 	if (cnt > 0)
 		strbuf_setlen(sb, sb->len + cnt);
+	else if (oldalloc == 0)
+		strbuf_release(sb);
 	return cnt;
 }
 
@@ -401,6 +426,8 @@ ssize_t strbuf_write(struct strbuf *sb, FILE *f)
 }
 
 
+#define STRBUF_MAXLINK (2*PATH_MAX)
+
 int strbuf_readlink(struct strbuf *sb, const char *path, size_t hint)
 {
 	size_t oldalloc = sb->alloc;
@@ -408,18 +435,21 @@ int strbuf_readlink(struct strbuf *sb, const char *path, size_t hint)
 	if (hint < 32)
 		hint = 32;
 
-	for (;; hint *= 2) {
+	while (hint < STRBUF_MAXLINK) {
 		int len;
 
-		strbuf_grow(sb, hint + 1);
-		len = readlink(path, sb->buf, hint + 1);
+		strbuf_grow(sb, hint);
+		len = readlink(path, sb->buf, hint);
 		if (len < 0) {
 			if (errno != ERANGE)
 				break;
-		} else if (len <= hint) {
+		} else if (len < hint) {
 			strbuf_setlen(sb, len);
 			return 0;
 		}
+
+		/* .. the buffer was too small - try again */
+		hint *= 2;
 	}
 	if (oldalloc == 0)
 		strbuf_release(sb);

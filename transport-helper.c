@@ -11,10 +11,9 @@
 #include "sigchain.h"
 #include "argv-array.h"
 #include "refs.h"
+#include "transport-internal.h"
 
 static int debug;
-/* TODO: put somewhere sensible, e.g. git_transport_options? */
-static int auto_gc = 1;
 
 struct helper_data {
 	const char *name;
@@ -119,10 +118,10 @@ static struct child_process *get_helper(struct transport *transport)
 	helper->in = -1;
 	helper->out = -1;
 	helper->err = 0;
-	argv_array_pushf(&helper->args, "remote-%s", data->name);
+	argv_array_pushf(&helper->args, "git-remote-%s", data->name);
 	argv_array_push(&helper->args, transport->remote->name);
 	argv_array_push(&helper->args, remove_ext_force(transport->url));
-	helper->git_cmd = 1;
+	helper->git_cmd = 0;
 	helper->silent_exec_failure = 1;
 
 	if (have_git_dir())
@@ -470,23 +469,8 @@ static int get_exporter(struct transport *transport,
 	for (i = 0; i < revlist_args->nr; i++)
 		argv_array_push(&fastexport->args, revlist_args->items[i].string);
 
-	argv_array_push(&fastexport->args, "--");
-
 	fastexport->git_cmd = 1;
 	return start_command(fastexport);
-}
-
-static void check_helper_status(struct helper_data *data)
-{
-	int pid, status;
-
-	pid = waitpid(data->helper->pid, &status, WNOHANG);
-	if (pid < 0)
-		die("Could not retrieve status of remote helper '%s'",
-		    data->name);
-	if (pid > 0 && WIFEXITED(status))
-		die("Remote helper '%s' died with %d",
-		    data->name, WEXITSTATUS(status));
 }
 
 static int fetch_with_import(struct transport *transport,
@@ -525,7 +509,6 @@ static int fetch_with_import(struct transport *transport,
 
 	if (finish_command(&fastimport))
 		die("Error while running fast-import");
-	check_helper_status(data);
 
 	/*
 	 * The fast-import stream of a remote helper that advertises
@@ -559,12 +542,6 @@ static int fetch_with_import(struct transport *transport,
 		}
 	}
 	strbuf_release(&buf);
-	if (auto_gc) {
-		const char *argv_gc_auto[] = {
-			"gc", "--auto", "--quiet", NULL,
-		};
-		run_command_v_opt(argv_gc_auto, RUN_GIT_CMD);
-	}
 	return 0;
 }
 
@@ -674,7 +651,7 @@ static int fetch(struct transport *transport,
 
 	if (process_connect(transport, 0)) {
 		do_take_over(transport);
-		return transport->fetch(transport, nr_heads, to_fetch);
+		return transport->vtable->fetch(transport, nr_heads, to_fetch);
 	}
 
 	count = 0;
@@ -694,10 +671,6 @@ static int fetch(struct transport *transport,
 
 	if (data->transport_options.update_shallow)
 		set_helper_option(transport, "update-shallow", "true");
-
-	if (data->transport_options.blob_max_bytes)
-		set_helper_option(transport, "blob-max-bytes",
-				  data->transport_options.blob_max_bytes);
 
 	if (data->fetch)
 		return fetch_with_fetch(transport, nr_heads, to_fetch);
@@ -910,7 +883,8 @@ static int push_refs_with_push(struct transport *transport,
 			struct strbuf cas = STRBUF_INIT;
 			strbuf_addf(&cas, "%s:%s",
 				    ref->name, oid_to_hex(&ref->old_oid_expect));
-			string_list_append(&cas_options, strbuf_detach(&cas, NULL));
+			string_list_append_nodup(&cas_options,
+						 strbuf_detach(&cas, NULL));
 		}
 	}
 	if (buf.len == 0) {
@@ -925,6 +899,7 @@ static int push_refs_with_push(struct transport *transport,
 	strbuf_addch(&buf, '\n');
 	sendline(data, &buf);
 	strbuf_release(&buf);
+	string_list_clear(&cas_options, 0);
 
 	return push_update_refs_status(data, remote_refs, flags);
 }
@@ -958,7 +933,8 @@ static int push_refs_with_export(struct transport *transport,
 		private = apply_refspecs(data->refspecs, data->refspec_nr, ref->name);
 		if (private && !get_oid(private, &oid)) {
 			strbuf_addf(&buf, "^%s", private);
-			string_list_append(&revlist_args, strbuf_detach(&buf, NULL));
+			string_list_append_nodup(&revlist_args,
+						 strbuf_detach(&buf, NULL));
 			oidcpy(&ref->old_oid, &oid);
 		}
 		free(private);
@@ -996,7 +972,6 @@ static int push_refs_with_export(struct transport *transport,
 
 	if (finish_command(&exporter))
 		die("Error while running fast-export");
-	check_helper_status(data);
 	if (push_update_refs_status(data, remote_refs, flags))
 		return 1;
 
@@ -1016,7 +991,7 @@ static int push_refs(struct transport *transport,
 
 	if (process_connect(transport, 1)) {
 		do_take_over(transport);
-		return transport->push_refs(transport, remote_refs, flags);
+		return transport->vtable->push_refs(transport, remote_refs, flags);
 	}
 
 	if (!remote_refs) {
@@ -1064,7 +1039,7 @@ static struct ref *get_refs_list(struct transport *transport, int for_push)
 
 	if (process_connect(transport, for_push)) {
 		do_take_over(transport);
-		return transport->get_refs_list(transport, for_push);
+		return transport->vtable->get_refs_list(transport, for_push);
 	}
 
 	if (data->push && for_push)
@@ -1112,6 +1087,15 @@ static struct ref *get_refs_list(struct transport *transport, int for_push)
 	return ret;
 }
 
+static struct transport_vtable vtable = {
+	set_helper_option,
+	get_refs_list,
+	fetch,
+	push_refs,
+	connect_helper,
+	release_helper
+};
+
 int transport_helper_init(struct transport *transport, const char *name)
 {
 	struct helper_data *data = xcalloc(1, sizeof(*data));
@@ -1123,12 +1107,7 @@ int transport_helper_init(struct transport *transport, const char *name)
 		debug = 1;
 
 	transport->data = data;
-	transport->set_option = set_helper_option;
-	transport->get_refs_list = get_refs_list;
-	transport->fetch = fetch;
-	transport->push_refs = push_refs;
-	transport->disconnect = release_helper;
-	transport->connect = connect_helper;
+	transport->vtable = &vtable;
 	transport->smart_options = &(data->transport_options);
 	return 0;
 }

@@ -81,18 +81,6 @@ static struct diff_rename_src *register_rename_src(struct diff_filepair *p)
 
 	first = 0;
 	last = rename_src_nr;
-
-	if (last > 0) {
-		struct diff_rename_src *src = &(rename_src[last-1]);
-		int cmp = strcmp(one->path, src->p->one->path);
-		if (!cmp)
-			return src;
-		if (cmp > 0) {
-			first = last;
-			goto append_it;
-		}
-	}
-
 	while (last > first) {
 		int next = (last + first) >> 1;
 		struct diff_rename_src *src = &(rename_src[next]);
@@ -106,7 +94,6 @@ static struct diff_rename_src *register_rename_src(struct diff_filepair *p)
 		first = next+1;
 	}
 
-append_it:
 	/* insert to make it at "first" */
 	ALLOC_GROW(rename_src, rename_src_nr + 1, rename_src_alloc);
 	rename_src_nr++;
@@ -404,14 +391,12 @@ static int too_many_rename_candidates(int num_create,
 	 * growing larger than a "rename_limit" square matrix, ie:
 	 *
 	 *    num_create * num_src > rename_limit * rename_limit
-	 *
-	 * but handles the potential overflow case specially (and we
-	 * assume at least 32-bit integers)
 	 */
-	if (rename_limit <= 0 || rename_limit > 32767)
+	if (rename_limit <= 0)
 		rename_limit = 32767;
 	if ((num_create <= rename_limit || num_src <= rename_limit) &&
-	    (num_create * num_src <= rename_limit * rename_limit))
+	    ((uint64_t)num_create * (uint64_t)num_src
+	     <= (uint64_t)rename_limit * (uint64_t)rename_limit))
 		return 0;
 
 	options->needed_rename_limit =
@@ -428,7 +413,8 @@ static int too_many_rename_candidates(int num_create,
 		num_src++;
 	}
 	if ((num_create <= rename_limit || num_src <= rename_limit) &&
-	    (num_create * num_src <= rename_limit * rename_limit))
+	    ((uint64_t)num_create * (uint64_t)num_src
+	     <= (uint64_t)rename_limit * (uint64_t)rename_limit))
 		return 2;
 	return 1;
 }
@@ -547,7 +533,7 @@ void diffcore_rename(struct diff_options *options)
 	if (options->show_rename_progress) {
 		progress = start_delayed_progress(
 				_("Performing inexact rename detection"),
-				rename_dst_nr * rename_src_nr);
+				(uint64_t)rename_dst_nr * (uint64_t)rename_src_nr);
 	}
 
 	mx = xcalloc(st_mult(NUM_CANDIDATE_PER_DST, num_create), sizeof(*mx));
@@ -584,7 +570,7 @@ void diffcore_rename(struct diff_options *options)
 			diff_free_filespec_blob(two);
 		}
 		dst_cnt++;
-		display_progress(progress, (i+1)*rename_src_nr);
+		display_progress(progress, (uint64_t)(i+1)*(uint64_t)rename_src_nr);
 	}
 	stop_progress(&progress);
 

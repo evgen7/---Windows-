@@ -66,12 +66,7 @@ test_expect_success 'fast-export master~2..master' '
 
 '
 
-test_lazy_prereq UTF8_ONLY_ENV '
-	. "$TEST_DIRECTORY"/t3901/8859-1.txt &&
-	! git var GIT_AUTHOR_IDENT | grep "Áéí"
-'
-
-test_expect_success !UTF8_ONLY_ENV 'iso-8859-1' '
+test_expect_success 'iso-8859-1' '
 
 	git config i18n.commitencoding ISO8859-1 &&
 	# use author and committer name in ISO-8859-1 to match it.
@@ -86,11 +81,6 @@ test_expect_success !UTF8_ONLY_ENV 'iso-8859-1' '
 		 git cat-file commit i18n | grep "Áéí óú")
 
 '
-
-# The subsequent tests validate timestamps, and we may just have skipped a tick
-test_have_prereq !UTF8_ONLY_ENV ||
-test_tick
-
 test_expect_success 'import/export-marks' '
 
 	git checkout -b marks master &&
@@ -211,7 +201,7 @@ GIT_COMMITTER_NAME='C O Mitter'; export GIT_COMMITTER_NAME
 
 test_expect_success 'setup copies' '
 
-	{ git config --unset i18n.commitencoding || :; } &&
+	git config --unset i18n.commitencoding &&
 	git checkout -b copy rein &&
 	git mv file file3 &&
 	git commit -m move1 &&
@@ -547,17 +537,6 @@ test_expect_success 'when using -C, do not declare copy when source of copy is a
 	git -C src fast-export --all -C | git -C dst fast-import &&
 	git -C src show >expected &&
 	git -C dst show >actual &&
-	test_cmp expected actual
-'
-
-cat > expected << EOF
-reset refs/heads/master
-from $(git rev-parse master)
-
-EOF
-
-test_expect_failure 'refs are updated even if no commits need to be exported' '
-	git fast-export master..master > actual &&
 	test_cmp expected actual
 '
 

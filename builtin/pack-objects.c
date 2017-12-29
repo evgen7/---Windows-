@@ -15,6 +15,8 @@
 #include "diff.h"
 #include "revision.h"
 #include "list-objects.h"
+#include "list-objects-filter.h"
+#include "list-objects-filter-options.h"
 #include "pack-objects.h"
 #include "progress.h"
 #include "refs.h"
@@ -26,8 +28,6 @@
 #include "argv-array.h"
 #include "mru.h"
 #include "packfile.h"
-#include "pkt-line.h"
-#include "varint.h"
 
 static const char *pack_usage[] = {
 	N_("git pack-objects --stdout [<options>...] [< <ref-list> | < <object-list>]"),
@@ -75,15 +75,20 @@ static int use_bitmap_index = -1;
 static int write_bitmap_index;
 static uint16_t write_bitmap_options;
 
-static int exclude_promisor_objects;
-
 static unsigned long delta_cache_size = 0;
 static unsigned long max_delta_cache_size = 256 * 1024 * 1024;
 static unsigned long cache_max_small_delta_size = 1000;
 
 static unsigned long window_memory_limit = 0;
 
-static long blob_max_bytes = -1;
+static struct list_objects_filter_options filter_options;
+
+enum missing_action {
+	MA_ERROR = 0,    /* fail if any missing objects are encountered */
+	MA_ALLOW_ANY,    /* silently allow ALL missing objects */
+};
+static enum missing_action arg_missing_action;
+static show_object_fn fn_show_object;
 
 /*
  * stats
@@ -953,12 +958,12 @@ static int have_duplicate_entry(const struct object_id *oid,
 	return 1;
 }
 
-static int ignore_found_object(int preferred_base, struct packed_git *p)
+static int want_found_object(int exclude, struct packed_git *p)
 {
-	if (preferred_base)
-		return 0;
-	if (incremental)
+	if (exclude)
 		return 1;
+	if (incremental)
+		return 0;
 
 	/*
 	 * When asked to do --local (do not include an object that appears in a
@@ -976,19 +981,19 @@ static int ignore_found_object(int preferred_base, struct packed_git *p)
 	 */
 	if (!ignore_packed_keep &&
 	    (!local || !have_non_local_packs))
-		return 0;
+		return 1;
 
 	if (local && !p->pack_local)
-		return 1;
+		return 0;
 	if (ignore_packed_keep && p->pack_local && p->pack_keep)
-		return 1;
+		return 0;
 
 	/* we don't know yet; keep looking for more packs */
 	return -1;
 }
 
 /*
- * Check whether we should ignore this object (e.g., we do not want
+ * Check whether we want the object in the pack (e.g., we do not want
  * objects found in non-local stores if the "--local" option was used).
  *
  * If the caller already knows an existing pack it wants to take the object
@@ -996,16 +1001,16 @@ static int ignore_found_object(int preferred_base, struct packed_git *p)
  * function finds if there is any pack that has the object and returns the pack
  * and its offset in these variables.
  */
-static int ignore_object(const struct object_id *oid,
-			 int preferred_base,
-			 struct packed_git **found_pack,
-			 off_t *found_offset)
+static int want_object_in_pack(const struct object_id *oid,
+			       int exclude,
+			       struct packed_git **found_pack,
+			       off_t *found_offset)
 {
-	struct list_head *pos;
-	int ignore;
+	struct mru_entry *entry;
+	int want;
 
-	if (!preferred_base && local && has_loose_object_nonlocal(oid->hash))
-		return 1;
+	if (!exclude && local && has_loose_object_nonlocal(oid->hash))
+		return 0;
 
 	/*
 	 * If we already know the pack object lives in, start checks from that
@@ -1013,13 +1018,12 @@ static int ignore_object(const struct object_id *oid,
 	 * are present we will determine the answer right now.
 	 */
 	if (*found_pack) {
-		ignore = ignore_found_object(preferred_base, *found_pack);
-		if (ignore != -1)
-			return ignore;
+		want = want_found_object(exclude, *found_pack);
+		if (want != -1)
+			return want;
 	}
 
-	list_for_each(pos, &packed_git_mru.list) {
-		struct mru *entry = list_entry(pos, struct mru, list);
+	for (entry = packed_git_mru.head; entry; entry = entry->next) {
 		struct packed_git *p = entry->item;
 		off_t offset;
 
@@ -1035,15 +1039,15 @@ static int ignore_object(const struct object_id *oid,
 				*found_offset = offset;
 				*found_pack = p;
 			}
-			ignore = ignore_found_object(preferred_base, p);
-			if (!preferred_base && ignore > 0)
+			want = want_found_object(exclude, p);
+			if (!exclude && want > 0)
 				mru_mark(&packed_git_mru, entry);
-			if (ignore != -1)
-				return ignore;
+			if (want != -1)
+				return want;
 		}
 	}
 
-	return 0;
+	return 1;
 }
 
 static void create_object_entry(const struct object_id *oid,
@@ -1077,39 +1081,17 @@ static const char no_closure_warning[] = N_(
 "disabling bitmap writing, as some objects are not being packed"
 );
 
-/*
- * Returns 1 if the given blob does not meet any defined blob size
- * limits.  Blobs that appear as a tree entry whose basename begins with
- * ".git" are never considered oversized.
- */
-static int oversized(const struct object_id *oid, const char *name) {
-	const char *last_slash, *basename;
-	unsigned long size;
-
-	if (blob_max_bytes < 0)
-		return 0;
-
-	last_slash = strrchr(name, '/');
-	basename = last_slash ? last_slash + 1 : name;
-	if (starts_with(basename, ".git"))
-		return 0;
-
-	sha1_object_info(oid->hash, &size);
-	return size > blob_max_bytes;
-}
-
 static int add_object_entry(const struct object_id *oid, enum object_type type,
-			    const char *name, int preferred_base)
+			    const char *name, int exclude)
 {
 	struct packed_git *found_pack = NULL;
 	off_t found_offset = 0;
 	uint32_t index_pos;
 
-	if (have_duplicate_entry(oid, preferred_base, &index_pos))
+	if (have_duplicate_entry(oid, exclude, &index_pos))
 		return 0;
 
-	if (ignore_object(oid, preferred_base, &found_pack, &found_offset) ||
-	    (!preferred_base && type == OBJ_BLOB && oversized(oid, name))) {
+	if (!want_object_in_pack(oid, exclude, &found_pack, &found_offset)) {
 		/* The pack is missing an object, so it will not have closure */
 		if (write_bitmap_index) {
 			warning(_(no_closure_warning));
@@ -1119,7 +1101,7 @@ static int add_object_entry(const struct object_id *oid, enum object_type type,
 	}
 
 	create_object_entry(oid, type, pack_name_hash(name),
-			    preferred_base, name && no_try_delta(name),
+			    exclude, name && no_try_delta(name),
 			    index_pos, found_pack, found_offset);
 
 	display_progress(progress_state, nr_result);
@@ -1136,7 +1118,7 @@ static int add_object_entry_from_bitmap(const struct object_id *oid,
 	if (have_duplicate_entry(oid, 0, &index_pos))
 		return 0;
 
-	if (ignore_object(oid, 0, &pack, &offset))
+	if (!want_object_in_pack(oid, 0, &pack, &offset))
 		return 0;
 
 	create_object_entry(oid, type, name_hash, 0, 0, index_pos, pack, offset);
@@ -2582,6 +2564,42 @@ static void show_object(struct object *obj, const char *name, void *data)
 	obj->flags |= OBJECT_ADDED;
 }
 
+static void show_object__ma_allow_any(struct object *obj, const char *name, void *data)
+{
+	assert(arg_missing_action == MA_ALLOW_ANY);
+
+	/*
+	 * Quietly ignore ALL missing objects.  This avoids problems with
+	 * staging them now and getting an odd error later.
+	 */
+	if (!has_object_file(&obj->oid))
+		return;
+
+	show_object(obj, name, data);
+}
+
+static int option_parse_missing_action(const struct option *opt,
+				       const char *arg, int unset)
+{
+	assert(arg);
+	assert(!unset);
+
+	if (!strcmp(arg, "error")) {
+		arg_missing_action = MA_ERROR;
+		fn_show_object = show_object;
+		return 0;
+	}
+
+	if (!strcmp(arg, "allow-any")) {
+		arg_missing_action = MA_ALLOW_ANY;
+		fn_show_object = show_object__ma_allow_any;
+		return 0;
+	}
+
+	die(_("invalid value for --missing"));
+	return 0;
+}
+
 static void show_edge(struct commit *commit)
 {
 	add_preferred_base(&commit->object.oid);
@@ -2846,7 +2864,12 @@ static void get_object_list(int ac, const char **av)
 	if (prepare_revision_walk(&revs))
 		die("revision walk setup failed");
 	mark_edges_uninteresting(&revs, show_edge);
-	traverse_commit_list(&revs, show_commit, show_object, NULL);
+
+	if (!fn_show_object)
+		fn_show_object = show_object;
+	traverse_commit_list_filtered(&filter_options, &revs,
+				      show_commit, fn_show_object, NULL,
+				      NULL);
 
 	if (unpack_unreachable_expiration) {
 		revs.ignore_missing_links = 1;
@@ -2982,10 +3005,10 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			 N_("use a bitmap index if available to speed up counting objects")),
 		OPT_BOOL(0, "write-bitmap-index", &write_bitmap_index,
 			 N_("write a bitmap index together with the pack index")),
-		OPT_BOOL(0, "exclude-promisor-objects", &exclude_promisor_objects,
-			 N_("do not pack objects in promisor packfiles")),
-		OPT_MAGNITUDE(0, "blob-max-bytes", &blob_max_bytes,
-			      N_("exclude blobs larger than this")),
+		OPT_PARSE_LIST_OBJECTS_FILTER(&filter_options),
+		{ OPTION_CALLBACK, 0, "missing", NULL, N_("action"),
+		  N_("handling for missing objects"), PARSE_OPT_NONEG,
+		  option_parse_missing_action },
 		OPT_END(),
 	};
 
@@ -3031,12 +3054,6 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 		argv_array_push(&rp, "--unpacked");
 	}
 
-	if (exclude_promisor_objects) {
-		use_internal_rev_list = 1;
-		fetch_if_missing = 0;
-		argv_array_push(&rp, "--exclude-promisor-objects");
-	}
-
 	if (!reuse_object)
 		reuse_delta = 0;
 	if (pack_compression_level == -1)
@@ -3068,6 +3085,12 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 	if (!rev_list_all || !rev_list_reflog || !rev_list_index)
 		unpack_unreachable_expiration = 0;
 
+	if (filter_options.choice) {
+		if (!pack_to_stdout)
+			die("cannot use --filter without --stdout.");
+		use_bitmap_index = 0;
+	}
+
 	/*
 	 * "soft" reasons not to use bitmaps - for on-disk repack by default we want
 	 *
@@ -3084,8 +3107,7 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 		use_bitmap_index = use_bitmap_index_default;
 
 	/* "hard" reasons not to use bitmaps; these just won't work at all */
-	if (!use_internal_rev_list || (!pack_to_stdout && write_bitmap_index) ||
-	    is_repository_shallow() || (blob_max_bytes >= 0))
+	if (!use_internal_rev_list || (!pack_to_stdout && write_bitmap_index) || is_repository_shallow())
 		use_bitmap_index = 0;
 
 	if (pack_to_stdout || !rev_list_all)

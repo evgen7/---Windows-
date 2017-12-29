@@ -6,15 +6,11 @@
 #include "gettext.h"
 #include "strbuf.h"
 #include "utf8.h"
-#include "cache.h"
-#include "exec_cmd.h"
 
 #ifndef NO_GETTEXT
 #	include <locale.h>
 #	include <libintl.h>
-#	ifdef GIT_WINDOWS_NATIVE
-#		define locale_charset() "UTF-8"
-#	elif defined HAVE_LIBCHARSET_H
+#	ifdef HAVE_LIBCHARSET_H
 #		include <libcharset.h>
 #	else
 #		include <langinfo.h>
@@ -162,22 +158,14 @@ static void init_gettext_charset(const char *domain)
 void git_setup_gettext(void)
 {
 	const char *podir = getenv("GIT_TEXTDOMAINDIR");
-	char *p = NULL;
 
 	if (!podir)
 		podir = GIT_LOCALE_PATH;
-	if (!is_absolute_path(podir))
-		podir = p = system_path(podir);
-
-	if (is_directory(podir)) {
-		bindtextdomain("git", podir);
-		setlocale(LC_MESSAGES, "");
-		setlocale(LC_TIME, "");
-		init_gettext_charset("git");
-		textdomain("git");
-	}
-
-	free(p);
+	bindtextdomain("git", podir);
+	setlocale(LC_MESSAGES, "");
+	setlocale(LC_TIME, "");
+	init_gettext_charset("git");
+	textdomain("git");
 }
 
 /* return the number of columns of string 's' in current locale */

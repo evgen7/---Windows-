@@ -126,7 +126,7 @@ int peel_ref(const char *refname, struct object_id *oid);
 /**
  * Resolve refname in the nested "gitlink" repository in the specified
  * submodule (which must be non-NULL). If the resolution is
- * successful, return 0 and set sha1 to the name of the object;
+ * successful, return 0 and set oid to the name of the object;
  * otherwise, return a non-zero value.
  */
 int resolve_gitlink_ref(const char *submodule, const char *refname,
@@ -260,7 +260,7 @@ struct ref_transaction;
 
 /*
  * The signature for the callback function for the for_each_*()
- * functions below.  The memory pointed to by the refname and sha1
+ * functions below.  The memory pointed to by the refname and oid
  * arguments is only guaranteed to be valid for the duration of a
  * single callback invocation.
  */
@@ -312,6 +312,30 @@ int for_each_namespaced_ref(each_ref_fn fn, void *cb_data);
 int refs_for_each_rawref(struct ref_store *refs, each_ref_fn fn, void *cb_data);
 int for_each_rawref(each_ref_fn fn, void *cb_data);
 
+/*
+ * Normalizes partial refs to their fully qualified form.
+ * Will prepend <prefix> to the <pattern> if it doesn't start with 'refs/'.
+ * <prefix> will default to 'refs/' if NULL.
+ *
+ * item.string will be set to the result.
+ * item.util will be set to NULL if <pattern> contains glob characters, or
+ * non-NULL if it doesn't.
+ */
+void normalize_glob_ref(struct string_list_item *item, const char *prefix,
+			const char *pattern);
+
+/*
+ * Returns 0 if refname matches any of the exclude_patterns, or if it doesn't
+ * match any of the include_patterns. Returns 1 otherwise.
+ *
+ * If pattern list is NULL or empty, matching against that list is skipped.
+ * This has the effect of matching everything by default, unless the user
+ * specifies rules otherwise.
+ */
+int ref_filter_match(const char *refname,
+		     const struct string_list *include_patterns,
+		     const struct string_list *exclude_patterns);
+
 static inline const char *has_glob_specials(const char *pattern)
 {
 	return strpbrk(pattern, "?*[");
@@ -354,7 +378,7 @@ int reflog_exists(const char *refname);
 
 /*
  * Delete the specified reference. If old_oid is non-NULL, then
- * verify that the current value of the reference is old_sha1 before
+ * verify that the current value of the reference is old_oid before
  * deleting it. If old_oid is NULL, delete the reference if it
  * exists, regardless of its old value. It is an error for old_oid to
  * be null_oid. msg and flags are passed through to
@@ -462,13 +486,13 @@ struct ref_transaction *ref_transaction_begin(struct strbuf *err);
  *
  *     refname -- the name of the reference to be affected.
  *
- *     new_oid -- the SHA-1 that should be set to be the new value of
- *         the reference. Some functions allow this parameter to be
+ *     new_oid -- the object ID that should be set to be the new value
+ *         of the reference. Some functions allow this parameter to be
  *         NULL, meaning that the reference is not changed, or
  *         null_oid, meaning that the reference should be deleted. A
  *         copy of this value is made in the transaction.
  *
- *     old_oid -- the SHA-1 value that the reference must have before
+ *     old_oid -- the object ID that the reference must have before
  *         the update. Some functions allow this parameter to be NULL,
  *         meaning that the old value of the reference is not checked,
  *         or null_oid, meaning that the reference must not exist
@@ -633,7 +657,7 @@ int ref_transaction_abort(struct ref_transaction *transaction,
  * It is a bug to call this function when there might be other
  * processes accessing the repository or if there are existing
  * references that might conflict with the ones being created. All
- * old_sha1 values must either be absent or NULL_SHA1.
+ * old_oid values must either be absent or null_oid.
  */
 int initial_ref_transaction_commit(struct ref_transaction *transaction,
 				   struct strbuf *err);

@@ -623,7 +623,7 @@ static void status_submodule(const char *path, const struct object_id *ce_oid,
 
 		if (refs_head_ref(get_submodule_ref_store(path),
 				  handle_submodule_head_ref, &oid))
-			die(_("could not resolve HEAD ref inside the"
+			die(_("could not resolve HEAD ref inside the "
 			      "submodule '%s'"), path);
 
 		print_status(flags, '+', path, &oid, displaypath);
@@ -1507,7 +1507,6 @@ static struct cmd_struct commands[] = {
 int cmd_submodule__helper(int argc, const char **argv, const char *prefix)
 {
 	int i;
-	git_config(git_default_config, NULL);
 	if (argc < 2 || !strcmp(argv[1], "-h"))
 		usage("git submodule--helper <command>");
 

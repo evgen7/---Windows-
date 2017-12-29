@@ -5,7 +5,7 @@
 
 /* The main repository */
 static struct repository the_repo = {
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &the_index, 0, 0
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &the_index, NULL, 0, 0
 };
 struct repository *the_repository = &the_repo;
 
@@ -141,7 +141,7 @@ int repo_init(struct repository *repo, const char *gitdir, const char *worktree)
 	if (read_and_verify_repository_format(&format, repo->commondir))
 		goto error;
 
-	repo->hash_algo = &hash_algos[format.hash_algo];
+	repo_set_hash_algo(repo, format.hash_algo);
 
 	if (worktree)
 		repo_set_worktree(repo, worktree);

@@ -9,20 +9,20 @@
 
 static int show_merge_base(struct commit **rev, int rev_nr, int show_all)
 {
-	struct commit_list *result;
+	struct commit_list *result, *r;
 
 	result = get_merge_bases_many_dirty(rev[0], rev_nr - 1, rev + 1);
 
 	if (!result)
 		return 1;
 
-	while (result) {
-		printf("%s\n", oid_to_hex(&result->item->object.oid));
+	for (r = result; r; r = r->next) {
+		printf("%s\n", oid_to_hex(&r->item->object.oid));
 		if (!show_all)
-			return 0;
-		result = result->next;
+			break;
 	}
 
+	free_commit_list(result);
 	return 0;
 }
 
@@ -51,30 +51,28 @@ static struct commit *get_commit_reference(const char *arg)
 
 static int handle_independent(int count, const char **args)
 {
-	struct commit_list *revs = NULL;
-	struct commit_list *result;
+	struct commit_list *revs = NULL, *rev;
 	int i;
 
 	for (i = count - 1; i >= 0; i--)
 		commit_list_insert(get_commit_reference(args[i]), &revs);
 
-	result = reduce_heads(revs);
-	free_commit_list(revs);
+	reduce_heads_replace(&revs);
 
-	if (!result)
+	if (!revs)
 		return 1;
 
-	while (result) {
-		printf("%s\n", oid_to_hex(&result->item->object.oid));
-		result = result->next;
-	}
+	for (rev = revs; rev; rev = rev->next)
+		printf("%s\n", oid_to_hex(&rev->item->object.oid));
+
+	free_commit_list(revs);
 	return 0;
 }
 
 static int handle_octopus(int count, const char **args, int show_all)
 {
 	struct commit_list *revs = NULL;
-	struct commit_list *result;
+	struct commit_list *result, *rev;
 	int i;
 
 	for (i = count - 1; i >= 0; i--)
@@ -87,13 +85,13 @@ static int handle_octopus(int count, const char **args, int show_all)
 	if (!result)
 		return 1;
 
-	while (result) {
-		printf("%s\n", oid_to_hex(&result->item->object.oid));
+	for (rev = result; rev; rev = rev->next) {
+		printf("%s\n", oid_to_hex(&rev->item->object.oid));
 		if (!show_all)
-			return 0;
-		result = result->next;
+			break;
 	}
 
+	free_commit_list(result);
 	return 0;
 }
 
@@ -178,7 +176,7 @@ static int handle_fork_point(int argc, const char **argv)
 	revs.initial = 1;
 	for_each_reflog_ent(refname, collect_one_reflog_ent, &revs);
 
-	if (!get_oid(refname, &oid))
+	if (!revs.nr && !get_oid(refname, &oid))
 		add_one_commit(&oid, &revs);
 
 	for (i = 0; i < revs.nr; i++)
@@ -190,11 +188,23 @@ static int handle_fork_point(int argc, const char **argv)
 	 * There should be one and only one merge base, when we found
 	 * a common ancestor among reflog entries.
 	 */
-	if (!bases || bases->next)
+	if (!bases || bases->next) {
 		ret = 1;
-	else
-		printf("%s\n", oid_to_hex(&bases->item->object.oid));
+		goto cleanup_return;
+	}
 
+	/* And the found one must be one of the reflog entries */
+	for (i = 0; i < revs.nr; i++)
+		if (&bases->item->object == &revs.commit[i]->object)
+			break; /* found */
+	if (revs.nr <= i) {
+		ret = 1; /* not found */
+		goto cleanup_return;
+	}
+
+	printf("%s\n", oid_to_hex(&bases->item->object.oid));
+
+cleanup_return:
 	free_commit_list(bases);
 	return ret;
 }

@@ -18,8 +18,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "cache.h"
@@ -684,7 +683,7 @@ static int parse_response_code(struct imap_store *ctx, struct imap_cmd_cb *cb,
 	struct imap *imap = ctx->imap;
 	char *arg, *p;
 
-	if (*s != '[')
+	if (!s || *s != '[')
 		return RESP_OK;		/* no response code */
 	s++;
 	if (!(p = strchr(s, ']'))) {
@@ -693,6 +692,10 @@ static int parse_response_code(struct imap_store *ctx, struct imap_cmd_cb *cb,
 	}
 	*p++ = 0;
 	arg = next_arg(&s);
+	if (!arg) {
+		fprintf(stderr, "IMAP error: empty response code\n");
+		return RESP_BAD;
+	}
 	if (!strcmp("UIDVALIDITY", arg)) {
 		if (!(arg = next_arg(&s)) || !(ctx->uidvalidity = atoi(arg))) {
 			fprintf(stderr, "IMAP error: malformed UIDVALIDITY status\n");
@@ -725,7 +728,8 @@ static int get_cmd_result(struct imap_store *ctx, struct imap_cmd *tcmd)
 {
 	struct imap *imap = ctx->imap;
 	struct imap_cmd *cmdp, **pcmdp;
-	char *cmd, *arg, *arg1;
+	char *cmd;
+	const char *arg, *arg1;
 	int n, resp, resp2, tag;
 
 	for (;;) {
@@ -733,6 +737,10 @@ static int get_cmd_result(struct imap_store *ctx, struct imap_cmd *tcmd)
 			return RESP_BAD;
 
 		arg = next_arg(&cmd);
+		if (!arg) {
+			fprintf(stderr, "IMAP error: empty response\n");
+			return RESP_BAD;
+		}
 		if (*arg == '*') {
 			arg = next_arg(&cmd);
 			if (!arg) {
@@ -807,6 +815,8 @@ static int get_cmd_result(struct imap_store *ctx, struct imap_cmd *tcmd)
 			if (cmdp->cb.cont || cmdp->cb.data)
 				imap->literal_pending = 0;
 			arg = next_arg(&cmd);
+			if (!arg)
+				arg = "";
 			if (!strcmp("OK", arg))
 				resp = DRV_OK;
 			else {
@@ -1402,6 +1412,7 @@ static CURL *setup_curl(struct imap_server_conf *srvc, struct credential *cred)
 {
 	CURL *curl;
 	struct strbuf path = STRBUF_INIT;
+	char *uri_encoded_folder;
 
 	if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK)
 		die("curl_global_init failed");
@@ -1419,7 +1430,12 @@ static CURL *setup_curl(struct imap_server_conf *srvc, struct credential *cred)
 	strbuf_addstr(&path, server.host);
 	if (!path.len || path.buf[path.len - 1] != '/')
 		strbuf_addch(&path, '/');
-	strbuf_addstr(&path, server.folder);
+
+	uri_encoded_folder = curl_easy_escape(curl, server.folder, 0);
+	if (!uri_encoded_folder)
+		die("failed to encode server folder");
+	strbuf_addstr(&path, uri_encoded_folder);
+	curl_free(uri_encoded_folder);
 
 	curl_easy_setopt(curl, CURLOPT_URL, path.buf);
 	strbuf_release(&path);

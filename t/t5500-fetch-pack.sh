@@ -647,21 +647,12 @@ do
 	# file with scheme
 	for p in file
 	do
-		test_expect_success !MINGW "fetch-pack --diag-url $p://$h/$r" '
+		test_expect_success "fetch-pack --diag-url $p://$h/$r" '
 			check_prot_path $p://$h/$r $p "/$r"
 		'
-		test_expect_success MINGW "fetch-pack --diag-url $p://$h/$r" '
-			check_prot_path $p://$h/$r $p "//$h/$r"
-		'
-		test_expect_success MINGW "fetch-pack --diag-url $p:///$r" '
-			check_prot_path $p:///$r $p "/$r"
-		'
 		# No "/~" -> "~" conversion for file
-		test_expect_success !MINGW "fetch-pack --diag-url $p://$h/~$r" '
+		test_expect_success "fetch-pack --diag-url $p://$h/~$r" '
 			check_prot_path $p://$h/~$r $p "/~$r"
-		'
-		test_expect_success MINGW "fetch-pack --diag-url $p://$h/~$r" '
-			check_prot_path $p://$h/~$r $p "//$h/~$r"
 		'
 	done
 	# file without scheme
@@ -763,120 +754,5 @@ test_expect_success 'fetching deepen' '
 	test_cmp expected actual
 	)
 '
-
-test_expect_success '--blob-max-bytes' '
-	rm -rf server client &&
-	test_create_repo server &&
-	test_commit -C server one &&
-	test_config -C server uploadpack.advertiseblobmaxbytes 1 &&
-
-	test_create_repo client &&
-	git -C client fetch-pack --blob-max-bytes=0 ../server HEAD &&
-
-	# Ensure that object is not inadvertently fetched
-	test_must_fail git -C client cat-file -e $(git hash-object server/one.t)
-'
-
-test_expect_success '--blob-max-bytes has no effect if support for it is not advertised' '
-	rm -rf server client &&
-	test_create_repo server &&
-	test_commit -C server one &&
-
-	test_create_repo client &&
-	git -C client fetch-pack --blob-max-bytes=0 ../server HEAD 2> err &&
-
-	# Ensure that object is fetched
-	git -C client cat-file -e $(git hash-object server/one.t) &&
-
-	test_i18ngrep "blob-max-bytes not recognized by server" err
-'
-
-setup_blob_max_bytes () {
-	SERVER="$1" &&
-	URL="$2" &&
-
-	rm -rf "$SERVER" client &&
-	test_create_repo "$SERVER" &&
-	test_commit -C "$SERVER" one &&
-	test_config -C "$SERVER" uploadpack.advertiseblobmaxbytes 1 &&
-
-	git clone "$URL" client &&
-	test_config -C client extensions.partialclone origin &&
-
-	test_commit -C "$SERVER" two
-}
-
-do_blob_max_bytes() {
-	SERVER="$1" &&
-
-	git -C client fetch --blob-max-bytes=0 origin HEAD:somewhere &&
-
-	# Ensure that commit is fetched, but blob is not
-	test_config -C client extensions.partialclone "arbitrary string" &&
-	git -C client cat-file -e $(git -C "$SERVER" rev-parse two) &&
-	test_must_fail git -C client cat-file -e $(git hash-object "$SERVER/two.t")
-}
-
-test_expect_success 'fetch with --blob-max-bytes' '
-	setup_blob_max_bytes server server &&
-	do_blob_max_bytes server
-'
-
-test_expect_success 'fetch respects configured blobmaxbytes' '
-	setup_blob_max_bytes server server &&
-
-	test_config -C client remote.origin.blobmaxbytes 0 &&
-
-	git -C client fetch origin HEAD:somewhere &&
-
-	# Ensure that commit is fetched, but blob is not
-	test_config -C client extensions.partialclone "arbitrary string" &&
-	git -C client cat-file -e $(git -C server rev-parse two) &&
-	test_must_fail git -C client cat-file -e $(git hash-object server/two.t)
-'
-
-test_expect_success 'pull respects configured blobmaxbytes' '
-	setup_blob_max_bytes server server &&
-
-	# Hide two.t from tip so that client does not load it upon the
-	# automatic checkout that pull performs
-	git -C server rm two.t &&
-	test_commit -C server three &&
-
-	test_config -C server uploadpack.allowanysha1inwant 1 &&
-	test_config -C client remote.origin.blobmaxbytes 0 &&
-
-	git -C client pull origin &&
-
-	# Ensure that commit is fetched, but blob is not
-	test_config -C client extensions.partialclone "arbitrary string" &&
-	git -C client cat-file -e $(git -C server rev-parse two) &&
-	test_must_fail git -C client cat-file -e $(git hash-object server/two.t)
-'
-
-test_expect_success 'clone configures blobmaxbytes' '
-	rm -rf server client &&
-	test_create_repo server &&
-	test_commit -C server one &&
-	test_commit -C server two &&
-	test_config -C server uploadpack.allowanysha1inwant 1 &&
-
-	git clone --blob-max-bytes=12345 server client &&
-
-	# Ensure that we can, for example, checkout HEAD^
-	rm -rf client/.git/objects/* &&
-	git -C client checkout HEAD^
-'
-
-. "$TEST_DIRECTORY"/lib-httpd.sh
-start_httpd
-
-test_expect_success 'fetch with --blob-max-bytes and HTTP' '
-	setup_blob_max_bytes "$HTTPD_DOCUMENT_ROOT_PATH/server" "$HTTPD_URL/smart/server" &&
-	do_blob_max_bytes "$HTTPD_DOCUMENT_ROOT_PATH/server"
-'
-
-stop_httpd
-
 
 test_done

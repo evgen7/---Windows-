@@ -12,7 +12,7 @@
 #include "builtin.h"
 #include "notes.h"
 #include "blob.h"
-#include "commit.h"
+#include "pretty.h"
 #include "refs.h"
 #include "exec_cmd.h"
 #include "run-command.h"
@@ -33,7 +33,7 @@ static const char * const git_notes_usage[] = {
 	N_("git notes merge --commit [-v | -q]"),
 	N_("git notes merge --abort [-v | -q]"),
 	N_("git notes [--ref <notes-ref>] remove [<object>...]"),
-	N_("git notes [--ref <notes-ref>] prune [-n | -v]"),
+	N_("git notes [--ref <notes-ref>] prune [-n] [-v]"),
 	N_("git notes [--ref <notes-ref>] get-ref"),
 	NULL
 };
@@ -865,10 +865,10 @@ static int merge(int argc, const char **argv, const char *prefix)
 		if (create_symref("NOTES_MERGE_REF", default_notes_ref(), NULL))
 			die(_("failed to store link to current notes ref (%s)"),
 			    default_notes_ref());
-		printf(_("Automatic notes merge failed. Fix conflicts in %s and "
-			 "commit the result with 'git notes merge --commit', or "
-			 "abort the merge with 'git notes merge --abort'.\n"),
-		       git_path(NOTES_MERGE_WORKTREE));
+		fprintf(stderr, _("Automatic notes merge failed. Fix conflicts in %s "
+				  "and commit the result with 'git notes merge --commit', "
+				  "or abort the merge with 'git notes merge --abort'.\n"),
+			git_path(NOTES_MERGE_WORKTREE));
 	}
 
 	free_notes(t);

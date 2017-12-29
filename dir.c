@@ -805,9 +805,8 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 	size_t size = 0;
 	char *buf;
 
-	if (is_fscache_enabled() && lstat(fname, &st) < 0)
-		return -1;
-	if ((fd = open(fname, O_RDONLY)) < 0 || fstat(fd, &st) < 0) {
+	fd = open(fname, O_RDONLY);
+	if (fd < 0 || fstat(fd, &st) < 0) {
 		if (fd < 0)
 			warn_on_fopen_errors(fname);
 		else

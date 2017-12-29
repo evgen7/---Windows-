@@ -441,6 +441,7 @@ struct process_commit_data {
 	struct object_id current_commit;
 	struct object_id looking_for;
 	struct strbuf *dst;
+	struct rev_info *revs;
 };
 
 static void process_commit(struct commit *commit, void *data)
@@ -457,6 +458,8 @@ static void process_object(struct object *obj, const char *path, void *data)
 		reset_revision_walk();
 		describe_commit(&pcd->current_commit, pcd->dst);
 		strbuf_addf(pcd->dst, ":%s", path);
+		free_commit_list(pcd->revs->commits);
+		pcd->revs->commits = NULL;
 	}
 }
 
@@ -464,14 +467,10 @@ static void describe_blob(struct object_id oid, struct strbuf *dst)
 {
 	struct rev_info revs;
 	struct argv_array args = ARGV_ARRAY_INIT;
-	struct process_commit_data pcd = { null_oid, oid, dst};
+	struct process_commit_data pcd = { null_oid, oid, dst, &revs};
 
 	argv_array_pushl(&args, "internal: The first arg is not parsed",
-		"--all", "--reflog", /* as many starting points as possible */
-		/* NEEDSWORK: --all is incompatible with worktrees for now: */
-		"--single-worktree",
-		"--objects",
-		"--in-commit-order",
+		"--objects", "--in-commit-order", "--reverse", "HEAD",
 		NULL);
 
 	init_revisions(&revs, NULL);
@@ -498,14 +497,12 @@ static void describe(const char *arg, int last_one)
 		die(_("Not a valid object name %s"), arg);
 	cmit = lookup_commit_reference_gently(&oid, 1);
 
-	if (cmit) {
+	if (cmit)
 		describe_commit(&oid, &sb);
-	} else {
-		if (lookup_blob(&oid))
-			describe_blob(oid, &sb);
-		else
-			die(_("%s is neither a commit nor blob"), arg);
-	}
+	else if (lookup_blob(&oid))
+		describe_blob(oid, &sb);
+	else
+		die(_("%s is neither a commit nor blob"), arg);
 
 	puts(sb.buf);
 

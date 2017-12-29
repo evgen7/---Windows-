@@ -176,10 +176,11 @@ for "git add --no-all <pathspec>...", i.e. ignored removed files.
 	submodules).
 
 --renormalize::
-	Normalizes the line endings from CRLF to LF of tracked files.
-	This applies to files which are either "text" or "text=auto"
-	in .gitattributes (or core.autocrlf is true or input)
-	--renormalize implies -u
+	Apply the "clean" process freshly to all tracked files to
+	forcibly add them again to the index.  This is useful after
+	changing `core.autocrlf` configuration or the `text` attribute
+	in order to correct files added with wrong CRLF/LF line endings.
+	This option implies `-u`.
 
 --chmod=(+|-)x::
 	Override the executable bit of the added files.  The executable

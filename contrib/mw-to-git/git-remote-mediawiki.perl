@@ -264,14 +264,15 @@ sub get_mw_tracked_categories {
 sub get_mw_tracked_namespaces {
     my $pages = shift;
     foreach my $local_namespace (sort @tracked_namespaces) {
-        my ($namespace_id, $mw_pages);
+        my $namespace_id;
         if ($local_namespace eq "(Main)") {
             $namespace_id = 0;
         } else {
             $namespace_id = get_mw_namespace_id($local_namespace);
         }
-        next if $namespace_id < 0; # virtual namespaces don't support allpages
-        $mw_pages = $mediawiki->list( {
+        # virtual namespaces don't support allpages
+        next if !defined($namespace_id) || $namespace_id < 0;
+        my $mw_pages = $mediawiki->list( {
             action => 'query',
             list => 'allpages',
             apnamespace => $namespace_id,
@@ -1342,8 +1343,7 @@ sub get_mw_namespace_id {
 	my $id;
 
 	if (!defined $ns) {
-		my @namespaces = sort keys %namespace_id;
-		for (@namespaces) { s/ /_/g; }
+		my @namespaces = map { s/ /_/g; $_; } sort keys %namespace_id;
 		print {*STDERR} "No such namespace ${name} on MediaWiki, known namespaces: @namespaces\n";
 		$ns = {is_namespace => 0};
 		$namespace_id{$name} = $ns;

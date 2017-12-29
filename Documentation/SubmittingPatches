@@ -65,7 +65,7 @@ differs substantially from the prior version, are all good things
 to have.
 
 Make sure that you have tests for the bug you are fixing.  See
-'t/README' for guidance.
+`t/README` for guidance.
 
 [[tests]]
 When adding a new feature, make sure that you have new tests to show
@@ -95,7 +95,7 @@ patches separate from other documentation changes.
 [[whitespace-check]]
 Oh, another thing.  We are picky about whitespaces.  Make sure your
 changes do not trigger errors with the sample pre-commit hook shipped
-in templates/hooks{litdd}pre-commit.  To help ensure this does not happen,
+in `templates/hooks--pre-commit`.  To help ensure this does not happen,
 run `git diff --check` on your changes before you commit.
 
 [[describe-changes]]
@@ -169,14 +169,12 @@ Please make sure your patch does not add commented out debugging code,
 or include any extra files which do not relate to what your patch
 is trying to achieve. Make sure to review
 your patch after generating it, to ensure accuracy.  Before
-sending out, please make sure it cleanly applies to the "master"
+sending out, please make sure it cleanly applies to the `master`
 branch head.  If you are preparing a work based on "next" branch,
 that is fine, but please mark it as such.
 
 [[send-patches]]
 === Sending your patches.
-:1: footnote:[The current maintainer: gitster@pobox.com]
-:2: footnote:[The mailing list: git@vger.kernel.org]
 
 Learn to use format-patch and send-email if possible.  These commands
 are optimized for the workflow of sending patches, avoiding many ways
@@ -205,14 +203,15 @@ lose tabs that way if you are not careful.
 
 It is a common convention to prefix your subject line with
 [PATCH].  This lets people easily distinguish patches from other
-e-mail discussions.  Use of additional markers after PATCH and
-the closing bracket to mark the nature of the patch is also
-encouraged.  E.g. [PATCH/RFC] is often used when the patch is
-not ready to be applied but it is for discussion, [PATCH v2],
-[PATCH v3] etc. are often seen when you are sending an update to
-what you have previously sent.
+e-mail discussions.  Use of markers in addition to PATCH within
+the brackets to describe the nature of the patch is also
+encouraged.  E.g. [RFC PATCH] (where RFC stands for "request for
+comments") is often used to indicate a patch needs further
+discussion before being accepted, [PATCH v2], [PATCH v3] etc.
+are often seen when you are sending an update to what you have
+previously sent.
 
-`git format-patch` command follows the best current practice to
+The `git format-patch` command follows the best current practice to
 format the body of an e-mail message.  At the beginning of the
 patch should come your commit message, ending with the
 Signed-off-by: lines, and a line that consists of three dashes,
@@ -220,6 +219,10 @@ followed by the diffstat information and the patch itself.  If
 you are forwarding a patch from somebody else, optionally, at
 the beginning of the e-mail message just before the commit
 message starts, you can put a "From: " line to name that person.
+To change the default "[PATCH]" in the subject to "[<text>]", use
+`git format-patch --subject-prefix=<text>`.  As a shortcut, you
+can use `--rfc` instead of `--subject-prefix="RFC PATCH"`, or
+`-v <n>` instead of `--subject-prefix="PATCH v<n>"`.
 
 You often want to add additional explanation about the patch,
 other than the commit message itself.  Place such "cover letter"
@@ -261,12 +264,15 @@ people who are involved in the area you are touching (the output from
 +git blame _$path_+ and +git shortlog {litdd}no-merges _$path_+ would help to
 identify them), to solicit comments and reviews.
 
+:1: footnote:[The current maintainer: gitster@pobox.com]
+:2: footnote:[The mailing list: git@vger.kernel.org]
+
 After the list reached a consensus that it is a good idea to apply the
 patch, re-send it with "To:" set to the maintainer{1} and "cc:" the
 list{2} for inclusion.
 
-Do not forget to add trailers such as "Acked-by:", "Reviewed-by:" and
-"Tested-by:" lines as necessary to credit people who helped your
+Do not forget to add trailers such as `Acked-by:`, `Reviewed-by:` and
+`Tested-by:` lines as necessary to credit people who helped your
 patch.
 
 [[sign-off]]
@@ -332,15 +338,15 @@ don't hide your real name.
 [[commit-trailers]]
 If you like, you can put extra tags at the end:
 
-. "Reported-by:" is used to credit someone who found the bug that
+. `Reported-by:` is used to credit someone who found the bug that
   the patch attempts to fix.
-. "Acked-by:" says that the person who is more familiar with the area
+. `Acked-by:` says that the person who is more familiar with the area
   the patch attempts to modify liked the patch.
-. "Reviewed-by:", unlike the other tags, can only be offered by the
+. `Reviewed-by:`, unlike the other tags, can only be offered by the
   reviewer and means that she is completely satisfied that the patch
   is ready for application.  It is usually offered only after a
   detailed review.
-. "Tested-by:" is used to indicate that the person applied the patch
+. `Tested-by:` is used to indicate that the person applied the patch
   and found it to have the desired effect.
 
 You can also create your own tag or use one that's in common usage
@@ -490,9 +496,9 @@ was introduced in 4.60.
 
 (Linus Torvalds)
 
+....
 And 4.58 needs at least this.
 
-....
 diff-tree 8326dd8350be64ac7fc805f6563a1d61ad10d32c (from e886a61f76edf5410573e92e38ce22974f9c40f1)
 Author: Linus Torvalds <torvalds@g5.osdl.org>
 Date:   Mon Aug 15 17:23:51 2005 -0700

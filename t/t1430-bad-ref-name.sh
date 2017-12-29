@@ -354,4 +354,24 @@ test_expect_success 'branch -d can remove refs/heads/HEAD' '
 	test_must_fail git show-ref refs/heads/HEAD
 '
 
+test_expect_success 'branch -m can rename refs/heads/HEAD' '
+	git update-ref refs/heads/HEAD HEAD^ &&
+	git branch -m HEAD tail &&
+	test_must_fail git show-ref refs/heads/HEAD &&
+	git show-ref refs/heads/tail
+'
+
+test_expect_success 'branch -d can remove refs/heads/-dash' '
+	git update-ref refs/heads/-dash HEAD^ &&
+	git branch -d -- -dash &&
+	test_must_fail git show-ref refs/heads/-dash
+'
+
+test_expect_success 'branch -m can rename refs/heads/-dash' '
+	git update-ref refs/heads/-dash HEAD^ &&
+	git branch -m -- -dash dash &&
+	test_must_fail git show-ref refs/heads/-dash &&
+	git show-ref refs/heads/dash
+'
+
 test_done

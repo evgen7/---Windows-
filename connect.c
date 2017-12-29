@@ -582,12 +582,25 @@ static int git_tcp_connect_sock(char *host, int flags)
 #endif /* NO_IPV6 */
 
 
-static void git_tcp_connect(int fd[2], char *host, int flags)
+/*
+ * Dummy child_process returned by git_connect() if the transport protocol
+ * does not need fork(2).
+ */
+static struct child_process no_fork = CHILD_PROCESS_INIT;
+
+int git_connection_is_socket(struct child_process *conn)
+{
+	return conn == &no_fork;
+}
+
+static struct child_process *git_tcp_connect(int fd[2], char *host, int flags)
 {
 	int sockfd = git_tcp_connect_sock(host, flags);
 
 	fd[0] = sockfd;
 	fd[1] = dup(sockfd);
+
+	return &no_fork;
 }
 
 
@@ -731,10 +744,6 @@ static enum protocol parse_connect_url(const char *url_orig, char **ret_host,
 
 	if (protocol == PROTO_LOCAL)
 		path = end;
-	else if (protocol == PROTO_FILE && *host != '/' &&
-		 !has_dos_drive_prefix(host) &&
-		 offset_1st_component(host - 2) > 1)
-		path = host - 2; /* include the leading "//" */
 	else if (protocol == PROTO_FILE && has_dos_drive_prefix(end))
 		path = end; /* "file://$(pwd)" may be "file://C:/projects/repo" */
 	else
@@ -764,8 +773,6 @@ static enum protocol parse_connect_url(const char *url_orig, char **ret_host,
 	free(url);
 	return protocol;
 }
-
-static struct child_process no_fork = CHILD_PROCESS_INIT;
 
 static const char *get_ssh_command(void)
 {
@@ -867,7 +874,7 @@ static struct child_process *git_connect_git(int fd[2], char *hostandport,
 					     const char *path, const char *prog,
 					     int flags)
 {
-	struct child_process *conn = &no_fork;
+	struct child_process *conn;
 	struct strbuf request = STRBUF_INIT;
 	/*
 	 * Set up virtual host information based on where we will
@@ -882,13 +889,14 @@ static struct child_process *git_connect_git(int fd[2], char *hostandport,
 
 	transport_check_allowed("git");
 
-	/* These underlying connection commands die() if they
+	/*
+	 * These underlying connection commands die() if they
 	 * cannot connect.
 	 */
 	if (git_use_proxy(hostandport))
 		conn = git_proxy_connect(fd, hostandport);
 	else
-		git_tcp_connect(fd, hostandport, flags);
+		conn = git_tcp_connect(fd, hostandport, flags);
 	/*
 	 * Separate original protocol components prog and path
 	 * from extended host header with a NUL byte.
@@ -915,9 +923,13 @@ static struct child_process *git_connect_git(int fd[2], char *hostandport,
 	return conn;
 }
 
+/*
+ * Append the appropriate environment variables to `env` and options to
+ * `args` for running ssh in Git's SSH-tunneled transport.
+ */
 static void push_ssh_options(struct argv_array *args, struct argv_array *env,
-			       enum ssh_variant variant, const char *port,
-			       int flags)
+			     enum ssh_variant variant, const char *port,
+			     int flags)
 {
 	if (variant == VARIANT_SSH &&
 	    get_protocol_version_config() > 0) {
@@ -1002,8 +1014,6 @@ static void fill_ssh_args(struct child_process *conn, const char *ssh_host,
 		variant = determine_ssh_variant(ssh, 0);
 	}
 
-	argv_array_push(&conn->args, ssh);
-
 	if (variant == VARIANT_AUTO) {
 		struct child_process detect = CHILD_PROCESS_INIT;
 
@@ -1019,16 +1029,17 @@ static void fill_ssh_args(struct child_process *conn, const char *ssh_host,
 		variant = run_command(&detect) ? VARIANT_SIMPLE : VARIANT_SSH;
 	}
 
+	argv_array_push(&conn->args, ssh);
 	push_ssh_options(&conn->args, &conn->env_array, variant, port, flags);
 	argv_array_push(&conn->args, ssh_host);
 }
 
 /*
- * This returns a dummy child_process if the transport protocol does not
- * need fork(2), or a struct child_process object if it does.  Once done,
- * finish the connection with finish_connect() with the value returned from
- * this function (it is safe to call finish_connect() with NULL to support
- * the former case).
+ * This returns the dummy child_process `no_fork` if the transport protocol
+ * does not need fork(2), or a struct child_process object if it does.  Once
+ * done, finish the connection with finish_connect() with the value returned
+ * from this function (it is safe to call finish_connect() with NULL to
+ * support the former case).
  *
  * If it returns, the connect is successful; it just dies on errors (this
  * will hopefully be changed in a libification effort, to return NULL when
@@ -1038,7 +1049,7 @@ struct child_process *git_connect(int fd[2], const char *url,
 				  const char *prog, int flags)
 {
 	char *hostandport, *path;
-	struct child_process *conn = &no_fork;
+	struct child_process *conn;
 	enum protocol protocol;
 
 	/* Without this we cannot rely on waitpid() to tell
@@ -1078,11 +1089,12 @@ struct child_process *git_connect(int fd[2], const char *url,
 		if (protocol == PROTO_SSH) {
 			char *ssh_host = hostandport;
 			const char *port = NULL;
-
 			transport_check_allowed("ssh");
 			get_host_and_port(&ssh_host, &port);
+
 			if (!port)
 				port = get_port(ssh_host);
+
 			if (flags & CONNECT_DIAG_URL) {
 				printf("Diag: url=%s\n", url ? url : "NULL");
 				printf("Diag: protocol=%s\n", prot_name(protocol));
@@ -1116,11 +1128,6 @@ struct child_process *git_connect(int fd[2], const char *url,
 	free(hostandport);
 	free(path);
 	return conn;
-}
-
-int git_connection_is_socket(struct child_process *conn)
-{
-	return conn == &no_fork;
 }
 
 int finish_connect(struct child_process *conn)

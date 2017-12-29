@@ -29,7 +29,6 @@
 #include "mergesort.h"
 #include "quote.h"
 #include "packfile.h"
-#include "fetch-object.h"
 
 const unsigned char null_sha1[GIT_MAX_RAWSZ];
 const struct object_id null_oid;
@@ -40,19 +39,34 @@ const struct object_id empty_blob_oid = {
 	EMPTY_BLOB_SHA1_BIN_LITERAL
 };
 
-static inline void git_hash_sha1_init(void *ctx)
+static void git_hash_sha1_init(void *ctx)
 {
 	git_SHA1_Init((git_SHA_CTX *)ctx);
 }
 
-static inline void git_hash_sha1_update(void *ctx, const void *data, size_t len)
+static void git_hash_sha1_update(void *ctx, const void *data, size_t len)
 {
 	git_SHA1_Update((git_SHA_CTX *)ctx, data, len);
 }
 
-static inline void git_hash_sha1_final(unsigned char *hash, void *ctx)
+static void git_hash_sha1_final(unsigned char *hash, void *ctx)
 {
 	git_SHA1_Final(hash, (git_SHA_CTX *)ctx);
+}
+
+static void git_hash_unknown_init(void *ctx)
+{
+	die("trying to init unknown hash");
+}
+
+static void git_hash_unknown_update(void *ctx, const void *data, size_t len)
+{
+	die("trying to update unknown hash");
+}
+
+static void git_hash_unknown_final(unsigned char *hash, void *ctx)
+{
+	die("trying to finalize unknown hash");
 }
 
 const struct git_hash_algo hash_algos[GIT_HASH_NALGOS] = {
@@ -62,9 +76,9 @@ const struct git_hash_algo hash_algos[GIT_HASH_NALGOS] = {
 		0,
 		0,
 		0,
-		NULL,
-		NULL,
-		NULL,
+		git_hash_unknown_init,
+		git_hash_unknown_update,
+		git_hash_unknown_final,
 		NULL,
 		NULL,
 	},
@@ -460,6 +474,9 @@ static void link_alt_odb_entries(const char *alt, int sep,
 	struct strbuf objdirbuf = STRBUF_INIT;
 	struct strbuf entry = STRBUF_INIT;
 
+	if (!alt || !*alt)
+		return;
+
 	if (depth > 5) {
 		error("%s: ignoring alternate object stores, nesting too deep.",
 				relative_base);
@@ -660,7 +677,6 @@ void prepare_alt_odb(void)
 		return;
 
 	alt = getenv(ALTERNATE_DB_ENVIRONMENT);
-	if (!alt) alt = "";
 
 	alt_odb_tail = &alt_odb_list;
 	link_alt_odb_entries(alt, PATH_SEP, NULL, 0);
@@ -1197,8 +1213,6 @@ static int sha1_loose_object_info(const unsigned char *sha1,
 	return (status < 0) ? status : 0;
 }
 
-int fetch_if_missing = 1;
-
 int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi, unsigned flags)
 {
 	static struct object_info blank_oi = OBJECT_INFO_INIT;
@@ -1207,7 +1221,9 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 	const unsigned char *real = (flags & OBJECT_INFO_LOOKUP_REPLACE) ?
 				    lookup_replace_object(sha1) :
 				    sha1;
-	int already_retried = 0;
+
+	if (is_null_sha1(real))
+		return -1;
 
 	if (!oi)
 		oi = &blank_oi;
@@ -1232,36 +1248,28 @@ int sha1_object_info_extended(const unsigned char *sha1, struct object_info *oi,
 		}
 	}
 
-retry:
-	if (find_pack_entry(real, &e))
-		goto found_packed;
+	if (!find_pack_entry(real, &e)) {
+		/* Most likely it's a loose object. */
+		if (!sha1_loose_object_info(real, oi, flags))
+			return 0;
 
-	/* Most likely it's a loose object. */
-	if (!sha1_loose_object_info(real, oi, flags))
-		return 0;
-
-	/* Not a loose object; someone else may have just packed it. */
-	reprepare_packed_git();
-	if (find_pack_entry(real, &e))
-		goto found_packed;
-
-	/* Check if it is a missing object */
-	if (fetch_if_missing && repository_format_partial_clone &&
-	    !already_retried) {
-		fetch_object(repository_format_partial_clone, real);
-		already_retried = 1;
-		goto retry;
+		/* Not a loose object; someone else may have just packed it. */
+		if (flags & OBJECT_INFO_QUICK) {
+			return -1;
+		} else {
+			reprepare_packed_git();
+			if (!find_pack_entry(real, &e))
+				return -1;
+		}
 	}
 
-	return -1;
-
-found_packed:
 	if (oi == &blank_oi)
 		/*
 		 * We know that the caller doesn't actually need the
 		 * information below, so return early.
 		 */
 		return 0;
+
 	rtype = packed_object_info(e.p, e.offset, oi);
 	if (rtype < 0) {
 		mark_bad_packed_object(e.p, real);
@@ -1956,7 +1964,6 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	origlen = path->len;
 	strbuf_complete(path, '/');
 	strbuf_addf(path, "%02x", subdir_nr);
-	baselen = path->len;
 
 	dir = opendir(path->buf);
 	if (!dir) {
@@ -1967,15 +1974,18 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	}
 
 	oid.hash[0] = subdir_nr;
+	strbuf_addch(path, '/');
+	baselen = path->len;
 
 	while ((de = readdir(dir))) {
+		size_t namelen;
 		if (is_dot_or_dotdot(de->d_name))
 			continue;
 
+		namelen = strlen(de->d_name);
 		strbuf_setlen(path, baselen);
-		strbuf_addf(path, "/%s", de->d_name);
-
-		if (strlen(de->d_name) == GIT_SHA1_HEXSZ - 2 &&
+		strbuf_add(path, de->d_name, namelen);
+		if (namelen == GIT_SHA1_HEXSZ - 2 &&
 		    !hex_to_bytes(oid.hash + 1, de->d_name,
 				  GIT_SHA1_RAWSZ - 1)) {
 			if (obj_cb) {
@@ -1994,7 +2004,7 @@ int for_each_file_in_obj_subdir(unsigned int subdir_nr,
 	}
 	closedir(dir);
 
-	strbuf_setlen(path, baselen);
+	strbuf_setlen(path, baselen - 1);
 	if (!r && subdir_cb)
 		r = subdir_cb(subdir_nr, path->buf, data);
 

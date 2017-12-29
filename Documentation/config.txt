@@ -6,9 +6,7 @@ the Git commands' behavior. The `.git/config` file in each repository
 is used to store the configuration for that repository, and
 `$HOME/.gitconfig` is used to store a per-user configuration as
 fallback values for the `.git/config` file. The file `/etc/gitconfig`
-can be used to store a system-wide default configuration. On Windows,
-configuration can also be stored in `C:\ProgramData\Git\config`; This
-file will be used also by libgit2-based software.
+can be used to store a system-wide default configuration.
 
 The configuration variables are used by both the Git plumbing
 and the porcelains. The variables are divided into sections, wherein
@@ -356,6 +354,9 @@ advice.*::
 	ignoredHook::
 		Advice shown if an hook is ignored because the hook is not
 		set as executable.
+	waitingForEditor::
+		Print a message to the terminal whenever Git is waiting for
+		editor input from the user.
 --
 
 core.fileMode::
@@ -877,25 +878,6 @@ relatively high IO latencies.  When enabled, Git will do the
 index comparison to the filesystem data in parallel, allowing
 overlapping IO's.  Defaults to true.
 
-core.fscache::
-	Enable additional caching of file system data for some operations.
-+
-Git for Windows uses this to bulk-read and cache lstat data of entire
-directories (instead of doing lstat file by file).
-
-core.longpaths::
-	Enable long path (> 260) support for builtin commands in Git for
-	Windows. This is disabled by default, as long paths are not supported
-	by Windows Explorer, cmd.exe and the Git for Windows tool chain
-	(msys, bash, tcl, perl...). Only enable this if you know what you're
-	doing and are prepared to live with a few quirks.
-
-core.unsetenvvars::
-	EXPERIMENTAL, Windows-only: comma-separated list of environment
-	variables' names that need to be unset before spawning any other
-	process. Defaults to `PERL5LIB` to account for the fact that Git
-	for Windows insists on using its own Perl interpreter.
-
 core.createObject::
 	You can set this to 'link', in which case a hardlink followed by
 	a delete of the source are used to make sure that object creation
@@ -979,6 +961,23 @@ apply.ignoreWhitespace::
 apply.whitespace::
 	Tells 'git apply' how to handle whitespaces, in the same way
 	as the `--whitespace` option. See linkgit:git-apply[1].
+
+blame.showRoot::
+	Do not treat root commits as boundaries in linkgit:git-blame[1].
+	This option defaults to false.
+
+blame.blankBoundary::
+	Show blank commit object name for boundary commits in
+	linkgit:git-blame[1]. This option defaults to false.
+
+blame.showEmail::
+	Show the author email instead of author name in linkgit:git-blame[1].
+	This option defaults to false.
+
+blame.date::
+	Specifies the format used to output dates in linkgit:git-blame[1].
+	If unset the iso format is used. For supported values,
+	see the discussion of the `--date` option at linkgit:git-log[1].
 
 branch.autoSetupMerge::
 	Tells 'git branch' and 'git checkout' to set up new branches
@@ -1969,8 +1968,8 @@ empty string.
 
 http.sslVerify::
 	Whether to verify the SSL certificate when fetching or pushing
-	over HTTPS. Can be overridden by the `GIT_SSL_NO_VERIFY` environment
-	variable.
+	over HTTPS. Defaults to true. Can be overridden by the
+	`GIT_SSL_NO_VERIFY` environment variable.
 
 http.sslCert::
 	File containing the SSL certificate when fetching or pushing
@@ -1998,11 +1997,6 @@ http.sslCAPath::
 	with when fetching or pushing over HTTPS. Can be overridden
 	by the `GIT_SSL_CAPATH` environment variable.
 
-http.sslBackend::
-	Name of the SSL backend to use (e.g. "openssl" or "schannel").
-	This option is ignored if cURL lacks support for choosing the SSL
-	backend at runtime.
-
 http.pinnedpubkey::
 	Public key of the https service. It may either be the filename of
 	a PEM or DER encoded public key file or a string starting with
@@ -2026,7 +2020,8 @@ http.maxRequests::
 http.minSessions::
 	The number of curl sessions (counted across slots) to be kept across
 	requests. They will not be ended with curl_easy_cleanup() until
-	http_cleanup() is invoked. Defaults to 1.
+	http_cleanup() is invoked. If USE_CURL_MULTI is not defined, this
+	value will be capped at 1. Defaults to 1.
 
 http.postBuffer::
 	Maximum size in bytes of the buffer used by smart HTTP
@@ -2126,8 +2121,8 @@ ssh.variant::
 	OpenSSH options (if that is successful) or no options besides
 	the host and remote command (if it fails).
 +
-The config variable `ssh.variant` can be set to override this detection:
-valid values are `ssh` (to use OpenSSH options), `plink`, `putty`,
+The config variable `ssh.variant` can be set to override this detection.
+Valid values are `ssh` (to use OpenSSH options), `plink`, `putty`,
 `tortoiseplink`, `simple` (no options except the host and remote command).
 The default auto-detection can be explicitly requested using the value
 `auto`.  Any other value is treated as `ssh`.  This setting can also be
@@ -2741,36 +2736,7 @@ push.recurseSubmodules::
 	is retained. You may override this configuration at time of push by
 	specifying '--recurse-submodules=check|on-demand|no'.
 
-rebase.stat::
-	Whether to show a diffstat of what changed upstream since the last
-	rebase. False by default.
-
-rebase.autoSquash::
-	If set to true enable `--autosquash` option by default.
-
-rebase.autoStash::
-	When set to true, automatically create a temporary stash entry
-	before the operation begins, and apply it after the operation
-	ends.  This means that you can run rebase on a dirty worktree.
-	However, use with care: the final stash application after a
-	successful rebase might result in non-trivial conflicts.
-	Defaults to false.
-
-rebase.missingCommitsCheck::
-	If set to "warn", git rebase -i will print a warning if some
-	commits are removed (e.g. a line was deleted), however the
-	rebase will still proceed. If set to "error", it will print
-	the previous warning and stop the rebase, 'git rebase
-	--edit-todo' can then be used to correct the error. If set to
-	"ignore", no checking is done.
-	To drop a commit without warning or error, use the `drop`
-	command in the todo-list.
-	Defaults to "ignore".
-
-rebase.instructionFormat::
-	A format string, as specified in linkgit:git-log[1], to be used for
-	the instruction list during an interactive rebase.  The format will automatically
-	have the long commit hash prepended to the format.
+include::rebase-config.txt[]
 
 receive.advertiseAtomic::
 	By default, git-receive-pack will advertise the atomic push
@@ -3057,6 +3023,7 @@ sendemail.smtpPass::
 sendemail.suppresscc::
 sendemail.suppressFrom::
 sendemail.to::
+sendemail.tocmd::
 sendemail.smtpDomain::
 sendemail.smtpServer::
 sendemail.smtpServerPort::
@@ -3123,10 +3090,6 @@ status.short::
 status.branch::
 	Set to true to enable --branch by default in linkgit:git-status[1].
 	The option --no-branch takes precedence over this variable.
-
-status.inProgress::
-	Set to true to enable --in-progress by default in linkgit:git-status[1].
-	The option --no-in-progress takes precedence over this variable.
 
 status.displayCommentPrefix::
 	If set to true, linkgit:git-status[1] will insert a comment
@@ -3480,8 +3443,12 @@ web.browser::
 	Currently only linkgit:git-instaweb[1] and linkgit:git-help[1]
 	may use it.
 
-sendpack.sideband::
-  Allows to disable the side-band-64k capability for send-pack even
-  when it is advertised by the server. Makes it possible to work
-  around a limitation in the git for windows implementation together
-  with the dump git protocol. Defaults to true.
+worktree.guessRemote::
+	With `add`, if no branch argument, and neither of `-b` nor
+	`-B` nor `--detach` are given, the command defaults to
+	creating a new branch from HEAD.  If `worktree.guessRemote` is
+	set to true, `worktree add` tries to find a remote-tracking
+	branch whose name uniquely matches the new branch name.  If
+	such a branch exists, it is checked out and set as "upstream"
+	for the new branch.  If no such match can be found, it falls
+	back to creating a new branch from the current HEAD.

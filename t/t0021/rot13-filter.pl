@@ -63,25 +63,25 @@ $debug->flush();
 
 packet_initialize("git-filter", 2);
 
-packet_read_and_check_capabilities("clean", "smudge", "delay");
-packet_write_capabilities(@capabilities);
+my %remote_caps = packet_read_and_check_capabilities("clean", "smudge", "delay");
+packet_check_and_write_capabilities(\%remote_caps, @capabilities);
 
 print $debug "init handshake complete\n";
 $debug->flush();
 
 while (1) {
-	my ( $res, $command ) = packet_txt_read();
+	my ( $res, $command ) = packet_key_val_read("command");
 	if ( $res == -1 ) {
 		print $debug "STOP\n";
 		exit();
 	}
-	$command =~ s/^command=//;
 	print $debug "IN: $command";
 	$debug->flush();
 
 	if ( $command eq "list_available_blobs" ) {
 		# Flush
-		packet_bin_read();
+		packet_compare_lists([1, ""], packet_bin_read()) ||
+			die "bad list_available_blobs end";
 
 		foreach my $pathname ( sort keys %DELAY ) {
 			if ( $DELAY{$pathname}{"requested"} >= 1 ) {
@@ -106,13 +106,12 @@ while (1) {
 		packet_txt_write("status=success");
 		packet_flush();
 	} else {
-		my ( $pathname ) = packet_txt_read() =~ /^pathname=(.+)$/;
+		my ( $res, $pathname ) = packet_key_val_read("pathname");
+		if ( $res == -1 ) {
+			die "unexpected EOF while expecting pathname";
+		}
 		print $debug " $pathname";
 		$debug->flush();
-
-		if ( $pathname eq "" ) {
-			die "bad pathname '$pathname'";
-		}
 
 		# Read until flush
 		my ( $done, $buffer ) = packet_txt_read();
@@ -127,6 +126,9 @@ while (1) {
 
 			( $done, $buffer ) = packet_txt_read();
 		}
+		if ( $done == -1 ) {
+			die "unexpected EOF after pathname '$pathname'";
+		}
 
 		my $input = "";
 		{
@@ -137,6 +139,9 @@ while (1) {
 				( $done, $buffer ) = packet_bin_read();
 				$input .= $buffer;
 			}
+			if ( $done == -1 ) {
+				die "unexpected EOF while reading input for '$pathname'";
+			}			
 			print $debug " " . length($input) . " [OK] -- ";
 			$debug->flush();
 		}

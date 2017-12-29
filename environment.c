@@ -27,7 +27,6 @@ int warn_ambiguous_refs = 1;
 int warn_on_object_refname_ambiguity = 1;
 int ref_paranoia = -1;
 int repository_format_precious_objects;
-char *repository_format_partial_clone;
 const char *git_commit_encoding;
 const char *git_log_output_encoding;
 const char *apply_default_whitespace;
@@ -65,6 +64,7 @@ int core_apply_sparse_checkout;
 int merge_log_config = -1;
 int precomposed_unicode = -1; /* see probe_utf8_pathname_composition() */
 unsigned long pack_size_limit_cfg;
+enum hide_dotfiles_type hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
 enum log_refs_config log_all_ref_updates = LOG_REFS_UNSET;
 
 #ifndef PROTECT_HFS_DEFAULT
@@ -343,4 +343,19 @@ void reset_shared_repository(void)
 int use_optional_locks(void)
 {
 	return git_env_bool(GIT_OPTIONAL_LOCKS_ENVIRONMENT, 1);
+}
+
+int print_sha1_ellipsis(void)
+{
+	/*
+	 * Determine if the calling environment contains the variable
+	 * GIT_PRINT_SHA1_ELLIPSIS set to "yes".
+	 */
+	static int cached_result = -1; /* unknown */
+
+	if (cached_result < 0) {
+		const char *v = getenv("GIT_PRINT_SHA1_ELLIPSIS");
+		cached_result = (v && !strcasecmp(v, "yes"));
+	}
+	return cached_result;
 }
