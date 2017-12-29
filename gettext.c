@@ -10,9 +10,7 @@
 #ifndef NO_GETTEXT
 #	include <locale.h>
 #	include <libintl.h>
-#	ifdef GIT_WINDOWS_NATIVE
-#		define locale_charset() "UTF-8"
-#	elif defined HAVE_LIBCHARSET_H
+#	ifdef HAVE_LIBCHARSET_H
 #		include <libcharset.h>
 #	else
 #		include <langinfo.h>
