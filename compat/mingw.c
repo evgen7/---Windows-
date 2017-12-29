@@ -6,9 +6,7 @@
 #include "../strbuf.h"
 #include "../run-command.h"
 #include "../cache.h"
-#include "win32/exit-process.h"
-#include "../config.h"
-#include "../string-list.h"
+#include "win32/lazyload.h"
 
 #define HCAST(type, handle) ((type)(intptr_t)handle)
 
@@ -272,7 +270,6 @@ int mingw_core_config(const char *var, const char *value, void *cb)
 	return 0;
 }
 
-static DWORD symlink_file_flags = 0, symlink_directory_flags = 1;
 DECLARE_PROC_ADDR(kernel32.dll, BOOLEAN, CreateSymbolicLinkW, LPCWSTR, LPCWSTR, DWORD);
 
 enum phantom_symlink_result {
@@ -317,8 +314,7 @@ static enum phantom_symlink_result process_phantom_symlink(
 		return PHANTOM_SYMLINK_DONE;
 
 	/* otherwise recreate the symlink with directory flag */
-	if (DeleteFileW(wlink) &&
-	    CreateSymbolicLinkW(wlink, wtarget, symlink_directory_flags))
+	if (DeleteFileW(wlink) && CreateSymbolicLinkW(wlink, wtarget, 1))
 		return PHANTOM_SYMLINK_DIRECTORY;
 
 	errno = err_win_to_posix(GetLastError());
@@ -935,17 +931,6 @@ revert_attrs:
 	return rc;
 }
 
-#undef strftime
-size_t mingw_strftime(char *s, size_t max,
-		      const char *format, const struct tm *tm)
-{
-	size_t ret = strftime(s, max, format, tm);
-
-	if (!ret && errno == EINVAL)
-		die("invalid strftime format: '%s'", format);
-	return ret;
-}
-
 unsigned int sleep (unsigned int seconds)
 {
 	Sleep(seconds*1000);
@@ -955,20 +940,12 @@ unsigned int sleep (unsigned int seconds)
 char *mingw_mktemp(char *template)
 {
 	wchar_t wtemplate[MAX_PATH];
-	int offset = 0;
-
 	/* we need to return the path, thus no long paths here! */
 	if (xutftowcs_path(wtemplate, template) < 0)
 		return NULL;
-
-	if (is_dir_sep(template[0]) && !is_dir_sep(template[1]) &&
-	    iswalpha(wtemplate[0]) && wtemplate[1] == L':') {
-		/* We have an absolute path missing the drive prefix */
-		offset = 2;
-	}
 	if (!_wmktemp(wtemplate))
 		return NULL;
-	if (xwcstoutf(template, wtemplate + offset, strlen(template) + 1) < 0)
+	if (xwcstoutf(template, wtemplate, strlen(template) + 1) < 0)
 		return NULL;
 	return template;
 }
@@ -1033,32 +1010,8 @@ struct tm *localtime_r(const time_t *timep, struct tm *result)
 
 char *mingw_getcwd(char *pointer, int len)
 {
-	wchar_t cwd[MAX_PATH], wpointer[MAX_PATH];
-	DECLARE_PROC_ADDR(kernel32.dll, DWORD, GetFinalPathNameByHandleW,
-			  HANDLE, LPWSTR, DWORD, DWORD);
-	DWORD ret = GetCurrentDirectoryW(ARRAY_SIZE(cwd), cwd);
-
-	if (!ret || ret >= ARRAY_SIZE(cwd)) {
-		errno = ret ? ENAMETOOLONG : err_win_to_posix(GetLastError());
-		return NULL;
-	}
-	ret = GetLongPathNameW(cwd, wpointer, ARRAY_SIZE(wpointer));
-	if (!ret && GetLastError() == ERROR_ACCESS_DENIED &&
-		INIT_PROC_ADDR(GetFinalPathNameByHandleW)) {
-		HANDLE hnd = CreateFileW(cwd, 0,
-			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-			OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-		if (hnd == INVALID_HANDLE_VALUE)
-			return NULL;
-		ret = GetFinalPathNameByHandleW(hnd, wpointer, ARRAY_SIZE(wpointer), 0);
-		CloseHandle(hnd);
-		if (!ret || ret >= ARRAY_SIZE(wpointer))
-			return NULL;
-		if (xwcstoutf(pointer, normalize_ntpath(wpointer), len) < 0)
-			return NULL;
-		return pointer;
-	}
-	if (!ret || ret >= ARRAY_SIZE(wpointer))
+	wchar_t wpointer[MAX_PATH];
+	if (!_wgetcwd(wpointer, ARRAY_SIZE(wpointer)))
 		return NULL;
 	if (xwcstoutf(pointer, wpointer, len) < 0)
 		return NULL;
@@ -1070,7 +1023,7 @@ char *mingw_getcwd(char *pointer, int len)
  * See http://msdn2.microsoft.com/en-us/library/17w5ykft(vs.71).aspx
  * (Parsing C++ Command-Line Arguments)
  */
-static const char *quote_arg_msvc(const char *arg)
+static const char *quote_arg(const char *arg)
 {
 	/* count chars to quote */
 	int len = 0, n = 0;
@@ -1125,37 +1078,6 @@ static const char *quote_arg_msvc(const char *arg)
 	return q;
 }
 
-#include "quote.h"
-
-static const char *quote_arg_msys2(const char *arg)
-{
-	struct strbuf buf = STRBUF_INIT;
-	const char *p2 = arg, *p;
-
-	for (p = arg; *p; p++) {
-		int ws = isspace(*p);
-		if (!ws && *p != '\\' && *p != '"')
-			continue;
-		if (!buf.len)
-			strbuf_addch(&buf, '"');
-		if (p != p2)
-			strbuf_add(&buf, p2, p - p2);
-		if (!ws)
-			strbuf_addch(&buf, '\\');
-		p2 = p;
-	}
-
-	if (p == arg)
-		strbuf_addch(&buf, '"');
-	else if (!buf.len)
-		return arg;
-	else
-		strbuf_add(&buf, p2, p - p2),
-
-	strbuf_addch(&buf, '"');
-	return strbuf_detach(&buf, 0);
-}
-
 static const char *parse_interpreter(const char *cmd)
 {
 	static char buf[100];
@@ -1199,81 +1121,15 @@ static char *lookup_prog(const char *dir, int dirlen, const char *cmd,
 			 int isexe, int exe_only)
 {
 	char path[MAX_PATH];
-	wchar_t wpath[MAX_PATH];
 	snprintf(path, sizeof(path), "%.*s\\%s.exe", dirlen, dir, cmd);
 
-	if (xutftowcs_path(wpath, path) < 0)
-		return NULL;
-
-	if (!isexe && _waccess(wpath, F_OK) == 0)
+	if (!isexe && access(path, F_OK) == 0)
 		return xstrdup(path);
-	wpath[wcslen(wpath)-4] = '\0';
-	if ((!exe_only || isexe) && _waccess(wpath, F_OK) == 0) {
-		if (!(GetFileAttributesW(wpath) & FILE_ATTRIBUTE_DIRECTORY)) {
-			path[strlen(path)-4] = '\0';
+	path[strlen(path)-4] = '\0';
+	if ((!exe_only || isexe) && access(path, F_OK) == 0)
+		if (!(GetFileAttributes(path) & FILE_ATTRIBUTE_DIRECTORY))
 			return xstrdup(path);
-		}
-	}
 	return NULL;
-}
-
-static char *path_lookup(const char *cmd, int exe_only);
-
-static char *is_busybox_applet(const char *cmd)
-{
-	static struct string_list applets = STRING_LIST_INIT_DUP;
-	static char *busybox_path;
-	static int busybox_path_initialized;
-
-	/* Avoid infinite loop */
-	if (!strncasecmp(cmd, "busybox", 7) &&
-	    (!cmd[7] || !strcasecmp(cmd + 7, ".exe")))
-		return NULL;
-
-	if (!busybox_path_initialized) {
-		busybox_path = path_lookup("busybox.exe", 1);
-		busybox_path_initialized = 1;
-	}
-
-	/* Assume that sh is compiled in... */
-	if (!busybox_path || !strcasecmp(cmd, "sh"))
-		return xstrdup_or_null(busybox_path);
-
-	if (!applets.nr) {
-		struct child_process cp = CHILD_PROCESS_INIT;
-		struct strbuf buf = STRBUF_INIT;
-		char *p;
-
-		argv_array_pushl(&cp.args, busybox_path, "--help", NULL);
-
-		if (capture_command(&cp, &buf, 2048)) {
-			string_list_append(&applets, "");
-			return NULL;
-		}
-
-		/* parse output */
-		p = strstr(buf.buf, "Currently defined functions:\n");
-		if (!p) {
-			warning("Could not parse output of busybox --help");
-			string_list_append(&applets, "");
-			return NULL;
-		}
-		p = strchrnul(p, '\n');
-		for (;;) {
-			size_t len;
-
-			p += strspn(p, "\n\t ,");
-			len = strcspn(p, "\n\t ,");
-			if (!len)
-				break;
-			p[len] = '\0';
-			string_list_insert(&applets, p);
-			p = p + len + 1;
-		}
-	}
-
-	return string_list_has_string(&applets, cmd) ?
-		xstrdup(busybox_path) : NULL;
 }
 
 /*
@@ -1304,9 +1160,6 @@ static char *path_lookup(const char *cmd, int exe_only)
 		path = sep + 1;
 	}
 
-	if (!prog && !isexe)
-		prog = is_busybox_applet(cmd);
-
 	return prog;
 }
 
@@ -1328,8 +1181,8 @@ static wchar_t *make_environment_block(char **deltaenv)
 	 * as a function that returns a pointer to a mostly static table.
 	 * Grab the pointer and cache it for the duration of our loop.
 	 */
-	const wchar_t *my_wenviron = GetEnvironmentStringsW();
-	const wchar_t *p;
+	extern wchar_t **_wenviron;
+	const wchar_t **my_wenviron = _wenviron;
 
 	/*
 	 * Internally, we create normal 'C' arrays of strings (pointing
@@ -1373,12 +1226,8 @@ static wchar_t *make_environment_block(char **deltaenv)
 
 		nr_delta = nr_delta_ins + nr_delta_del;
 	}
-	for (p = my_wenviron; p && *p; ) {
-		size_t len = wcslen(p) + 1;
-		maxlen += len;
-		p += len;
-		nr_wenv++;
-	}
+	while (my_wenviron && my_wenviron[nr_wenv] && *my_wenviron[nr_wenv])
+		maxlen += wcslen(my_wenviron[nr_wenv++]) + 1;
 	maxlen++;
 
 	/*
@@ -1443,13 +1292,11 @@ static wchar_t *make_environment_block(char **deltaenv)
 	 * ones into the result set. Note that we only have to de-dup WRT
 	 * the values from deltaenv, because the inherited set should be unique.
 	 */
-	p = my_wenviron;
 	for (j = 0; j < nr_wenv; j++) {
-		const wchar_t *v_j = p;
+		const wchar_t *v_j = my_wenviron[j];
 		wchar_t *v_j_eq = wcschr(v_j, L'=');
 		int len_j_eq, len_j;
 
-		p += wcslen(p) + 1;
 		if (!v_j_eq)
 			continue; /* should not happen */
 		len_j_eq = v_j_eq + 1 - v_j; /* length(v_j) including '=' */
@@ -1475,7 +1322,6 @@ skip_it:
 		;
 	}
 
-	FreeEnvironmentStringsW(my_wenviron);
 	if (wptrs_ins)
 		free(wptrs_ins);
 	if (wptrs_del)
@@ -1565,72 +1411,10 @@ struct pinfo_t {
 static struct pinfo_t *pinfo = NULL;
 CRITICAL_SECTION pinfo_cs;
 
-#ifndef SIGRTMAX
-#define SIGRTMAX 63
-#endif
-
-static void kill_child_processes_on_signal(void)
-{
-	DWORD status;
-
-	/*
-	 * Only continue if the process was terminated by a signal, as
-	 * indicated by the exit status (128 + sig_no).
-	 *
-	 * As we are running in an atexit() handler, the exit code has been
-	 * set at this stage by the ExitProcess() function already.
-	 */
-	if (!GetExitCodeProcess(GetCurrentProcess(), &status) ||
-	    status <= 128 || status > 128 + SIGRTMAX)
-		return;
-
-	EnterCriticalSection(&pinfo_cs);
-
-	while (pinfo) {
-		struct pinfo_t *info = pinfo;
-		pinfo = pinfo->next;
-		if (exit_process(info->proc, status))
-			/* the handle is still valid in case of error */
-			CloseHandle(info->proc);
-		free(info);
-	}
-
-	LeaveCriticalSection(&pinfo_cs);
-}
-
-static int is_msys2_sh(const char *cmd)
-{
-	if (cmd && !strcmp(cmd, "sh")) {
-		static int ret = -1;
-		char *p;
-
-		if (ret >= 0)
-			return ret;
-
-		p = path_lookup(cmd, 0);
-		if (!p)
-			ret = 0;
-		else {
-			size_t len = strlen(p);
-			ret = len > 15 &&
-				is_dir_sep(p[len - 15]) &&
-				!strncasecmp(p + len - 14, "usr", 3) &&
-				is_dir_sep(p[len - 11]) &&
-				!strncasecmp(p + len - 10, "bin", 3) &&
-				is_dir_sep(p[len - 7]) &&
-				!strcasecmp(p + len - 6, "sh.exe");
-			free(p);
-		}
-		return ret;
-	}
-	return 0;
-}
-
 static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaenv,
-			      const char *dir, const char *prepend_cmd,
-			      int fhin, int fhout, int fherr)
+			      const char *dir,
+			      int prepend_cmd, int fhin, int fhout, int fherr)
 {
-	static int atexit_handler_initialized;
 	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 	struct strbuf args;
@@ -1639,19 +1423,6 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	BOOL ret;
 	HANDLE cons;
 	const char *strace_env;
-	const char *(*quote_arg)(const char *arg) =
-		is_msys2_sh(*argv) ? quote_arg_msys2 : quote_arg_msvc;
-
-	if (!atexit_handler_initialized) {
-		atexit_handler_initialized = 1;
-		/*
-		 * On Windows, there is no POSIX signaling. Instead, we inject
-		 * a thread calling ExitProcess(128 + sig_no); and that calls
-		 * the *atexit* handlers. Catch this condition and kill child
-		 * processes with the same signal.
-		 */
-		atexit(kill_child_processes_on_signal);
-	}
 
 	do_unset_environment_variables();
 
@@ -1687,9 +1458,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	si.hStdError = winansi_get_osfhandle(fherr);
 
 	/* executables and the current directory don't support long paths */
-	if (*argv && !strcmp(cmd, *argv))
-		wcmd[0] = L'\0';
-	else if (xutftowcs_path(wcmd, cmd) < 0)
+	if (xutftowcs_path(wcmd, cmd) < 0)
 		return -1;
 	if (dir && xutftowcs_path(wdir, dir) < 0)
 		return -1;
@@ -1697,9 +1466,9 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	/* concatenate argv, quoting args as we go */
 	strbuf_init(&args, 0);
 	if (prepend_cmd) {
-		char *quoted = (char *)quote_arg(prepend_cmd);
+		char *quoted = (char *)quote_arg(cmd);
 		strbuf_addstr(&args, quoted);
-		if (quoted != prepend_cmd)
+		if (quoted != cmd)
 			free(quoted);
 	}
 	for (; *argv; argv++) {
@@ -1743,8 +1512,8 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	wenvblk = make_environment_block(deltaenv);
 
 	memset(&pi, 0, sizeof(pi));
-	ret = CreateProcessW(*wcmd ? wcmd : NULL, wargs, NULL, NULL, TRUE,
-		flags, wenvblk, dir ? wdir : NULL, &si, &pi);
+	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags,
+		wenvblk, dir ? wdir : NULL, &si, &pi);
 
 	free(wenvblk);
 	free(wargs);
@@ -1776,8 +1545,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	return (pid_t)pi.dwProcessId;
 }
 
-static pid_t mingw_spawnv(const char *cmd, const char **argv,
-			  const char *prepend_cmd)
+static pid_t mingw_spawnv(const char *cmd, const char **argv, int prepend_cmd)
 {
 	return mingw_spawnve_fd(cmd, argv, NULL, NULL, prepend_cmd, 0, 1, 2);
 }
@@ -1805,14 +1573,14 @@ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **deltaenv,
 				pid = -1;
 			}
 			else {
-				pid = mingw_spawnve_fd(iprog, argv, deltaenv, dir, interpr,
+				pid = mingw_spawnve_fd(iprog, argv, deltaenv, dir, 1,
 						       fhin, fhout, fherr);
 				free(iprog);
 			}
 			argv[0] = argv0;
 		}
 		else
-			pid = mingw_spawnve_fd(prog, argv, deltaenv, dir, NULL,
+			pid = mingw_spawnve_fd(prog, argv, deltaenv, dir, 0,
 					       fhin, fhout, fherr);
 		free(prog);
 	}
@@ -1830,15 +1598,12 @@ static int try_shell_exec(const char *cmd, char *const *argv)
 	prog = path_lookup(interpr, 1);
 	if (prog) {
 		int argc = 0;
-#ifndef _MSC_VER
-		const
-#endif
-		char **argv2;
+		const char **argv2;
 		while (argv[argc]) argc++;
 		ALLOC_ARRAY(argv2, argc + 1);
 		argv2[0] = (char *)cmd;	/* full path to the script file */
 		memcpy(&argv2[1], &argv[1], sizeof(*argv) * argc);
-		pid = mingw_spawnv(prog, argv2, interpr);
+		pid = mingw_spawnv(prog, argv2, 1);
 		if (pid >= 0) {
 			int status;
 			if (waitpid(pid, &status, 0) < 0)
@@ -1858,7 +1623,7 @@ int mingw_execv(const char *cmd, char *const *argv)
 	if (!try_shell_exec(cmd, argv)) {
 		int pid, status;
 
-		pid = mingw_spawnv(cmd, (const char **)argv, NULL);
+		pid = mingw_spawnv(cmd, (const char **)argv, 0);
 		if (pid < 0)
 			return -1;
 		if (waitpid(pid, &status, 0) < 0)
@@ -1884,28 +1649,16 @@ int mingw_execvp(const char *cmd, char *const *argv)
 int mingw_kill(pid_t pid, int sig)
 {
 	if (pid > 0 && sig == SIGTERM) {
-		HANDLE h = OpenProcess(PROCESS_CREATE_THREAD |
-				       PROCESS_QUERY_INFORMATION |
-				       PROCESS_VM_OPERATION | PROCESS_VM_WRITE |
-				       PROCESS_VM_READ | PROCESS_TERMINATE,
-				       FALSE, pid);
-		int ret;
+		HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
 
-		if (h)
-			ret = exit_process(h, 128 + sig);
-		else {
-			h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-			if (!h) {
-				errno = err_win_to_posix(GetLastError());
-				return -1;
-			}
-			ret = terminate_process_tree(h, 128 + sig);
-		}
-		if (ret) {
-			errno = err_win_to_posix(GetLastError());
+		if (TerminateProcess(h, -1)) {
 			CloseHandle(h);
+			return 0;
 		}
-		return ret;
+
+		errno = err_win_to_posix(GetLastError());
+		CloseHandle(h);
+		return -1;
 	} else if (pid > 0 && sig == 0) {
 		HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
 		if (h) {
@@ -2670,34 +2423,8 @@ int mingw_raise(int sig)
 			sigint_fn(SIGINT);
 		return 0;
 
-#if defined(_MSC_VER)
-		/*
-		 * <signal.h> in the CRT defines 8 signals as being
-		 * supported on the platform.  Anything else causes
-		 * an "Invalid signal or error" (which in DEBUG builds
-		 * causes the Abort/Retry/Ignore dialog).  We by-pass
-		 * the CRT for things we already know will fail.
-		 */
-		/*case SIGINT:*/
-	case SIGILL:
-	case SIGFPE:
-	case SIGSEGV:
-	case SIGTERM:
-	case SIGBREAK:
-	case SIGABRT:
-	case SIGABRT_COMPAT:
-		return raise(sig);
-	default:
-		errno = EINVAL;
-		return -1;
-
-#else
-
 	default:
 		return raise(sig);
-
-#endif
-
 	}
 }
 
@@ -2742,7 +2469,7 @@ int symlink(const char *target, const char *link)
 			wtarget[len] = '\\';
 
 	/* create file symlink */
-	if (!CreateSymbolicLinkW(wlink, wtarget, symlink_file_flags)) {
+	if (!CreateSymbolicLinkW(wlink, wtarget, 0)) {
 		errno = err_win_to_posix(GetLastError());
 		return -1;
 	}
@@ -2829,6 +2556,12 @@ int readlink(const char *path, char *buf, size_t bufsiz)
 	DWORD dummy;
 	char tmpbuf[MAX_LONG_PATH];
 	int len;
+
+	/* fail if symlinks are disabled */
+	if (!has_symlinks) {
+		errno = ENOSYS;
+		return -1;
+	}
 
 	if (xutftowcs_long_path(wpath, path) < 0)
 		return -1;
@@ -3106,9 +2839,6 @@ static void setup_windows_environment(void)
 	 */
 	if (!(tmp = getenv("MSYS")) || !strstr(tmp, "winsymlinks:nativestrict"))
 		has_symlinks = 0;
-
-	if (!getenv("LC_ALL") && !getenv("LC_CTYPE") && !getenv("LANG"))
-		setenv("LC_CTYPE", "C", 1);
 }
 
 int handle_long_path(wchar_t *path, int len, int max_path, int expand)
@@ -3173,7 +2903,6 @@ int handle_long_path(wchar_t *path, int len, int max_path, int expand)
 	}
 }
 
-#if !defined(_MSC_VER)
 /*
  * Disable MSVCRT command line wildcard expansion (__getmainargs called from
  * mingw startup code, see init.c in mingw runtime).
@@ -3186,7 +2915,6 @@ typedef struct {
 
 extern int __wgetmainargs(int *argc, wchar_t ***argv, wchar_t ***env, int glob,
 		_startupinfo *si);
-#endif
 
 static NORETURN void die_startup(void)
 {
@@ -3212,7 +2940,7 @@ static void maybe_redirect_std_handle(const wchar_t *key, DWORD std_id, int fd,
 				      DWORD desired_access, DWORD flags)
 {
 	DWORD create_flag = fd ? OPEN_ALWAYS : OPEN_EXISTING;
-	wchar_t buf[MAX_LONG_PATH];
+	wchar_t buf[MAX_PATH];
 	DWORD max = ARRAY_SIZE(buf);
 	HANDLE handle;
 	DWORD ret = GetEnvironmentVariableW(key, buf, max);
@@ -3264,123 +2992,6 @@ static void maybe_redirect_std_handles(void)
 				  GENERIC_WRITE, FILE_FLAG_NO_BUFFERING);
 }
 
-static void adjust_symlink_flags(void)
-{
-	/*
-	 * Starting with Windows 10 Build 14972, symbolic links can be created
-	 * using CreateSymbolicLink() without elevation by passing the flag
-	 * SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE (0x02) as last
-	 * parameter, provided the Developer Mode has been enabled. Some
-	 * earlier Windows versions complain about this flag with an
-	 * ERROR_INVALID_PARAMETER, hence we have to test the build number
-	 * specifically.
-	 */
-	if (GetVersion() >= 14972 << 16) {
-		symlink_file_flags |= 2;
-		symlink_directory_flags |= 2;
-	}
-
-}
-
-#if defined(_MSC_VER)
-
-#ifdef _DEBUG
-#include <crtdbg.h>
-#endif
-
-/*
- * This routine sits between wmain() and "main" in git.exe.
- * We receive UNICODE (wchar_t) values for argv and env.
- *
- * To be more compatible with the core git code, we convert
- * argv into UTF8 and pass them directly to the "main" routine.
- *
- * We don't bother converting the given UNICODE env vector,
- * but rather leave them in the CRT.  We replaced the various
- * getenv/putenv routines to pull them directly from the CRT.
- *
- * This is unlike the MINGW version:
- * [] It does the UNICODE-2-UTF8 conversion on both sets and
- *    stuffs the values back into the CRT using exported symbols.
- * [] It also maintains a private copy of the environment and
- *    tries to track external changes to it.
- */
-int msc_startup(int argc, wchar_t **w_argv, wchar_t **w_env)
-{
-	char **my_utf8_argv = NULL, **save = NULL;
-	char *buffer = NULL;
-	int maxlen;
-	int k, exit_status;
-
-#ifdef _DEBUG
-	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
-#endif
-
-#ifdef USE_MSVC_CRTDBG
-	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
-#endif
-
-	fsync_object_files = 1;
-	maybe_redirect_std_handles();
-	adjust_symlink_flags();
-
-	/* determine size of argv conversion buffer */
-	maxlen = wcslen(_wpgmptr);
-	for (k = 1; k < argc; k++)
-		maxlen = max(maxlen, wcslen(w_argv[k]));
-
-	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
-	maxlen = 3 * maxlen + 1;
-	buffer = malloc_startup(maxlen);
-
-	/*
-	 * Create a UTF-8 version of w_argv. Also create a "save" copy
-	 * to remember all the string pointers because parse_options()
-	 * will remove claimed items from the argv that we pass down.
-	 */
-	ALLOC_ARRAY(my_utf8_argv, argc + 1);
-	ALLOC_ARRAY(save, argc + 1);
-	save[0] = my_utf8_argv[0] = wcstoutfdup_startup(buffer, _wpgmptr, maxlen);
-	for (k = 1; k < argc; k++)
-		save[k] = my_utf8_argv[k] = wcstoutfdup_startup(buffer, w_argv[k], maxlen);
-	save[k] = my_utf8_argv[k] = NULL;
-
-	free(buffer);
-
-	/* fix Windows specific environment settings */
-	setup_windows_environment();
-
-	unset_environment_variables = xstrdup("PERL5LIB");
-
-	/* initialize critical section for waitpid pinfo_t list */
-	InitializeCriticalSection(&pinfo_cs);
-	InitializeCriticalSection(&phantom_symlinks_cs);
-
-	/* set up default file mode and file modes for stdin/out/err */
-	_fmode = _O_BINARY;
-	_setmode(_fileno(stdin), _O_BINARY);
-	_setmode(_fileno(stdout), _O_BINARY);
-	_setmode(_fileno(stderr), _O_BINARY);
-
-	/* initialize Unicode console */
-	winansi_init();
-
-	/* init length of current directory for handle_long_path */
-	current_directory_len = GetCurrentDirectoryW(0, NULL);
-
-	/* invoke the real main() using our utf8 version of argv. */
-	exit_status = msc_main(argc, my_utf8_argv);
-
-	for (k = 0; k < argc; k++)
-		free(save[k]);
-	free(save);
-	free(my_utf8_argv);
-
-	return exit_status;
-}
-
-#else
-
 void mingw_startup(void)
 {
 	int i, maxlen, argc;
@@ -3388,9 +2999,7 @@ void mingw_startup(void)
 	wchar_t **wenv, **wargv;
 	_startupinfo si;
 
-	fsync_object_files = 1;
 	maybe_redirect_std_handles();
-	adjust_symlink_flags();
 
 	/* get wide char arguments and environment */
 	si.newmode = 0;
@@ -3462,8 +3071,6 @@ void mingw_startup(void)
 	current_directory_len = GetCurrentDirectoryW(0, NULL);
 }
 
-#endif
-
 int uname(struct utsname *buf)
 {
 	unsigned v = (unsigned)GetVersion();
@@ -3475,18 +3082,4 @@ int uname(struct utsname *buf)
 	xsnprintf(buf->version, sizeof(buf->version),
 		  "%u", (v >> 16) & 0x7fff);
 	return 0;
-}
-
-const char *program_data_config(void)
-{
-	static struct strbuf path = STRBUF_INIT;
-	static unsigned initialized;
-
-	if (!initialized) {
-		const char *env = mingw_getenv("PROGRAMDATA");
-		if (env)
-			strbuf_addf(&path, "%s/Git/config", env);
-		initialized = 1;
-	}
-	return *path.buf ? path.buf : NULL;
 }
