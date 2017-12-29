@@ -805,7 +805,7 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 	size_t size = 0;
 	char *buf;
 
-	if (is_fscache_enabled() && lstat(fname, &st) < 0)
+	if (fscache_enabled(fname) && lstat(fname, &st) < 0)
 		return -1;
 	if ((fd = open(fname, O_RDONLY)) < 0 || fstat(fd, &st) < 0) {
 		if (fd < 0)
