@@ -74,7 +74,18 @@ Running GNU Make to figure out build structure...
 EOM
 
 # Pipe a make --dry-run into a variable, if not already loaded from file
-@makedry = `cd $git_dir && make -n MSVC=1 V=1 2>/dev/null` if !@makedry;
+# Capture the make dry stderr to file for review (will be empty for a release build).
+
+my $ErrsFile = "msvc-build-makedryerrors.txt";
+@makedry = `make -C $git_dir -n MSVC=1 V=1 2>$ErrsFile` if !@makedry;
+# test for an empty Errors file and remove it
+unlink $ErrsFile if -f -z $ErrsFile;
+
+if (defined $make_out) {
+    open OUT, ">" . $make_out;
+    print OUT @makedry;
+    close OUT;
+}
 
 # Parse the make output into usable info
 parseMakeOutput();
