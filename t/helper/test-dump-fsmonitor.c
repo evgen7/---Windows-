@@ -1,12 +1,14 @@
 #include "cache.h"
+#include "config.h"
 
 int cmd_main(int ac, const char **av)
 {
 	struct index_state *istate = &the_index;
 	int i;
 
+	git_config_push_parameter("core.fsmonitor=keep");
 	setup_git_directory();
-	if (do_read_index(istate, get_index_file(), 0) < 0)
+	if (read_index_from(istate, get_index_file()) < 0)
 		die("unable to read index file");
 	if (!istate->fsmonitor_last_update) {
 		printf("no fsmonitor\n");
