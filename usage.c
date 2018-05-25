@@ -34,7 +34,7 @@ void vreportf(const char *prefix, const char *err, va_list params)
 		if (iscntrl(*p) && *p != '\t' && *p != '\n')
 			*p = '?';
 	}
-	fprintf(stderr, "%s%s\n", prefix, msg);
+	prefix_suffix_lines(stderr, prefix, msg, "");
 }
 
 static NORETURN void usage_builtin(const char *err, va_list params)
