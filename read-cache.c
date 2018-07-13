@@ -1900,6 +1900,7 @@ static void freshen_shared_index(const char *shared_index, int warn)
 int read_index_from(struct index_state *istate, const char *path,
 		    const char *gitdir)
 {
+	int slog_tid;
 	uint64_t start = getnanotime();
 	struct split_index *split_index;
 	int ret;
@@ -1910,7 +1911,9 @@ int read_index_from(struct index_state *istate, const char *path,
 	if (istate->initialized)
 		return istate->cache_nr;
 
+	slog_tid = slog_start_timer("index", "do_read_index");
 	ret = do_read_index(istate, path, 0);
+	slog_stop_timer(slog_tid);
 	trace_performance_since(start, "read cache %s", path);
 
 	split_index = istate->split_index;
@@ -1926,7 +1929,9 @@ int read_index_from(struct index_state *istate, const char *path,
 
 	base_oid_hex = oid_to_hex(&split_index->base_oid);
 	base_path = xstrfmt("%s/sharedindex.%s", gitdir, base_oid_hex);
+	slog_tid = slog_start_timer("index", "do_read_index");
 	ret = do_read_index(split_index->base, base_path, 1);
+	slog_stop_timer(slog_tid);
 	if (oidcmp(&split_index->base_oid, &split_index->base->oid))
 		die("broken index, expect %s in %s, got %s",
 		    base_oid_hex, base_path,
