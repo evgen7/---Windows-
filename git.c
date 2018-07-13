@@ -413,6 +413,7 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 		setup_work_tree();
 
 	trace_argv_printf(argv, "trace: built-in: git");
+	slog_set_command_name(p->cmd);
 
 	status = p->fn(argc, argv, prefix);
 	if (status)
@@ -700,7 +701,7 @@ static int run_argv(int *argcp, const char ***argv)
 	return done_alias;
 }
 
-int cmd_main(int argc, const char **argv)
+static int real_cmd_main(int argc, const char **argv)
 {
 	const char *cmd;
 	int done_help = 0;
@@ -778,4 +779,9 @@ int cmd_main(int argc, const char **argv)
 		cmd, strerror(errno));
 
 	return 1;
+}
+
+int cmd_main(int argc, const char **argv)
+{
+	return slog_wrap_main(real_cmd_main, argc, argv);
 }
