@@ -159,6 +159,13 @@ cmd_add()
 		shift
 	done
 
+	# For more details about this check, see
+	# builtin/submodule--helper.c::module_config()
+	if test ! -e .gitmodules && git cat-file -e HEAD:.gitmodules > /dev/null 2>&1
+	then
+		 die "$(eval_gettext "please make sure that the .gitmodules file in the current branch is checked out")"
+	fi
+
 	if test -n "$reference_path"
 	then
 		is_absolute_path "$reference_path" ||

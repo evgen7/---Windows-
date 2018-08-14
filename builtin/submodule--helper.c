@@ -2036,8 +2036,23 @@ static int module_config(int argc, const char **argv, const char *prefix)
 		return print_config_from_gitmodules(argv[1]);
 
 	/* Equivalent to ACTION_SET in builtin/config.c */
-	if (argc == 3)
+	if (argc == 3) {
+		struct object_id oid;
+
+		/*
+		 * If the .gitmodules file is not in the working tree but it
+		 * is in the current branch, stop, as writing new values (and
+		 * staging them) would blindly overwrite ALL the old content.
+		 *
+		 * This check still makes it possible to create a brand new
+		 * .gitmodules when it is safe to do so: when neither
+		 * GITMODULES_FILE nor GITMODULES_HEAD exist.
+		 */
+		if (!file_exists(GITMODULES_FILE) && get_oid(GITMODULES_HEAD, &oid) >= 0)
+			die(_("please make sure that the .gitmodules file in the current branch is checked out"));
+
 		return config_set_in_gitmodules_file_gently(argv[1], argv[2]);
+	}
 
 	die("submodule--helper config takes 1 or 2 arguments: name [value]");
 }
