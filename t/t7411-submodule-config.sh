@@ -98,6 +98,9 @@ test_expect_success 'error in one submodule config lets continue' '
 '
 
 test_expect_success 'error message contains blob reference' '
+	# Remove the error introduced in the previous test.
+	# It is not needed in the following tests.
+	test_when_finished "git -C super reset --hard HEAD^" &&
 	(cd super &&
 		sha1=$(git rev-parse HEAD) &&
 		test-tool submodule-config \
@@ -123,6 +126,7 @@ test_expect_success 'using different treeishs works' '
 '
 
 test_expect_success 'error in history in fetchrecursesubmodule lets continue' '
+	test_when_finished "git -C super reset --hard HEAD^" &&
 	(cd super &&
 		git config -f .gitmodules \
 			submodule.submodule.fetchrecursesubmodules blabla &&
@@ -134,8 +138,7 @@ test_expect_success 'error in history in fetchrecursesubmodule lets continue' '
 			HEAD b \
 			HEAD submodule \
 				>actual &&
-		test_cmp expect_error actual  &&
-		git reset --hard HEAD^
+		test_cmp expect_error actual
 	)
 '
 
