@@ -3,6 +3,7 @@
 
 #include "object-store.h"
 #include "thread-utils.h"
+#include "pack.h"
 
 #define DEFAULT_DELTA_CACHE_SIZE (256 * 1024 * 1024)
 
