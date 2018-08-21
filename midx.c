@@ -37,7 +37,7 @@ static char *get_midx_filename(const char *object_dir)
 	return xstrfmt("%s/pack/multi-pack-index", object_dir);
 }
 
-struct multi_pack_index *load_multi_pack_index(const char *object_dir)
+struct multi_pack_index *load_multi_pack_index(const char *object_dir, int local)
 {
 	struct multi_pack_index *m = NULL;
 	int fd;
@@ -73,6 +73,7 @@ struct multi_pack_index *load_multi_pack_index(const char *object_dir)
 	m->fd = fd;
 	m->data = midx_map;
 	m->data_len = midx_size;
+	m->local = local;
 
 	m->signature = get_be32(m->data);
 	if (m->signature != MIDX_SIGNATURE) {
@@ -196,7 +197,7 @@ static void close_midx(struct multi_pack_index *m)
 	FREE_AND_NULL(m->pack_names);
 }
 
-static int prepare_midx_pack(struct multi_pack_index *m, uint32_t pack_int_id)
+int prepare_midx_pack(struct multi_pack_index *m, uint32_t pack_int_id)
 {
 	struct strbuf pack_name = STRBUF_INIT;
 
@@ -209,7 +210,7 @@ static int prepare_midx_pack(struct multi_pack_index *m, uint32_t pack_int_id)
 	strbuf_addf(&pack_name, "%s/pack/%s", m->object_dir,
 		    m->pack_names[pack_int_id]);
 
-	m->packs[pack_int_id] = add_packed_git(pack_name.buf, pack_name.len, 1);
+	m->packs[pack_int_id] = add_packed_git(pack_name.buf, pack_name.len, m->local);
 	strbuf_release(&pack_name);
 	return !m->packs[pack_int_id];
 }
@@ -279,6 +280,16 @@ static int nth_midxed_pack_entry(struct multi_pack_index *m, struct pack_entry *
 	if (!is_pack_valid(p))
 		return 0;
 
+	if (p->num_bad_objects) {
+		uint32_t i;
+		struct object_id oid;
+		nth_midxed_object_oid(&oid, m, pos);
+		for (i = 0; i < p->num_bad_objects; i++)
+			if (!hashcmp(oid.hash,
+				     p->bad_object_sha1 + the_hash_algo->rawsz * i))
+				return 0;
+	}
+
 	e->offset = nth_midxed_offset(m, pos);
 	e->p = p;
 
@@ -318,9 +329,9 @@ int midx_contains_pack(struct multi_pack_index *m, const char *idx_name)
 	return 0;
 }
 
-int prepare_multi_pack_index_one(struct repository *r, const char *object_dir)
+int prepare_multi_pack_index_one(struct repository *r, const char *object_dir, int local)
 {
-	struct multi_pack_index *m = r->objects->multi_pack_index;
+	struct multi_pack_index *m;
 	struct multi_pack_index *m_search;
 	int config_value;
 
@@ -328,14 +339,15 @@ int prepare_multi_pack_index_one(struct repository *r, const char *object_dir)
 	    !config_value)
 		return 0;
 
-	for (m_search = m; m_search; m_search = m_search->next)
+	for (m_search = r->objects->multi_pack_index; m_search; m_search = m_search->next)
 		if (!strcmp(object_dir, m_search->object_dir))
 			return 1;
 
-	r->objects->multi_pack_index = load_multi_pack_index(object_dir);
+	m = load_multi_pack_index(object_dir, local);
 
-	if (r->objects->multi_pack_index) {
-		r->objects->multi_pack_index->next = m;
+	if (m) {
+		m->next = r->objects->multi_pack_index;
+		r->objects->multi_pack_index = m;
 		return 1;
 	}
 
@@ -746,7 +758,7 @@ int write_midx_file(const char *object_dir)
 			  midx_name);
 	}
 
-	packs.m = load_multi_pack_index(object_dir);
+	packs.m = load_multi_pack_index(object_dir, 1);
 
 	packs.nr = 0;
 	packs.alloc_list = packs.m ? packs.m->num_packs : 16;

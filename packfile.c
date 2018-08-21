@@ -820,9 +820,8 @@ static void prepare_pack(const char *full_name, size_t full_name_len,
 	struct packed_git *p;
 	size_t base_len = full_name_len;
 
-	if (strip_suffix_mem(full_name, &base_len, ".idx")) {
-		if (data->m && midx_contains_pack(data->m, file_name))
-			return;
+	if (strip_suffix_mem(full_name, &base_len, ".idx") &&
+	    !(data->m && midx_contains_pack(data->m, file_name))) {
 		/* Don't reopen a pack we already have. */
 		for (p = data->r->objects->packed_git; p; p = p->next) {
 			size_t len;
@@ -842,6 +841,8 @@ static void prepare_pack(const char *full_name, size_t full_name_len,
 	if (!report_garbage)
 		return;
 
+	if (!strcmp(file_name, "multi-pack-index"))
+		return;
 	if (ends_with(file_name, ".idx") ||
 	    ends_with(file_name, ".pack") ||
 	    ends_with(file_name, ".bitmap") ||
@@ -963,14 +964,17 @@ static void prepare_packed_git(struct repository *r)
 
 	if (r->objects->packed_git_initialized)
 		return;
-	prepare_multi_pack_index_one(r, r->objects->objectdir);
+	prepare_multi_pack_index_one(r, r->objects->objectdir, 1);
 	prepare_packed_git_one(r, r->objects->objectdir, 1);
 	prepare_alt_odb(r);
 	for (alt = r->objects->alt_odb_list; alt; alt = alt->next) {
-		prepare_multi_pack_index_one(r, alt->path);
+		prepare_multi_pack_index_one(r, alt->path, 0);
 		prepare_packed_git_one(r, alt->path, 0);
 	}
 	rearrange_packed_git(r);
+
+	r->objects->all_packs = NULL;
+
 	prepare_packed_git_mru(r);
 	r->objects->packed_git_initialized = 1;
 }
@@ -992,6 +996,30 @@ struct multi_pack_index *get_multi_pack_index(struct repository *r)
 {
 	prepare_packed_git(r);
 	return r->objects->multi_pack_index;
+}
+
+struct packed_git *get_all_packs(struct repository *r)
+{
+	prepare_packed_git(r);
+
+	if (!r->objects->all_packs) {
+		struct packed_git *p = r->objects->packed_git;
+		struct multi_pack_index *m;
+
+		for (m = r->objects->multi_pack_index; m; m = m->next) {
+			uint32_t i;
+			for (i = 0; i < m->num_packs; i++) {
+				if (!prepare_midx_pack(m, i)) {
+					m->packs[i]->next = p;
+					p = m->packs[i];
+				}
+			}
+		}
+
+		r->objects->all_packs = p;
+	}
+
+	return r->objects->all_packs;
 }
 
 struct list_head *get_packed_git_mru(struct repository *r)
@@ -2008,7 +2036,7 @@ int for_each_packed_object(each_packed_object_fn cb, void *data,
 	int pack_errors = 0;
 
 	prepare_packed_git(the_repository);
-	for (p = the_repository->objects->packed_git; p; p = p->next) {
+	for (p = get_all_packs(the_repository); p; p = p->next) {
 		if ((flags & FOR_EACH_OBJECT_LOCAL_ONLY) && !p->pack_local)
 			continue;
 		if ((flags & FOR_EACH_OBJECT_PROMISOR_ONLY) &&
