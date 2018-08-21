@@ -209,7 +209,7 @@ static int read_graft_file(struct repository *r, const char *graft_file)
 	return 0;
 }
 
-void prepare_commit_graft(struct repository *r)
+static void prepare_commit_graft(struct repository *r)
 {
 	char *graft_file;
 
