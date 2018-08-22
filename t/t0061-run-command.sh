@@ -11,9 +11,10 @@ cat >hello-script <<-EOF
 	#!$SHELL_PATH
 	cat hello-script
 EOF
+>empty
 
 test_expect_failure MINGW 'subprocess inherits only std handles' '
-	test-tool run-command inherited-handle
+	test-run-command inherited-handle
 '
 
 test_expect_success 'start_command reports ENOENT' '
@@ -26,7 +27,7 @@ test_expect_success 'run_command can run a command' '
 	test-tool run-command run-command ./hello.sh >actual 2>err &&
 
 	test_cmp hello-script actual &&
-	test_must_be_empty err
+	test_cmp empty err
 '
 
 test_expect_success !MINGW 'run_command can run a script without a #! line' '
@@ -37,7 +38,7 @@ test_expect_success !MINGW 'run_command can run a script without a #! line' '
 	test-tool run-command run-command ./hello >actual 2>err &&
 
 	test_cmp hello-script actual &&
-	test_must_be_empty err
+	test_cmp empty err
 '
 
 test_expect_success 'run_command does not try to execute a directory' '
@@ -50,7 +51,7 @@ test_expect_success 'run_command does not try to execute a directory' '
 	PATH=$PWD/bin1$PATH_SEP$PWD/bin2$PATH_SEP$PATH \
 		test-tool run-command run-command greet >actual 2>err &&
 	test_cmp bin2/greet actual &&
-	test_must_be_empty err
+	test_cmp empty err
 '
 
 test_expect_success POSIXPERM 'run_command passes over non-executable file' '
@@ -67,7 +68,7 @@ test_expect_success POSIXPERM 'run_command passes over non-executable file' '
 	PATH=$PWD/bin1$PATH_SEP$PWD/bin2$PATH_SEP$PATH \
 		test-tool run-command run-command greet >actual 2>err &&
 	test_cmp bin2/greet actual &&
-	test_must_be_empty err
+	test_cmp empty err
 '
 
 test_expect_success POSIXPERM 'run_command reports EACCES' '
