@@ -24,7 +24,6 @@
 #include "packfile.h"
 #include "worktree.h"
 #include "argv-array.h"
-#include "commit-reach.h"
 
 volatile show_early_output_fn_t show_early_output;
 
@@ -176,6 +175,7 @@ static void add_pending_object_with_path(struct rev_info *revs,
 		strbuf_release(&buf);
 		return; /* do not add the commit itself */
 	}
+	obj->flags |= USER_GIVEN;
 	add_object_array_with_path(obj, name, &revs->pending, mode, path);
 }
 

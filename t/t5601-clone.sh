@@ -624,14 +624,8 @@ test_expect_success 'clone on case-insensitive fs' '
 			git hash-object -w -t tree --stdin) &&
 		c=$(git commit-tree -m bogus $t) &&
 		git update-ref refs/heads/bogus $c &&
-		git clone -b bogus . bogus 2>warning
+		git clone -b bogus . bogus
 	)
-'
-
-test_expect_success !MINGW,!CYGWIN,CASE_INSENSITIVE_FS 'colliding file detection' '
-	grep X icasefs/warning &&
-	grep x icasefs/warning &&
-	test_i18ngrep "the following paths have collided" icasefs/warning
 '
 
 partial_clone () {

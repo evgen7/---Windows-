@@ -96,9 +96,6 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 
 	diff_set_mnemonic_prefix(&revs->diffopt, "i/", "w/");
 
-	if (!(option & DIFF_SKIP_FSMONITOR))
-		refresh_fsmonitor(&the_index);
-
 	if (diff_unmerged_stage < 0)
 		diff_unmerged_stage = 2;
 	entries = active_nr;
@@ -199,9 +196,6 @@ int run_diff_files(struct rev_info *revs, unsigned int option)
 		}
 
 		if (ce_uptodate(ce) || ce_skip_worktree(ce))
-			continue;
-
-		if (ce->ce_flags & CE_FSMONITOR_VALID && !(option & DIFF_SKIP_FSMONITOR))
 			continue;
 
 		/* If CE_VALID is set, don't look at workdir for file removal */
@@ -524,11 +518,11 @@ static int diff_cache(struct rev_info *revs,
 int run_diff_index(struct rev_info *revs, int cached)
 {
 	struct object_array_entry *ent;
+	uint64_t start = getnanotime();
 
 	if (revs->pending.nr != 1)
 		BUG("run_diff_index must be passed exactly one tree");
 
-	trace_performance_enter();
 	ent = revs->pending.objects;
 	if (diff_cache(revs, &ent->item->oid, ent->name, cached))
 		exit(128);
@@ -537,7 +531,7 @@ int run_diff_index(struct rev_info *revs, int cached)
 	diffcore_fix_diff_index(&revs->diffopt);
 	diffcore_std(&revs->diffopt);
 	diff_flush(&revs->diffopt);
-	trace_performance_leave("diff-index");
+	trace_performance_since(start, "diff-index");
 	return 0;
 }
 

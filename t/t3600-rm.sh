@@ -380,7 +380,7 @@ test_expect_success 'rm does not complain when no .gitmodules file is found' '
 	git submodule update &&
 	git rm .gitmodules &&
 	git rm submod >actual 2>actual.err &&
-	test_must_be_empty actual.err &&
+	! test -s actual.err &&
 	! test -d submod &&
 	! test -f submod/.git &&
 	git status -s -uno >actual &&
@@ -398,7 +398,7 @@ test_expect_success 'rm will error out on a modified .gitmodules file unless sta
 	git diff-files --quiet -- submod &&
 	git add .gitmodules &&
 	git rm submod >actual 2>actual.err &&
-	test_must_be_empty actual.err &&
+	! test -s actual.err &&
 	! test -d submod &&
 	! test -f submod/.git &&
 	git status -s -uno >actual &&
@@ -692,7 +692,7 @@ test_expect_success 'checking out a commit after submodule removal needs manual 
 	test_cmp expected actual &&
 	rm -rf submod &&
 	git status -s -uno --ignore-submodules=none >actual &&
-	test_must_be_empty actual
+	! test -s actual
 '
 
 test_expect_success 'rm of d/f when d has become a non-directory' '
@@ -769,10 +769,10 @@ test_expect_success 'setup for testing rm messages' '
 test_expect_success 'rm files with different staged content' '
 	cat >expect <<-\EOF &&
 	error: the following files have staged content different from both the
-	error: file and the HEAD:
-	error:     bar.txt
-	error:     foo.txt
-	error: (use -f to force removal)
+	file and the HEAD:
+	    bar.txt
+	    foo.txt
+	(use -f to force removal)
 	EOF
 	echo content1 >foo.txt &&
 	echo content1 >bar.txt &&
@@ -783,9 +783,9 @@ test_expect_success 'rm files with different staged content' '
 test_expect_success 'rm files with different staged content without hints' '
 	cat >expect <<-\EOF &&
 	error: the following files have staged content different from both the
-	error: file and the HEAD:
-	error:     bar.txt
-	error:     foo.txt
+	file and the HEAD:
+	    bar.txt
+	    foo.txt
 	EOF
 	echo content2 >foo.txt &&
 	echo content2 >bar.txt &&
@@ -796,8 +796,8 @@ test_expect_success 'rm files with different staged content without hints' '
 test_expect_success 'rm file with local modification' '
 	cat >expect <<-\EOF &&
 	error: the following file has local modifications:
-	error:     foo.txt
-	error: (use --cached to keep the file, or -f to force removal)
+	    foo.txt
+	(use --cached to keep the file, or -f to force removal)
 	EOF
 	git commit -m "testing rm 3" &&
 	echo content3 >foo.txt &&
@@ -808,7 +808,7 @@ test_expect_success 'rm file with local modification' '
 test_expect_success 'rm file with local modification without hints' '
 	cat >expect <<-\EOF &&
 	error: the following file has local modifications:
-	error:     bar.txt
+	    bar.txt
 	EOF
 	echo content4 >bar.txt &&
 	test_must_fail git -c advice.rmhints=false rm bar.txt 2>actual &&
@@ -818,8 +818,8 @@ test_expect_success 'rm file with local modification without hints' '
 test_expect_success 'rm file with changes in the index' '
 	cat >expect <<-\EOF &&
 	error: the following file has changes staged in the index:
-	error:     foo.txt
-	error: (use --cached to keep the file, or -f to force removal)
+	    foo.txt
+	(use --cached to keep the file, or -f to force removal)
 	EOF
 	git reset --hard &&
 	echo content5 >foo.txt &&
@@ -831,7 +831,7 @@ test_expect_success 'rm file with changes in the index' '
 test_expect_success 'rm file with changes in the index without hints' '
 	cat >expect <<-\EOF &&
 	error: the following file has changes staged in the index:
-	error:     foo.txt
+	    foo.txt
 	EOF
 	test_must_fail git -c advice.rmhints=false rm foo.txt 2>actual &&
 	test_i18ncmp expect actual
@@ -840,12 +840,12 @@ test_expect_success 'rm file with changes in the index without hints' '
 test_expect_success 'rm files with two different errors' '
 	cat >expect <<-\EOF &&
 	error: the following file has staged content different from both the
-	error: file and the HEAD:
-	error:     foo1.txt
-	error: (use -f to force removal)
+	file and the HEAD:
+	    foo1.txt
+	(use -f to force removal)
 	error: the following file has changes staged in the index:
-	error:     bar1.txt
-	error: (use --cached to keep the file, or -f to force removal)
+	    bar1.txt
+	(use --cached to keep the file, or -f to force removal)
 	EOF
 	echo content >foo1.txt &&
 	git add foo1.txt &&

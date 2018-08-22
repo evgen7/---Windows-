@@ -51,13 +51,14 @@ test_expect_success SIMPLEPAGER 'git grep -O' '
 	grep.h
 	EOF
 	echo grep.h >expect.notless &&
+	>empty &&
 
 	PATH=.$PATH_SEP$PATH git grep -O GREP_PATTERN >out &&
 	{
 		test_cmp expect.less pager-args ||
 		test_cmp expect.notless pager-args
 	} &&
-	test_must_be_empty out
+	test_cmp empty out
 '
 
 test_expect_success 'git grep -O --cached' '
@@ -71,6 +72,7 @@ test_expect_success 'git grep -O --no-index' '
 	grep.h
 	untracked
 	EOF
+	>empty &&
 
 	(
 		GIT_PAGER='\''printf "%s\n" >pager-args'\'' &&
@@ -78,7 +80,7 @@ test_expect_success 'git grep -O --no-index' '
 		git grep --no-index -O GREP_PATTERN >out
 	) &&
 	test_cmp expect pager-args &&
-	test_must_be_empty out
+	test_cmp empty out
 '
 
 test_expect_success 'setup: fake "less"' '
@@ -94,14 +96,15 @@ test_expect_success 'git grep -O jumps to line in less' '
 	+/*GREP_PATTERN
 	grep.h
 	EOF
+	>empty &&
 
 	GIT_PAGER=./less git grep -O GREP_PATTERN >out &&
 	test_cmp expect actual &&
-	test_must_be_empty out &&
+	test_cmp empty out &&
 
 	git grep -O./less GREP_PATTERN >out2 &&
 	test_cmp expect actual &&
-	test_must_be_empty out2
+	test_cmp empty out2
 '
 
 test_expect_success 'modified file' '
@@ -119,7 +122,7 @@ test_expect_success 'modified file' '
 	test_when_finished "git checkout HEAD unrelated" &&
 	GIT_PAGER=./less git grep -F -O "enum grep_pat_token" >out &&
 	test_cmp expect actual &&
-	test_must_be_empty out
+	test_cmp empty out
 '
 
 test_expect_success 'copes with color settings' '
@@ -135,6 +138,7 @@ test_expect_success 'copes with color settings' '
 test_expect_success 'run from subdir' '
 	rm -f actual &&
 	echo grep.c >expect &&
+	>empty &&
 
 	(
 		cd subdir &&
@@ -152,8 +156,8 @@ test_expect_success 'run from subdir' '
 		;;
 	esac &&
 	test_cmp expect args &&
-	test_must_be_empty out &&
-	test_must_be_empty out2
+	test_cmp empty out &&
+	test_cmp empty out2
 '
 
 test_done

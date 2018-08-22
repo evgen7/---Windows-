@@ -290,8 +290,9 @@ test_expect_success 'stale dirs do not cause d/f conflicts (reflogs off)' '
 	# same as before, but we only create a reflog for "one" if
 	# it already exists, which it does not
 	git -c core.logallrefupdates=false branch one master &&
+	: >expect &&
 	git log -g --format="%gd %gs" one >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 # Triggering the bug detected by this test requires a newline to fall

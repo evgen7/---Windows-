@@ -66,6 +66,9 @@ fi
 . "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
 export PERL_PATH SHELL_PATH
 
+test -z "$MSVC_DEPS" ||
+PATH="$GIT_BUILD_DIR/$MSVC_DEPS/bin$PATH_SEP$PATH"
+
 ################################################################
 # It appears that people try to run tests without building...
 test -n "$GIT_TEST_INSTALLED" || "$GIT_BUILD_DIR/git$X" >/dev/null ||
@@ -1058,16 +1061,10 @@ case $uname_s in
 			/usr/bin/find "$@"
 		}
 	fi
-	# On Windows, Git wants Windows paths. But /usr/bin/pwd spits out
-	# Unix-style paths. At least in Bash, we have a builtin pwd that
-	# understands the -W option to force "mixed" paths, i.e. with drive
-	# prefix but still with forward slashes. Let's use that, if available.
-	if type builtin >/dev/null 2>&1
-	then
-		pwd () {
-			builtin pwd -W
-		}
-	fi
+	# git sees Windows-style pwd
+	pwd () {
+		builtin pwd -W
+	}
 	# no POSIX permissions
 	# backslashes in pathspec are converted to '/'
 	# exec does not inherit the PID
@@ -1105,7 +1102,6 @@ test -n "$USE_LIBPCRE1$USE_LIBPCRE2" && test_set_prereq PCRE
 test -n "$USE_LIBPCRE1" && test_set_prereq LIBPCRE1
 test -n "$USE_LIBPCRE2" && test_set_prereq LIBPCRE2
 test -z "$NO_GETTEXT" && test_set_prereq GETTEXT
-test -z "$STRUCTURED_LOGGING" || test_set_prereq SLOG
 
 # Can we rely on git's output in the C locale?
 if test -n "$GETTEXT_POISON"
@@ -1115,12 +1111,6 @@ then
 	test_set_prereq GETTEXT_POISON
 else
 	test_set_prereq C_LOCALE_OUTPUT
-fi
-
-if test -z "$GIT_TEST_CHECK_CACHE_TREE"
-then
-	GIT_TEST_CHECK_CACHE_TREE=true
-	export GIT_TEST_CHECK_CACHE_TREE
 fi
 
 test_lazy_prereq PIPE '
@@ -1229,10 +1219,6 @@ GIT_UNZIP=${GIT_UNZIP:-unzip}
 test_lazy_prereq UNZIP '
 	"$GIT_UNZIP" -v
 	test $? -ne 127
-'
-
-test_lazy_prereq BUSYBOX '
-	case "$($SHELL --help 2>&1)" in *BusyBox*) true;; *) false;; esac
 '
 
 run_with_limited_cmdline () {

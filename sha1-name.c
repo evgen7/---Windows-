@@ -13,7 +13,6 @@
 #include "object-store.h"
 #include "repository.h"
 #include "midx.h"
-#include "commit-reach.h"
 
 static int get_oid_oneline(const char *, struct object_id *, struct commit_list *);
 
@@ -1542,25 +1541,6 @@ int get_oid(const char *name, struct object_id *oid)
 	return get_oid_with_context(name, 0, oid, &unused);
 }
 
-/*
- * This returns a non-zero value if the string (built using printf
- * format and the given arguments) is not a valid object.
- */
-int get_oidf(struct object_id *oid, const char *fmt, ...)
-{
-	va_list ap;
-	int ret;
-	struct strbuf sb = STRBUF_INIT;
-
-	va_start(ap, fmt);
-	strbuf_vaddf(&sb, fmt, ap);
-	va_end(ap);
-
-	ret = get_oid(sb.buf, oid);
-	strbuf_release(&sb);
-
-	return ret;
-}
 
 /*
  * Many callers know that the user meant to name a commit-ish by

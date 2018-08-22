@@ -803,9 +803,9 @@ static int add_excludes_from_buffer(char *buf, size_t size,
  * an index if 'istate' is non-null), parse it and store the
  * exclude rules in "el".
  *
- * If sha1_stat is not NULL, compute SHA-1 of the exclude file and fill
+ * If "ss" is not NULL, compute SHA-1 of the exclude file and fill
  * stat data from disk (only valid if add_excludes returns zero). If
- * sha1_stat.valid is non-zero, sha1_stat must contain good value as input.
+ * ss_valid is non-zero, "ss" must contain good value as input.
  */
 static int add_excludes(const char *fname, const char *base, int baselen,
 			struct exclude_list *el, struct index_state *istate,
@@ -817,55 +817,12 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 	size_t size = 0;
 	char *buf;
 
-	/*
-	 * A performance optimization for status.
-	 *
-	 * During a status scan, git looks in each directory for a .gitignore
-	 * file before scanning the directory.  Since .gitignore files are not
-	 * that common, we can waste a lot of time looking for files that are
-	 * not there.  Fortunately, the fscache already knows if the directory
-	 * contains a .gitignore file, since it has already read the directory
-	 * and it already has the stat-data.
-	 *
-	 * If the fscache is enabled, use the fscache-lstat() interlude to see
-	 * if the file exists (in the fscache hash maps) before trying to open()
-	 * it.
-	 *
-	 * This causes problem when the .gitignore file is a symlink, because
-	 * we call lstat() rather than stat() on the symlnk and the resulting
-	 * stat-data is for the symlink itself rather than the target file.
-	 * We CANNOT use stat() here because the fscache DOES NOT install an
-	 * interlude for stat() and mingw_stat() always calls "open-fstat-close"
-	 * on the file and defeats the purpose of the optimization here.  Since
-	 * symlinks are even more rare than .gitignore files, we force a fstat()
-	 * after our open() to get stat-data for the target file.
-	 */
-	if (is_fscache_enabled(fname)) {
-		if (lstat(fname, &st) < 0) {
-			fd = -1;
-		} else {
-			fd = open(fname, O_RDONLY);
-			if (fd < 0)
-				warn_on_fopen_errors(fname);
-			else if (S_ISLNK(st.st_mode) && fstat(fd, &st) < 0) {
-				warn_on_fopen_errors(fname);
-				close(fd);
-				fd = -1;
-			}
-		}
-	} else {
-		fd = open(fname, O_RDONLY);
-		if (fd < 0 || fstat(fd, &st) < 0) {
-			if (fd < 0)
-				warn_on_fopen_errors(fname);
-			else {
-				close(fd);
-				fd = -1;
-			}
-		}
-	}
-
-	if (fd < 0) {
+	fd = open(fname, O_RDONLY);
+	if (fd < 0 || fstat(fd, &st) < 0) {
+		if (fd < 0)
+			warn_on_fopen_errors(fname);
+		else
+			close(fd);
 		if (!istate)
 			return -1;
 		r = read_skip_worktree_file_from_index(istate, fname,
@@ -2311,13 +2268,10 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		   const char *path, int len, const struct pathspec *pathspec)
 {
 	struct untracked_cache_dir *untracked;
+	uint64_t start = getnanotime();
 
-	trace_performance_enter();
-
-	if (has_symlink_leading_path(path, len)) {
-		trace_performance_leave("read directory %.*s", len, path);
+	if (has_symlink_leading_path(path, len))
 		return dir->nr;
-	}
 
 	untracked = validate_untracked_cache(dir, len, pathspec);
 	if (!untracked)
@@ -2353,7 +2307,7 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		dir->nr = i;
 	}
 
-	trace_performance_leave("read directory %.*s", len, path);
+	trace_performance_since(start, "read directory %.*s", len, path);
 	if (dir->untracked) {
 		static int force_untracked_cache = -1;
 		static struct trace_key trace_untracked_stats = TRACE_KEY_INIT(UNTRACKED_STATS);
@@ -3104,7 +3058,7 @@ static void connect_wt_gitdir_in_nested(const char *sub_worktree,
 		strbuf_reset(&sub_wt);
 		strbuf_reset(&sub_gd);
 		strbuf_addf(&sub_wt, "%s/%s", sub_worktree, sub->path);
-		submodule_name_to_gitdir(&sub_gd, &subrepo, sub->name);
+		strbuf_addf(&sub_gd, "%s/modules/%s", sub_gitdir, sub->name);
 
 		connect_work_tree_and_git_dir(sub_wt.buf, sub_gd.buf, 1);
 	}

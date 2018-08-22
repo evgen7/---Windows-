@@ -15,21 +15,6 @@ ifdef MSVC
 	# avoid the MingW and Cygwin configuration sections
 	uname_S := Windows
 	uname_O := Windows
-
-	# Generate and include makefile variables that point to the
-	# currently installed set of MSVC command line tools.
-compat/vcbuild/MSVC-DEFS-GEN: compat/vcbuild/find_vs_env.bat
-	@"$<" | tr '\\' / >"$@"
-include compat/vcbuild/MSVC-DEFS-GEN
-
-	# See if vcpkg and the vcpkg-build versions of the third-party
-	# libraries that we use are installed.  We include the result
-	# to get $(vcpkg_*) variables defined for the Makefile.
-ifeq (,$(SKIP_VCPKG))
-compat/vcbuild/VCPKG-DEFS: compat/vcbuild/vcpkg_install.bat
-	@"$<"
-include compat/vcbuild/VCPKG-DEFS
-endif
 endif
 
 # We choose to avoid "if .. else if .. else .. endif endif"
@@ -358,19 +343,13 @@ endif
 ifeq ($(uname_S),Windows)
 	GIT_VERSION := $(GIT_VERSION).MSVC
 	pathsep = ;
-	# Assume that this is built in Git for Windows' SDK
-	ifeq (MINGW32,$(MSYSTEM))
-		prefix = /mingw32
-	else
-		prefix = /mingw64
-	endif
 	# Prepend MSVC 64-bit tool-chain to PATH.
 	#
 	# A regular Git Bash *does not* have cl.exe in its $PATH. As there is a
 	# link.exe next to, and required by, cl.exe, we have to prepend this
 	# onto the existing $PATH.
 	#
-	SANE_TOOL_PATH ?= $(msvc_bin_dir_msys)
+	SANE_TOOL_PATH ?= /c/Program Files (x86)/Microsoft Visual Studio 14.0/VC/bin/amd64
 	HAVE_ALLOCA_H = YesPlease
 	NO_PREAD = YesPlease
 	NEEDS_CRYPTO_WITH_SSL = YesPlease
@@ -407,6 +386,8 @@ ifeq ($(uname_S),Windows)
 	NO_GETTEXT = YesPlease
 	NO_PYTHON = YesPlease
 	ETAGS_TARGET = ETAGS
+	NO_INET_PTON = YesPlease
+	NO_INET_NTOP = YesPlease
 	NO_POSIX_GOODIES = UnfortunatelyYes
 	NATIVE_CRLF = YesPlease
 	DEFAULT_HELP_FORMAT = html
@@ -426,14 +407,28 @@ ifeq ($(uname_S),Windows)
 	EXTLIBS = user32.lib advapi32.lib shell32.lib wininet.lib ws2_32.lib invalidcontinue.obj kernel32.lib ntdll.lib
 	PTHREAD_LIBS =
 	lib =
-	BASIC_CFLAGS += $(vcpkg_inc) $(sdk_includes) $(msvc_includes)
-ifndef DEBUG
-	BASIC_CFLAGS += $(vcpkg_rel_lib)
-else
-	BASIC_CFLAGS += $(vcpkg_dbg_lib)
-endif
-	BASIC_CFLAGS += $(sdk_libs) $(msvc_libs)
-
+	# Path to the unpacked third-party libraries
+	MSVC_DEPS = compat/vcbuild/GEN.DEPS
+	# Compensate for lack of %VCINSTALLDIR%, %LIB%, %LIBPATH%, and etc.
+	# since vcvars*.bat did not get a chance to setup the environment of
+	# the user's shell window.
+	#
+	# TODO If we ask the user to launch a "x64 Native" command prompt
+	# TODO and then have it start a git-bash window, these could be
+	# TODO inherited.  So we wouldn't need to add these lines here.
+	#
+	MSVC_SDK81 = "c:/Program Files (x86)/Windows Kits/8.1"
+	MSVC_SDK10 = "c:/Program Files (x86)/Windows Kits/10"
+	MSVC_VCDIR = "c:/Program Files (x86)/Microsoft Visual Studio 14.0/VC"
+	BASIC_CFLAGS += \
+		     -I$(MSVC_DEPS)/include -I$(MSVC_DEPS)/include/expat -I$(MSVC_DEPS)/include/zlib \
+		     -L$(MSVC_DEPS)/lib \
+		     -I$(MSVC_SDK81)/Include/um -I$(MSVC_SDK81)/Include/shared \
+		     -L$(MSVC_SDK81)/lib/winv6.3/um/x64 \
+		     -I$(MSVC_SDK10)/Include/10.0.10240.0/ucrt \
+		     -L$(MSVC_SDK10)/lib/10.0.10240.0/ucrt/x64 \
+		     -I$(MSVC_VCDIR)/INCLUDE \
+		     -L$(MSVC_VCDIR)/lib/amd64
 	# Optionally enable memory leak reporting.
 	# BASIC_CLFAGS += -DUSE_MSVC_CRTDBG
 	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
@@ -456,6 +451,80 @@ endif
 	X = .exe
 
 compat/msvc.o: compat/msvc.c compat/mingw.c GIT-CFLAGS
+
+vcxproj:
+	# Require clean work tree
+	git update-index -q --refresh && \
+	git diff-files --quiet && \
+	git diff-index --cached --quiet HEAD --
+
+	# Make .vcxproj files and add them
+	unset QUIET_GEN QUIET_BUILT_IN; \
+	perl contrib/buildsystems/generate -g Vcxproj
+	git add -f git.sln {*,*/lib,t/helper/*}/*.vcxproj
+
+	# Generate the LinkOrCopyBuiltins.targets file
+	(echo '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' && \
+	 echo '  <Target Name="CopyBuiltins_AfterBuild" AfterTargets="AfterBuild">' && \
+	 for name in $(BUILT_INS);\
+	 do \
+	   echo '    <Copy SourceFiles="$$(OutDir)\git.exe" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
+	 done && \
+	 for name in $(REMOTE_CURL_ALIASES); \
+	 do \
+	   echo '    <Copy SourceFiles="$$(OutDir)\'"$(REMOTE_CURL_PRIMARY)"'" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
+	 done && \
+	 echo '  </Target>' && \
+	 echo '</Project>') >git/LinkOrCopyBuiltins.targets
+	git add -f git/LinkOrCopyBuiltins.targets
+
+	# Add command-list.h
+	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 command-list.h
+	git add -f command-list.h
+
+	# Add scripts
+	rm -f perl/perl.mak
+	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 \
+		$(SCRIPT_LIB) $(SCRIPT_SH_GEN) $(SCRIPT_PERL_GEN)
+	# Strip out the sane tool path, needed only for building
+	sed -i '/^git_broken_path_fix ".*/d' git-sh-setup
+	git add -f $(SCRIPT_LIB) $(SCRIPT_SH_GEN) $(SCRIPT_PERL_GEN)
+
+	# Add Perl module
+	$(MAKE) $(LIB_PERL_GEN)
+	git add -f perl/build
+
+	# Add bin-wrappers, for testing
+	rm -rf bin-wrappers/
+	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 $(test_bindir_programs)
+	# Ensure that the GIT_EXEC_PATH is a Unix-y one, and that the absolute
+	# path of the repository is not hard-coded (GIT_EXEC_PATH will be set
+	# by test-lib.sh according to the current setup)
+	sed -i -e 's/^\(GIT_EXEC_PATH\)=.*/test -n "$${\1##*:*}" ||\
+			\1="$$(cygpath -u "$$\1")"/' \
+		-e "s|'$$(pwd)|\"\$$GIT_EXEC_PATH\"'|g" bin-wrappers/*
+	# Ensure that test-* helpers find the .dll files copied to top-level
+	sed -i 's|^PATH=.*|&:"$$GIT_EXEC_PATH"|' bin-wrappers/test-*
+	# We do not want to force hard-linking builtins
+	sed -i 's|\(git\)-\([-a-z]*\)\.exe"|\1.exe" \2|g' \
+		bin-wrappers/git-{receive-pack,upload-archive}
+	git add -f $(test_bindir_programs)
+	# remote-ext is a builtin, but invoked as if it were external
+	sed 's|receive-pack|remote-ext|g' \
+		<bin-wrappers/git-receive-pack >bin-wrappers/git-remote-ext
+	git add -f bin-wrappers/git-remote-ext
+
+	# Add templates
+	$(MAKE) -C templates
+	git add -f templates/boilerplates.made templates/blt/
+
+	# Add build options
+	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 GIT-BUILD-OPTIONS
+	git add -f GIT-BUILD-OPTIONS
+
+	# Commit the whole shebang
+	git commit -m "Generate Visual Studio solution" \
+		-m "Auto-generated by \`$(MAKE)$(MAKEFLAGS) $@\`"
 endif
 ifeq ($(uname_S),Interix)
 	NO_INITGROUPS = YesPlease
@@ -575,6 +644,8 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	NO_REGEX = YesPlease
 	NO_PYTHON = YesPlease
 	ETAGS_TARGET = ETAGS
+	NO_INET_PTON = YesPlease
+	NO_INET_NTOP = YesPlease
 	NO_POSIX_GOODIES = UnfortunatelyYes
 	DEFAULT_HELP_FORMAT = html
 	COMPAT_CFLAGS += -DNOGDI -Icompat -Icompat/win32
@@ -641,65 +712,6 @@ else
 		NO_CURL = YesPlease
 	endif
 endif
-ifeq (i686,$(uname_M))
-	MINGW_PREFIX := mingw32
-endif
-ifeq (x86_64,$(uname_M))
-	MINGW_PREFIX := mingw64
-endif
-
-	DESTDIR_WINDOWS = $(shell cygpath -aw '$(DESTDIR_SQ)')
-	DESTDIR_MIXED = $(shell cygpath -am '$(DESTDIR_SQ)')
-install-mingit-test-artifacts:
-	install -m755 -d '$(DESTDIR_SQ)/usr/bin'
-	printf '%s\n%s\n' >'$(DESTDIR_SQ)/usr/bin/perl' \
-		"#!/mingw64/bin/busybox sh" \
-		"exec \"$(shell cygpath -am /usr/bin/perl.exe)\" \"\$$@\""
-
-	install -m755 -d '$(DESTDIR_SQ)'
-	printf '%s%s\n%s\n%s\n%s\n%s\n' >'$(DESTDIR_SQ)/init.bat' \
-		"PATH=$(DESTDIR_WINDOWS)\\$(MINGW_PREFIX)\\bin;" \
-		"C:\\WINDOWS;C:\\WINDOWS\\system32" \
-		"@set GIT_TEST_INSTALLED=$(DESTDIR_MIXED)/$(MINGW_PREFIX)/bin" \
-		"@`echo "$(DESTDIR_WINDOWS)" | sed 's/:.*/:/'`" \
-		"@cd `echo "$(DESTDIR_WINDOWS)" | sed 's/^.://'`\\test-git\\t" \
-		"@echo Now, run 'helper\\test-run-command testsuite'"
-
-	install -m755 -d '$(DESTDIR_SQ)/test-git'
-	sed 's/^\(NO_PERL\|NO_PYTHON\)=.*/\1=YesPlease/' \
-		<GIT-BUILD-OPTIONS >'$(DESTDIR_SQ)/test-git/GIT-BUILD-OPTIONS'
-
-	install -m755 -d '$(DESTDIR_SQ)/test-git/t/helper'
-	install -m755 $(TEST_PROGRAMS) '$(DESTDIR_SQ)/test-git/t/helper'
-	(cd t && $(TAR) cf - t[0-9][0-9][0-9][0-9] diff-lib) | \
-	(cd '$(DESTDIR_SQ)/test-git/t' && $(TAR) xf -)
-	install -m755 t/t556x_common t/*.sh '$(DESTDIR_SQ)/test-git/t'
-
-	install -m755 -d '$(DESTDIR_SQ)/test-git/templates'
-	(cd templates && $(TAR) cf - blt) | \
-	(cd '$(DESTDIR_SQ)/test-git/templates' && $(TAR) xf -)
-
-	# po/build/locale for t0200
-	install -m755 -d '$(DESTDIR_SQ)/test-git/po/build/locale'
-	(cd po/build/locale && $(TAR) cf - .) | \
-	(cd '$(DESTDIR_SQ)/test-git/po/build/locale' && $(TAR) xf -)
-
-	# git-daemon.exe for t5802, git-http-backend.exe for t5560
-	install -m755 -d '$(DESTDIR_SQ)/$(MINGW_PREFIX)/bin'
-	install -m755 git-daemon.exe git-http-backend.exe \
-		'$(DESTDIR_SQ)/$(MINGW_PREFIX)/bin'
-
-	# git-remote-testgit for t5801
-	install -m755 -d '$(DESTDIR_SQ)/$(MINGW_PREFIX)/libexec/git-core'
-	install -m755 git-remote-testgit \
-		'$(DESTDIR_SQ)/$(MINGW_PREFIX)/libexec/git-core'
-
-	# git-upload-archive (dashed) for t5000
-	install -m755 git-upload-archive.exe '$(DESTDIR_SQ)/$(MINGW_PREFIX)/bin'
-
-	# git-difftool--helper for t7800
-	install -m755 git-difftool--helper \
-		'$(DESTDIR_SQ)/$(MINGW_PREFIX)/libexec/git-core'
 endif
 ifeq ($(uname_S),QNX)
 	COMPAT_CFLAGS += -DSA_RESTART=0
@@ -716,77 +728,3 @@ ifeq ($(uname_S),QNX)
 	NO_STRCASESTR = YesPlease
 	NO_STRLCPY = YesPlease
 endif
-
-vcxproj:
-	# Require clean work tree
-	git update-index -q --refresh && \
-	git diff-files --quiet && \
-	git diff-index --cached --quiet HEAD --
-
-	# Make .vcxproj files and add them
-	unset QUIET_GEN QUIET_BUILT_IN; \
-	perl contrib/buildsystems/generate -g Vcxproj
-	git add -f git.sln {*,*/lib,t/helper/*}/*.vcxproj
-
-	# Generate the LinkOrCopyBuiltins.targets file
-	(echo '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' && \
-	 echo '  <Target Name="CopyBuiltins_AfterBuild" AfterTargets="AfterBuild">' && \
-	 for name in $(BUILT_INS);\
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\git.exe" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 for name in $(REMOTE_CURL_ALIASES); \
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\'"$(REMOTE_CURL_PRIMARY)"'" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 echo '  </Target>' && \
-	 echo '</Project>') >git/LinkOrCopyBuiltins.targets
-	git add -f git/LinkOrCopyBuiltins.targets
-
-	# Add command-list.h
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 command-list.h
-	git add -f command-list.h
-
-	# Add scripts
-	rm -f perl/perl.mak
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 \
-		$(SCRIPT_LIB) $(SCRIPT_SH_GEN) $(SCRIPT_PERL_GEN)
-	# Strip out the sane tool path, needed only for building
-	sed -i '/^git_broken_path_fix ".*/d' git-sh-setup
-	git add -f $(SCRIPT_LIB) $(SCRIPT_SH_GEN) $(SCRIPT_PERL_GEN)
-
-	# Add Perl module
-	$(MAKE) $(LIB_PERL_GEN)
-	git add -f perl/build
-
-	# Add bin-wrappers, for testing
-	rm -rf bin-wrappers/
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 $(test_bindir_programs)
-	# Ensure that the GIT_EXEC_PATH is a Unix-y one, and that the absolute
-	# path of the repository is not hard-coded (GIT_EXEC_PATH will be set
-	# by test-lib.sh according to the current setup)
-	sed -i -e 's/^\(GIT_EXEC_PATH\)=.*/test -n "$${\1##*:*}" ||\
-			\1="$$(cygpath -u "$$\1")"/' \
-		-e "s|'$$(pwd)|\"\$$GIT_EXEC_PATH\"'|g" bin-wrappers/*
-	# Ensure that test-* helpers find the .dll files copied to top-level
-	sed -i 's|^PATH=.*|&:"$$GIT_EXEC_PATH"|' bin-wrappers/test-*
-	# We do not want to force hard-linking builtins
-	sed -i 's|\(git\)-\([-a-z]*\)\.exe"|\1.exe" \2|g' \
-		bin-wrappers/git-{receive-pack,upload-archive}
-	git add -f $(test_bindir_programs)
-	# remote-ext is a builtin, but invoked as if it were external
-	sed 's|receive-pack|remote-ext|g' \
-		<bin-wrappers/git-receive-pack >bin-wrappers/git-remote-ext
-	git add -f bin-wrappers/git-remote-ext
-
-	# Add templates
-	$(MAKE) -C templates
-	git add -f templates/boilerplates.made templates/blt/
-
-	# Add build options
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 GIT-BUILD-OPTIONS
-	git add -f GIT-BUILD-OPTIONS
-
-	# Commit the whole shebang
-	git commit -m "Generate Visual Studio solution" \
-		-m "Auto-generated by \`$(MAKE)$(MAKEFLAGS) $@\`"

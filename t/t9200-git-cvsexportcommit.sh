@@ -11,13 +11,6 @@ if ! test_have_prereq PERL; then
 	test_done
 fi
 
-case "$PWD" in
-*:*)
-	skip_all='cvs would get confused by the colon in `pwd`; skipping tests'
-	test_done
-	;;
-esac
-
 cvs >/dev/null 2>&1
 if test $? -ne 1
 then
@@ -50,11 +43,11 @@ check_entries () {
 	sed -ne '/^\//p' "$1/CVS/Entries" | sort | cut -d/ -f2,3,5 >actual
 	if test -z "$2"
 	then
-		test_must_be_empty actual
+		>expected
 	else
 		printf '%s\n' "$2" | tr '|' '\012' >expected
-		test_cmp expected actual
 	fi
+	test_cmp expected actual
 }
 
 test_expect_success \

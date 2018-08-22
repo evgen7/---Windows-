@@ -748,7 +748,6 @@ static int checkout(int submodule_progress)
 	memset(&opts, 0, sizeof opts);
 	opts.update = 1;
 	opts.merge = 1;
-	opts.clone = 1;
 	opts.fn = oneway_merge;
 	opts.verbose_update = (option_verbosity >= 0);
 	opts.src_index = &the_index;
@@ -901,7 +900,6 @@ int cmd_clone(int argc, const char **argv, const char *prefix)
 	struct refspec rs = REFSPEC_INIT_FETCH;
 	struct argv_array ref_prefixes = ARGV_ARRAY_INIT;
 
-	git_config(platform_core_config, NULL);
 	fetch_if_missing = 0;
 
 	packet_trace_identity("clone");

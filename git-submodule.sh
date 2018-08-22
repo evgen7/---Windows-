@@ -72,7 +72,7 @@ get_submodule_config () {
 	value=$(git config submodule."$name"."$option")
 	if test -z "$value"
 	then
-		value=$(git submodule--helper config submodule."$name"."$option")
+		value=$(git config -f .gitmodules submodule."$name"."$option")
 	fi
 	printf '%s' "${value:-$default}"
 }
@@ -158,13 +158,6 @@ cmd_add()
 		esac
 		shift
 	done
-
-	# For more details about this check, see
-	# builtin/submodule--helper.c::module_config()
-	if test ! -e .gitmodules && git cat-file -e HEAD:.gitmodules > /dev/null 2>&1
-	then
-		 die "$(eval_gettext "please make sure that the .gitmodules file in the current branch is checked out")"
-	fi
 
 	if test -n "$reference_path"
 	then
@@ -259,13 +252,12 @@ Use -f if you really want to add it." >&2
 		fi
 
 	else
-		sm_gitdir="$(git submodule--helper gitdir "$sm_name")"
-		if test -d "$sm_gitdir"
+		if test -d ".git/modules/$sm_name"
 		then
 			if test -z "$force"
 			then
 				eval_gettextln >&2 "A git directory for '\$sm_name' is found locally with remote(s):"
-				GIT_DIR="$sm_gitdir" GIT_WORK_TREE=. git remote -v | grep '(fetch)' | sed -e s,^,"  ", -e s,' (fetch)',, >&2
+				GIT_DIR=".git/modules/$sm_name" GIT_WORK_TREE=. git remote -v | grep '(fetch)' | sed -e s,^,"  ", -e s,' (fetch)',, >&2
 				die "$(eval_gettextln "\
 If you want to reuse this local git directory instead of cloning again from
   \$realrepo
@@ -291,11 +283,11 @@ or you are unsure what this means choose another name with the '--name' option."
 	git add --no-warn-embedded-repo $force "$sm_path" ||
 	die "$(eval_gettext "Failed to add submodule '\$sm_path'")"
 
-	git submodule--helper config submodule."$sm_name".path "$sm_path" &&
-	git submodule--helper config submodule."$sm_name".url "$repo" &&
+	git config -f .gitmodules submodule."$sm_name".path "$sm_path" &&
+	git config -f .gitmodules submodule."$sm_name".url "$repo" &&
 	if test -n "$branch"
 	then
-		git submodule--helper config submodule."$sm_name".branch "$branch"
+		git config -f .gitmodules submodule."$sm_name".branch "$branch"
 	fi &&
 	git add --force .gitmodules ||
 	die "$(eval_gettext "Failed to register submodule '\$sm_path'")"

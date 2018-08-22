@@ -14,15 +14,8 @@ my @args = ();
 my @cflags = ();
 my @lflags = ();
 my $is_linking = 0;
-my $is_debug = 0;
 while (@ARGV) {
 	my $arg = shift @ARGV;
-	if ("$arg" eq "-DDEBUG") {
-	    # Some vcpkg-based libraries have different names for release
-	    # and debug versions.  This hack assumes that -DDEBUG comes
-	    # before any "-l*" flags.
-	    $is_debug = 1;
-	}
 	if ("$arg" =~ /^-[DIMGOZ]/) {
 		push(@cflags, $arg);
 	} elsif ("$arg" eq "-o") {
@@ -37,13 +30,9 @@ while (@ARGV) {
 			push(@args, "-Fd$file_out.pdb");
 		}
 	} elsif ("$arg" eq "-lz") {
-	    if ($is_debug) {
-		push(@args, "zlibd.lib");
-	    } else{
 		push(@args, "zlib.lib");
-	    }
 	} elsif ("$arg" eq "-liconv") {
-		push(@args, "libiconv.lib");
+		push(@args, "iconv.lib");
 	} elsif ("$arg" eq "-lcrypto") {
 		push(@args, "libeay32.lib");
 	} elsif ("$arg" eq "-lssl") {
@@ -51,7 +40,7 @@ while (@ARGV) {
 	} elsif ("$arg" eq "-lcurl") {
 		push(@args, "libcurl.lib");
 	} elsif ("$arg" eq "-lexpat") {
-		push(@args, "expat.lib");
+		push(@args, "libexpat.lib");
 	} elsif ("$arg" =~ /^-L/ && "$arg" ne "-LTCG") {
 		$arg =~ s/^-L/-LIBPATH:/;
 		push(@lflags, $arg);

@@ -161,7 +161,7 @@ test_expect_success 'clone shallow object count' '
 test_expect_success 'clone shallow object count (part 2)' '
 	sed -e "/^in-pack:/d" -e "/^packs:/d" -e "/^size-pack:/d" \
 	    -e "/: 0$/d" count.shallow > count_output &&
-	test_must_be_empty count_output
+	! test -s count_output
 '
 
 test_expect_success 'fsck in shallow repo' '
@@ -695,21 +695,12 @@ do
 	# file with scheme
 	for p in file
 	do
-		test_expect_success !MINGW "fetch-pack --diag-url $p://$h/$r" '
+		test_expect_success "fetch-pack --diag-url $p://$h/$r" '
 			check_prot_path $p://$h/$r $p "/$r"
 		'
-		test_expect_success MINGW "fetch-pack --diag-url $p://$h/$r" '
-			check_prot_path $p://$h/$r $p "//$h/$r"
-		'
-		test_expect_success MINGW "fetch-pack --diag-url $p:///$r" '
-			check_prot_path $p:///$r $p "/$r"
-		'
 		# No "/~" -> "~" conversion for file
-		test_expect_success !MINGW "fetch-pack --diag-url $p://$h/~$r" '
+		test_expect_success "fetch-pack --diag-url $p://$h/~$r" '
 			check_prot_path $p://$h/~$r $p "/~$r"
-		'
-		test_expect_success MINGW "fetch-pack --diag-url $p://$h/~$r" '
-			check_prot_path $p://$h/~$r $p "//$h/~$r"
 		'
 	done
 	# file without scheme

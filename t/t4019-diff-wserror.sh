@@ -260,7 +260,7 @@ test_expect_success 'trailing empty lines (2)' '
 
 	echo "F -whitespace" >.gitattributes &&
 	git diff --check >output &&
-	test_must_be_empty output
+	! test -s output
 
 '
 

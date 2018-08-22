@@ -103,7 +103,6 @@ struct object_entry {
 	unsigned no_try_delta:1;
 	unsigned type_:TYPE_BITS;
 	unsigned in_pack_type:TYPE_BITS; /* could be delta */
-
 	unsigned preferred_base:1; /*
 				    * we do not pack this, but is available
 				    * to be used as the base object to delta
@@ -113,7 +112,6 @@ struct object_entry {
 	unsigned filled:1; /* assigned write-order */
 	unsigned dfs_state:OE_DFS_STATE_BITS;
 	unsigned depth:OE_DEPTH_BITS;
-	unsigned ext_base:1; /* delta_idx points outside packlist */
 
 	/*
 	 * pahole results on 64-bit linux (gcc and clang)
@@ -149,20 +147,8 @@ struct packing_data {
 	pthread_mutex_t lock;
 #endif
 
-	/*
-	 * This list contains entries for bases which we know the other side
-	 * has (e.g., via reachability bitmaps), but which aren't in our
-	 * "objects" list.
-	 */
-	struct object_entry *ext_bases;
-	uint32_t nr_ext, alloc_ext;
-
 	uintmax_t oe_size_limit;
 	uintmax_t oe_delta_size_limit;
-
-	/* delta islands */
-	unsigned int *tree_depth;
-	unsigned char *layer;
 };
 
 void prepare_packing_data(struct packing_data *pdata);
@@ -263,12 +249,9 @@ static inline struct object_entry *oe_delta(
 		const struct packing_data *pack,
 		const struct object_entry *e)
 {
-	if (!e->delta_idx)
-		return NULL;
-	if (e->ext_base)
-		return &pack->ext_bases[e->delta_idx - 1];
-	else
+	if (e->delta_idx)
 		return &pack->objects[e->delta_idx - 1];
+	return NULL;
 }
 
 static inline void oe_set_delta(struct packing_data *pack,
@@ -280,10 +263,6 @@ static inline void oe_set_delta(struct packing_data *pack,
 	else
 		e->delta_idx = 0;
 }
-
-void oe_set_delta_ext(struct packing_data *pack,
-		      struct object_entry *e,
-		      const unsigned char *sha1);
 
 static inline struct object_entry *oe_delta_child(
 		const struct packing_data *pack,
@@ -403,40 +382,6 @@ static inline void oe_set_delta_size(struct packing_data *pack,
 		pack->delta_size[e - pack->objects] = size;
 		e->delta_size_valid = 0;
 	}
-}
-
-static inline unsigned int oe_tree_depth(struct packing_data *pack,
-					 struct object_entry *e)
-{
-	if (!pack->tree_depth)
-		return 0;
-	return pack->tree_depth[e - pack->objects];
-}
-
-static inline void oe_set_tree_depth(struct packing_data *pack,
-				     struct object_entry *e,
-				     unsigned int tree_depth)
-{
-	if (!pack->tree_depth)
-		ALLOC_ARRAY(pack->tree_depth, pack->nr_objects);
-	pack->tree_depth[e - pack->objects] = tree_depth;
-}
-
-static inline unsigned char oe_layer(struct packing_data *pack,
-				     struct object_entry *e)
-{
-	if (!pack->layer)
-		return 0;
-	return pack->layer[e - pack->objects];
-}
-
-static inline void oe_set_layer(struct packing_data *pack,
-				struct object_entry *e,
-				unsigned char layer)
-{
-	if (!pack->layer)
-		ALLOC_ARRAY(pack->layer, pack->nr_objects);
-	pack->layer[e - pack->objects] = layer;
 }
 
 #endif

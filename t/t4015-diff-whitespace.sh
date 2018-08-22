@@ -776,6 +776,8 @@ test_expect_success 'checkdiff allows new blank lines' '
 	git diff --check
 '
 
+cat <<EOF >expect
+EOF
 test_expect_success 'whitespace-only changes not reported' '
 	git reset --hard &&
 	echo >x "hello world" &&
@@ -783,7 +785,7 @@ test_expect_success 'whitespace-only changes not reported' '
 	git commit -m "hello 1" &&
 	echo >x "hello  world" &&
 	git diff -b >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 cat <<EOF >expect

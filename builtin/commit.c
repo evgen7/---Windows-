@@ -33,7 +33,6 @@
 #include "sequencer.h"
 #include "mailmap.h"
 #include "help.h"
-#include "commit-reach.h"
 
 static const char * const builtin_commit_usage[] = {
 	N_("git commit [<options>] [--] <pathspec>..."),
@@ -1296,7 +1295,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	static int no_renames = -1;
 	static const char *rename_score_arg = (const char *)-1;
 	static int no_lock_index = 0;
-	static int show_ignored_directory = 0;
 	static struct wt_status s;
 	int fd;
 	struct object_id oid;
@@ -1322,7 +1320,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("mode"),
 		  N_("show untracked files, optional modes: all, normal, no. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
-		{ OPTION_STRING, 'i', "ignored", &ignored_arg,
+		{ OPTION_STRING, 0, "ignored", &ignored_arg,
 		  N_("mode"),
 		  N_("show ignored files, optional modes: traditional, matching, no. (Default: traditional)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"traditional" },
@@ -1334,10 +1332,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		{ OPTION_CALLBACK, 'M', "find-renames", &rename_score_arg,
 		  N_("n"), N_("detect renames, optionally set similarity index"),
 		  PARSE_OPT_OPTARG, opt_parse_rename_score },
-		OPT_BOOL(0, "show-ignored-directory", &show_ignored_directory,
-			N_("(DEPRECATED: use --ignore=matching instead) Only "
-			   "show directories that match an ignore pattern "
-			   "name.")),
 		OPT_BOOL(0, "no-lock-index", &no_lock_index,
 			 N_("(DEPRECATED: use `git --no-optional-locks status` "
 			    "instead) Do not lock the index")),
@@ -1358,12 +1352,6 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		warning("--no-lock-index is deprecated, use --no-optional-locks"
 			" instead");
 		setenv(GIT_OPTIONAL_LOCKS_ENVIRONMENT, "false", 1);
-	}
-
-	if (show_ignored_directory) {
-		warning("--show-ignored-directory was deprecated, use "
-			"--ignored=matching instead");
-		ignored_arg = "matching";
 	}
 
 	handle_untracked_files_arg(&s);

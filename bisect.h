@@ -3,17 +3,15 @@
 
 struct commit_list;
 
-#define BISECT_FIND_ALL		(1u<<0)
-
 /*
  * Find bisection. If something is found, `reaches` will be the number of
  * commits that the best commit reaches. `all` will be the count of
  * non-SAMETREE commits. If nothing is found, `list` will be NULL.
  * Otherwise, it will be either all non-SAMETREE commits or the single
- * best commit, as chosen by flag `BISECT_FIND_ALL`.
+ * best commit, as chosen by `find_all`.
  */
 extern void find_bisection(struct commit_list **list, int *reaches, int *all,
-			   unsigned bisect_flags);
+			   int find_all);
 
 extern struct commit_list *filter_skipped(struct commit_list *list,
 					  struct commit_list **tried,

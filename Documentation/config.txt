@@ -464,20 +464,10 @@ core.untrackedCache::
 	See linkgit:git-update-index[1]. `keep` by default.
 
 core.checkStat::
-	When missing or is set to `default`, many fields in the stat
-	structure are checked to detect if a file has been modified
-	since Git looked at it.  When this configuration variable is
-	set to `minimal`, sub-second part of mtime and ctime, the
-	uid and gid of the owner of the file, the inode number (and
-	the device number, if Git was compiled to use it), are
-	excluded from the check among these fields, leaving only the
-	whole-second part of mtime (and ctime, if `core.trustCtime`
-	is set) and the filesize to be checked.
-+
-There are implementations of Git that do not leave usable values in
-some fields (e.g. JGit); by excluding these fields from the
-comparison, the `minimal` mode may help interoperability when the
-same repository is used by these other systems at the same time.
+	Determines which stat fields to match between the index
+	and work tree. The user can set this to 'default' or
+	'minimal'. Default (or explicitly 'default'), is to check
+	all fields, including the sub-second part of mtime and ctime.
 
 core.quotePath::
 	Commands that output paths (e.g. 'ls-files', 'diff'), will
@@ -1080,12 +1070,6 @@ branch.autoSetupRebase::
 	branch to track another branch.
 	This option defaults to never.
 
-branch.sort::
-	This variable controls the sort ordering of branches when displayed by
-	linkgit:git-branch[1]. Without the "--sort=<value>" option provided, the
-	value of this variable will be used as the default.
-	See linkgit:git-for-each-ref[1] field names for valid values.
-
 branch.<name>.remote::
 	When on branch <name>, it tells 'git fetch' and 'git push'
 	which remote to fetch from/push to.  The remote to push to
@@ -1182,14 +1166,6 @@ and by linkgit:git-worktree[1] when 'git worktree add' refers to a
 remote branch. This setting might be used for other checkout-like
 commands or functionality in the future.
 
-checkout.optimizeNewBranch
-	Optimizes the performance of "git checkout -b <new_branch>" when
-	using sparse-checkout.  When set to true, git will not update the
-	repo based on the current sparse-checkout settings.  This means it
-	will not update the skip-worktree bit in the index nor add/remove
-	files in the working directory to reflect the current sparse checkout
-	settings nor will it show the local changes.
-
 clean.requireForce::
 	A boolean to make git-clean do nothing unless given -f,
 	-i or -n.   Defaults to true.
@@ -1252,6 +1228,18 @@ color.diff::
 This does not affect linkgit:git-format-patch[1] or the
 'git-diff-{asterisk}' plumbing commands.  Can be overridden on the
 command line with the `--color[=<when>]` option.
+
+diff.colorMoved::
+	If set to either a valid `<mode>` or a true value, moved lines
+	in a diff are colored differently, for details of valid modes
+	see '--color-moved' in linkgit:git-diff[1]. If simply set to
+	true the default color mode will be used. When set to false,
+	moved lines are not colored.
+
+diff.colorMovedWS::
+	When moved lines are colored using e.g. the `diff.colorMoved` setting,
+	this option controls the `<mode>` how spaces are treated
+	for details of valid modes see '--color-moved-ws' in linkgit:git-diff[1].
 
 color.diff.<slot>::
 	Use customized color for diff colorization.  `<slot>` specifies
@@ -1802,8 +1790,7 @@ will be repacked. After this the number of packs should go below
 gc.autoPackLimit and gc.bigPackThreshold should be respected again.
 
 gc.logExpiry::
-	If the file gc.log exists, then `git gc --auto` will print
-	its content and exit with status zero instead of running
+	If the file gc.log exists, then `git gc --auto` won't run
 	unless that file is more than 'gc.logExpiry' old.  Default is
 	"1.day".  See `gc.pruneExpire` for more ways to specify its
 	value.
@@ -2310,7 +2297,8 @@ http.maxRequests::
 http.minSessions::
 	The number of curl sessions (counted across slots) to be kept across
 	requests. They will not be ended with curl_easy_cleanup() until
-	http_cleanup() is invoked. Defaults to 1.
+	http_cleanup() is invoked. If USE_CURL_MULTI is not defined, this
+	value will be capped at 1. Defaults to 1.
 
 http.postBuffer::
 	Maximum size in bytes of the buffer used by smart HTTP
@@ -2720,21 +2708,6 @@ pack.compression::
 Note that changing the compression level will not automatically recompress
 all existing objects. You can force recompression by passing the -F option
 to linkgit:git-repack[1].
-
-pack.island::
-	An extended regular expression configuring a set of delta
-	islands. See "DELTA ISLANDS" in linkgit:git-pack-objects[1]
-	for details.
-
-pack.islandCore::
-	Specify an island name which gets to have its objects be
-	packed first. This creates a kind of pseudo-pack at the front
-	of one pack, so that the objects from the specified island are
-	hopefully faster to copy into any pack that should be served
-	to a user requesting these objects. In practice this means
-	that the island specified should likely correspond to what is
-	the most commonly cloned in the repo. See also "DELTA ISLANDS"
-	in linkgit:git-pack-objects[1].
 
 pack.deltaCacheSize::
 	The maximum memory in bytes used for caching deltas in
@@ -3270,10 +3243,6 @@ repack.packKeptObjects::
 	index is being written (either via `--write-bitmap-index` or
 	`repack.writeBitmaps`).
 
-repack.useDeltaIslands::
-	If set to true, makes `git repack` act as if `--delta-islands`
-	was passed. Defaults to `false`.
-
 repack.writeBitmaps::
 	When true, git will write a bitmap index when packing all
 	objects to disk (e.g., when `git repack -a` is run).  This
@@ -3363,39 +3332,6 @@ sendemail.smtpReloginDelay::
 showbranch.default::
 	The default set of branches for linkgit:git-show-branch[1].
 	See linkgit:git-show-branch[1].
-
-slog.path::
-	(EXPERIMENTAL) Enable structured logging to a file.  This must be
-	an absolute path.  (Git must be compiled with STRUCTURED_LOGGING=1.)
-
-slog.pretty::
-	(EXPERIMENTAL) Pretty-print structured log data when true.
-	(Git must be compiled with STRUCTURED_LOGGING=1.)
-
-slog.detail::
-	(EXPERIMENTAL) May be set to a boolean value or a list of comma
-	separated tokens.  Controls which categories of optional "detail"
-	events are generated.  Default to off.  This is conceptually
-	similar to the different GIT_TRACE_<key> values.
-+
-Detail events are generic events with a context-specific payload.  This
-may represent a single function call or a section of performance sensitive
-code.
-+
-This is intended to be an extendable facility where new events can easily
-be added (possibly only for debugging or performance testing purposes).
-
-slog.timers::
-	(EXPERIMENTAL) May be set to a boolean value or a list of comma
-	separated tokens.  Controls which categories of SLOG timers are
-	enabled.  Defaults to off.  Data for enabled timers is added to
-	the `cmd_exit` event.
-
-slog.aux::
-	(EXPERIMENTAL) May be set to a boolean value or a list of
-	comma separated tokens.  Controls which categories of SLOG
-	"aux" data are enabled.  Defaults to off.  "Aux" data is added
-	to the `cmd_exit` event.
 
 splitIndex.maxPercentChange::
 	When the split index feature is used, this specifies the

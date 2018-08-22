@@ -364,8 +364,11 @@ test_expect_success 'verify upstream fields in branch header' '
 		test_cmp expect actual &&
 
 		## Repeat the above but without --branch.
+		cat >expect <<-EOF &&
+		EOF
+
 		git status --porcelain=v2 --untracked-files=all >actual &&
-		test_must_be_empty actual &&
+		test_cmp expect actual &&
 
 		## Test upstream-gone case. Fake this by pointing origin/master at
 		## a non-existing commit.

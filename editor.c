@@ -1,5 +1,4 @@
 #include "cache.h"
-#include "config.h"
 #include "strbuf.h"
 #include "run-command.h"
 #include "sigchain.h"
@@ -35,21 +34,10 @@ const char *git_editor(void)
 	return editor;
 }
 
-const char *git_sequence_editor(void)
+int launch_editor(const char *path, struct strbuf *buffer, const char *const *env)
 {
-	const char *editor = getenv("GIT_SEQUENCE_EDITOR");
+	const char *editor = git_editor();
 
-	if (!editor)
-		git_config_get_string_const("sequence.editor", &editor);
-	if (!editor)
-		editor = git_editor();
-
-	return editor;
-}
-
-static int launch_specified_editor(const char *editor, const char *path,
-				   struct strbuf *buffer, const char *const *env)
-{
 	if (!editor)
 		return error("Terminal is dumb, but EDITOR unset");
 
@@ -78,7 +66,6 @@ static int launch_specified_editor(const char *editor, const char *path,
 		p.argv = args;
 		p.env = env;
 		p.use_shell = 1;
-		p.slog_child_class = "editor";
 		if (start_command(&p) < 0)
 			return error("unable to start editor '%s'", editor);
 
@@ -107,15 +94,4 @@ static int launch_specified_editor(const char *editor, const char *path,
 	if (strbuf_read_file(buffer, path, 0) < 0)
 		return error_errno("could not read file '%s'", path);
 	return 0;
-}
-
-int launch_editor(const char *path, struct strbuf *buffer, const char *const *env)
-{
-	return launch_specified_editor(git_editor(), path, buffer, env);
-}
-
-int launch_sequence_editor(const char *path, struct strbuf *buffer,
-			   const char *const *env)
-{
-	return launch_specified_editor(git_sequence_editor(), path, buffer, env);
 }

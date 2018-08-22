@@ -45,7 +45,7 @@ test_fix () {
 	apply_patch --whitespace=fix || return 1
 
 	# find touched lines
-	$DIFF -u file target | sed -n -e "3,\$s/^+//p" >fixed
+	$DIFF file target | sed -n -e "s/^> //p" >fixed
 
 	# the changed lines are all expected to change
 	fixed_cnt=$(wc -l <fixed)
@@ -100,7 +100,7 @@ test_expect_success 'whitespace=warn, default rule' '
 test_expect_success 'whitespace=error-all, default rule' '
 
 	test_must_fail apply_patch --whitespace=error-all &&
-	test_must_be_empty target
+	! test -s target
 
 '
 

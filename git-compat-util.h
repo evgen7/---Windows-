@@ -155,8 +155,8 @@
 #define _SGI_SOURCE 1
 
 #if defined(WIN32) && !defined(__CYGWIN__) /* Both MinGW and MSVC */
-# if !defined(_WIN32_WINNT)
-#  define _WIN32_WINNT 0x0600
+# if defined (_MSC_VER) && !defined(_WIN32_WINNT)
+#  define _WIN32_WINNT 0x0502
 # endif
 #define WIN32_LEAN_AND_MEAN  /* stops windows.h including winsock.h */
 #include <winsock2.h>
@@ -469,14 +469,6 @@ static inline char *git_find_last_dir_sep(const char *path)
 struct strbuf;
 
 /* General helper functions */
-
-/*
- * Write the message to the file, prefixing and suffixing
- * each line with `prefix` resp. `suffix`.
- */
-void prefix_suffix_lines(FILE *f, const char *prefix,
-			 const char *message, const char *suffix);
-
 extern void vreportf(const char *prefix, const char *err, va_list params);
 extern NORETURN void usage(const char *err);
 extern NORETURN void usagef(const char *err, ...) __attribute__((format (printf, 1, 2)));
@@ -1294,10 +1286,6 @@ static inline int is_missing_file_error(int errno_)
 #define enable_fscache(x) /* noop */
 #endif
 
-#ifndef is_fscache_enabled
-#define is_fscache_enabled(path) (0)
-#endif
-
 extern int cmd_main(int, const char **);
 
 /*
@@ -1318,15 +1306,6 @@ extern void unleak_memory(const void *ptr, size_t len);
 #define UNLEAK(var) unleak_memory(&(var), sizeof(var))
 #else
 #define UNLEAK(var) do {} while (0)
-#endif
-
-#include "structured-logging.h"
-#if defined(STRUCTURED_LOGGING) && !defined(exit)
-/*
- * Intercept all calls to exit() so that exit-code can be included
- * in the "cmd_exit" message written by the at-exit routine.
- */
-#define exit(code) exit(slog_exit_code(code))
 #endif
 
 /*

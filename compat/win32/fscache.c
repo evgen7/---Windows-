@@ -252,7 +252,7 @@ static void fscache_clear(void)
 /*
  * Checks if the cache is enabled for the given path.
  */
-int fscache_enabled(const char *path)
+static inline int fscache_enabled(const char *path)
 {
 	return enabled > 0 && !is_absolute_path(path);
 }

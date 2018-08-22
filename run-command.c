@@ -710,8 +710,6 @@ fail_pipe:
 
 	fflush(NULL);
 
-	cmd->slog_child_id = slog_child_starting(cmd);
-
 #ifndef GIT_WINDOWS_NATIVE
 {
 	int notify_pipe[2];
@@ -925,9 +923,6 @@ fail_pipe:
 			close_pair(fderr);
 		else if (cmd->err)
 			close(cmd->err);
-
-		slog_child_ended(cmd->slog_child_id, cmd->pid, failed_errno);
-
 		child_process_clear(cmd);
 		errno = failed_errno;
 		return -1;
@@ -954,20 +949,13 @@ fail_pipe:
 int finish_command(struct child_process *cmd)
 {
 	int ret = wait_or_whine(cmd->pid, cmd->argv[0], 0);
-
-	slog_child_ended(cmd->slog_child_id, cmd->pid, ret);
-
 	child_process_clear(cmd);
 	return ret;
 }
 
 int finish_command_in_signal(struct child_process *cmd)
 {
-	int ret = wait_or_whine(cmd->pid, cmd->argv[0], 1);
-
-	slog_child_ended(cmd->slog_child_id, cmd->pid, ret);
-
-	return ret;
+	return wait_or_whine(cmd->pid, cmd->argv[0], 1);
 }
 
 

@@ -84,22 +84,24 @@ static struct {
 
 void advise(const char *advice, ...)
 {
-	struct strbuf prefix = STRBUF_INIT;
 	struct strbuf buf = STRBUF_INIT;
 	va_list params;
-
-	strbuf_addf(&prefix, _("%shint: "),
-		    advise_get_color(ADVICE_COLOR_HINT));
+	const char *cp, *np;
 
 	va_start(params, advice);
 	strbuf_vaddf(&buf, advice, params);
 	va_end(params);
 
-	prefix_suffix_lines(stderr, prefix.buf, buf.buf,
-			    advise_get_color(ADVICE_COLOR_RESET));
-
+	for (cp = buf.buf; *cp; cp = np) {
+		np = strchrnul(cp, '\n');
+		fprintf(stderr,	_("%shint: %.*s%s\n"),
+			advise_get_color(ADVICE_COLOR_HINT),
+			(int)(np - cp), cp,
+			advise_get_color(ADVICE_COLOR_RESET));
+		if (*np)
+			np++;
+	}
 	strbuf_release(&buf);
-	strbuf_release(&prefix);
 }
 
 int git_default_advice_config(const char *var, const char *value)

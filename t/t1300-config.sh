@@ -346,9 +346,12 @@ test_expect_success 'working --list' '
 	git config --list > output &&
 	test_cmp expect output
 '
+cat > expect << EOF
+EOF
+
 test_expect_success '--list without repo produces empty output' '
 	git --git-dir=nonexistent config --list >output &&
-	test_must_be_empty output
+	test_cmp expect output
 '
 
 cat > expect << EOF
@@ -1738,7 +1741,7 @@ test_expect_success '--show-origin getting a single key' '
 	test_cmp expect output
 '
 
-test_expect_success !MINGW 'set up custom config file' '
+test_expect_success 'set up custom config file' '
 	CUSTOM_CONFIG_FILE="file\" (dq) and spaces.conf" &&
 	cat >"$CUSTOM_CONFIG_FILE" <<-\EOF
 		[user]
@@ -1754,7 +1757,7 @@ test_expect_success !MINGW '--show-origin escape special file name characters' '
 	test_cmp expect output
 '
 
-test_expect_success !MINGW '--show-origin stdin' '
+test_expect_success '--show-origin stdin' '
 	cat >expect <<-\EOF &&
 		standard input:	user.custom=true
 	EOF
