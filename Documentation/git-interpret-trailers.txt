@@ -8,8 +8,8 @@ git-interpret-trailers - add or parse structured information in commit messages
 SYNOPSIS
 --------
 [verse]
-'git interpret-trailers' [options] [(--trailer <token>[(=|:)<value>])...] [<file>...]
-'git interpret-trailers' [options] [--parse] [<file>...]
+'git interpret-trailers' [<options>] [(--trailer <token>[(=|:)<value>])...] [<file>...]
+'git interpret-trailers' [<options>] [--parse] [<file>...]
 
 DESCRIPTION
 -----------
@@ -51,7 +51,7 @@ with only spaces at the end of the commit message part, one blank line
 will be added before the new trailer.
 
 Existing trailers are extracted from the input message by looking for
-a group of one or more lines that (i) are all trailers, or (ii) contains at
+a group of one or more lines that (i) is all trailers, or (ii) contains at
 least one Git-generated or user-configured trailer and consists of at
 least 25% trailers.
 The group must be preceded by one or more empty (or whitespace-only) lines.
@@ -88,7 +88,8 @@ OPTIONS
 	Specify where all new trailers will be added.  A setting
 	provided with '--where' overrides all configuration variables
 	and applies to all '--trailer' options until the next occurrence of
-	'--where' or '--no-where'.
+	'--where' or '--no-where'. Possible values are `after`, `before`,
+	`end` or `start`.
 
 --if-exists <action>::
 --no-if-exists::
@@ -96,7 +97,8 @@ OPTIONS
 	least one trailer with the same <token> in the message.  A setting
 	provided with '--if-exists' overrides all configuration variables
 	and applies to all '--trailer' options until the next occurrence of
-	'--if-exists' or '--no-if-exists'.
+	'--if-exists' or '--no-if-exists'. Possible actions are `addIfDifferent`,
+	`addIfDifferentNeighbor`, `add`, `replace` and `doNothing`.
 
 --if-missing <action>::
 --no-if-missing::
@@ -104,7 +106,8 @@ OPTIONS
 	trailer with the same <token> in the message.  A setting
 	provided with '--if-missing' overrides all configuration variables
 	and applies to all '--trailer' options until the next occurrence of
-	'--if-missing' or '--no-if-missing'.
+	'--if-missing' or '--no-if-missing'. Possible actions are `doNothing`
+	or `add`.
 
 --only-trailers::
 	Output only the trailers, not any other parts of the input.

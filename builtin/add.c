@@ -9,7 +9,7 @@
 #include "lockfile.h"
 #include "dir.h"
 #include "pathspec.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "cache-tree.h"
 #include "run-command.h"
 #include "parse-options.h"
@@ -40,7 +40,7 @@ static void chmod_pathspec(struct pathspec *pathspec, char flip)
 	for (i = 0; i < active_nr; i++) {
 		struct cache_entry *ce = active_cache[i];
 
-		if (pathspec && !ce_path_match(ce, pathspec, NULL))
+		if (pathspec && !ce_path_match(&the_index, ce, pathspec, NULL))
 			continue;
 
 		if (chmod_cache_entry(ce, flip) < 0)
@@ -119,7 +119,7 @@ int add_files_to_cache(const char *prefix,
 	rev.diffopt.format_callback_data = &data;
 	rev.diffopt.flags.override_submodule_config = 1;
 	rev.max_count = 0; /* do not compare unmerged paths with stage #2 */
-	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
+	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED | DIFF_SKIP_FSMONITOR);
 	clear_pathspec(&rev.prune_data);
 	return !!data.add_errors;
 }
@@ -135,7 +135,7 @@ static int renormalize_tracked_files(const struct pathspec *pathspec, int flags)
 			continue; /* do not touch unmerged paths */
 		if (!S_ISREG(ce->ce_mode) && !S_ISLNK(ce->ce_mode))
 			continue; /* do not touch non blobs */
-		if (pathspec && !ce_path_match(ce, pathspec, NULL))
+		if (pathspec && !ce_path_match(&the_index, ce, pathspec, NULL))
 			continue;
 		retval |= add_file_to_cache(ce->name, flags | HASH_RENORMALIZE);
 	}
@@ -155,7 +155,7 @@ static char *prune_directory(struct dir_struct *dir, struct pathspec *pathspec, 
 	i = dir->nr;
 	while (--i >= 0) {
 		struct dir_entry *entry = *src++;
-		if (dir_path_match(entry, pathspec, prefix, seen))
+		if (dir_path_match(&the_index, entry, pathspec, prefix, seen))
 			*dst++ = entry;
 	}
 	dir->nr = dst - dir->entries;
@@ -265,8 +265,6 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	return 0;
 }
 
-static struct lock_file lock_file;
-
 static const char ignore_error[] =
 N_("The following paths are ignored by one of your .gitignore files:\n");
 
@@ -294,7 +292,7 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL('i', "interactive", &add_interactive, N_("interactive picking")),
 	OPT_BOOL('p', "patch", &patch_interactive, N_("select hunks interactively")),
 	OPT_BOOL('e', "edit", &edit_interactive, N_("edit current diff and apply")),
-	OPT__FORCE(&ignored_too, N_("allow adding otherwise ignored files")),
+	OPT__FORCE(&ignored_too, N_("allow adding otherwise ignored files"), 0),
 	OPT_BOOL('u', "update", &take_worktree_changes, N_("update tracked files")),
 	OPT_BOOL(0, "renormalize", &add_renormalize, N_("renormalize EOL of tracked files (implies -u)")),
 	OPT_BOOL('N', "intent-to-add", &intent_to_add, N_("record only the fact that the path will be added later")),
@@ -306,7 +304,8 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL( 0 , "refresh", &refresh_only, N_("don't add, only refresh the index")),
 	OPT_BOOL( 0 , "ignore-errors", &ignore_add_errors, N_("just skip files which cannot be added because of errors")),
 	OPT_BOOL( 0 , "ignore-missing", &ignore_missing, N_("check if - even missing - files are ignored in dry run")),
-	OPT_STRING( 0 , "chmod", &chmod_arg, N_("(+/-)x"), N_("override the executable bit of the listed files")),
+	OPT_STRING(0, "chmod", &chmod_arg, "(+|-)x",
+		   N_("override the executable bit of the listed files")),
 	OPT_HIDDEN_BOOL(0, "warn-embedded-repo", &warn_on_embedded_repo,
 			N_("warn when adding an embedded repository")),
 	OPT_END(),
@@ -393,6 +392,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	int add_new_files;
 	int require_pathspec;
 	char *seen = NULL;
+	struct lock_file lock_file = LOCK_INIT;
 
 	git_config(add_config, NULL);
 
@@ -460,6 +460,10 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 		       prefix, argv);
 
 	die_path_inside_submodule(&the_index, &pathspec);
+
+	enable_fscache(1);
+	/* We do not really re-read the index but update the up-to-date flags */
+	preload_index(&the_index, &pathspec);
 
 	if (add_new_files) {
 		int baselen;
@@ -534,10 +538,9 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	unplug_bulk_checkin();
 
 finish:
-	if (active_cache_changed) {
-		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
-			die(_("Unable to write new index file"));
-	}
+	if (write_locked_index(&the_index, &lock_file,
+			       COMMIT_LOCK | SKIP_IF_UNCHANGED))
+		die(_("Unable to write new index file"));
 
 	UNLEAK(pathspec);
 	UNLEAK(dir);

@@ -9,7 +9,8 @@ objpath () {
 
 # show objects present in pack ($1 should be associated *.idx)
 list_packed_objects () {
-	git show-index <"$1" | cut -d' ' -f2
+	git show-index <"$1" >object-list &&
+	cut -d' ' -f2 object-list
 }
 
 # has_any pattern-file content-file
@@ -204,8 +205,8 @@ test_expect_success 'pack-objects to file can use bitmap' '
 	# verify equivalent packs are generated with/without using bitmap index
 	packasha1=$(git pack-objects --no-use-bitmap-index --all packa </dev/null) &&
 	packbsha1=$(git pack-objects --use-bitmap-index --all packb </dev/null) &&
-	list_packed_objects <packa-$packasha1.idx >packa.objects &&
-	list_packed_objects <packb-$packbsha1.idx >packb.objects &&
+	list_packed_objects packa-$packasha1.idx >packa.objects &&
+	list_packed_objects packb-$packbsha1.idx >packb.objects &&
 	test_cmp packa.objects packb.objects
 '
 
@@ -264,9 +265,9 @@ test_expect_success 'pack with missing parent' '
 '
 
 test_expect_success JGIT 'we can read jgit bitmaps' '
-	git clone . compat-jgit &&
+	git clone --bare . compat-jgit.git &&
 	(
-		cd compat-jgit &&
+		cd compat-jgit.git &&
 		rm -f .git/objects/pack/*.bitmap &&
 		jgit gc &&
 		git rev-list --test-bitmap HEAD
@@ -274,9 +275,9 @@ test_expect_success JGIT 'we can read jgit bitmaps' '
 '
 
 test_expect_success JGIT 'jgit can read our bitmaps' '
-	git clone . compat-us &&
+	git clone --bare . compat-us.git &&
 	(
-		cd compat-us &&
+		cd compat-us.git &&
 		git repack -adb &&
 		# jgit gc will barf if it does not like our bitmaps
 		jgit gc
@@ -284,7 +285,7 @@ test_expect_success JGIT 'jgit can read our bitmaps' '
 '
 
 test_expect_success 'splitting packs does not generate bogus bitmaps' '
-	test-genrandom foo $((1024 * 1024)) >rand &&
+	test-tool genrandom foo $((1024 * 1024)) >rand &&
 	git add rand &&
 	git commit -m "commit with big file" &&
 	git -c pack.packSizeLimit=500k repack -adb &&
@@ -309,9 +310,8 @@ test_expect_success 'pack reuse respects --honor-pack-keep' '
 	done &&
 	reusable_pack --honor-pack-keep >empty.pack &&
 	git index-pack empty.pack &&
-	>expect &&
 	git show-index <empty.idx >actual &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'pack reuse respects --local' '
@@ -319,16 +319,27 @@ test_expect_success 'pack reuse respects --local' '
 	test_when_finished "mv alt.git/objects/pack/* .git/objects/pack/" &&
 	reusable_pack --local >empty.pack &&
 	git index-pack empty.pack &&
-	>expect &&
 	git show-index <empty.idx >actual &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'pack reuse respects --incremental' '
 	reusable_pack --incremental >empty.pack &&
 	git index-pack empty.pack &&
-	>expect &&
 	git show-index <empty.idx >actual &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
+
+test_expect_success 'truncated bitmap fails gracefully' '
+	git repack -ad &&
+	git rev-list --use-bitmap-index --count --all >expect &&
+	bitmap=$(ls .git/objects/pack/*.bitmap) &&
+	test_when_finished "rm -f $bitmap" &&
+	head -c 512 <$bitmap >$bitmap.tmp &&
+	mv -f $bitmap.tmp $bitmap &&
+	git rev-list --use-bitmap-index --count --all >actual 2>stderr &&
+	test_cmp expect actual &&
+	test_i18ngrep corrupt stderr
+'
+
 test_done

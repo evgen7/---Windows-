@@ -84,9 +84,10 @@ appropriately before running "make".
 
 -x::
 	Turn on shell tracing (i.e., `set -x`) during the tests
-	themselves. Implies `--verbose`. Note that in non-bash shells,
-	this can cause failures in some tests which redirect and test
-	the output of shell functions. Use with caution.
+	themselves. Implies `--verbose`.
+	Ignored in test scripts that set the variable 'test_untraceable'
+	to a non-empty value, unless it's run with a Bash version
+	supporting BASH_XTRACEFD, i.e. v4.1 or later.
 
 -d::
 --debug::
@@ -292,6 +293,32 @@ and know what setup is needed for it.  Or when you want to run
 everything up to a certain test.
 
 
+Running tests with special setups
+---------------------------------
+
+The whole test suite could be run to test some special features
+that cannot be easily covered by a few specific test cases. These
+could be enabled by running the test suite with correct GIT_TEST_
+environment set.
+
+GIT_TEST_SPLIT_INDEX=<boolean> forces split-index mode on the whole
+test suite. Accept any boolean values that are accepted by git-config.
+
+GIT_TEST_FULL_IN_PACK_ARRAY=<boolean> exercises the uncommon
+pack-objects code path where there are more than 1024 packs even if
+the actual number of packs in repository is below this limit. Accept
+any boolean values that are accepted by git-config.
+
+GIT_TEST_OE_SIZE=<n> exercises the uncommon pack-objects code path
+where we do not cache object size in memory and read it from existing
+packs on demand. This normally only happens when the object size is
+over 2GB. This variable forces the code path on any object larger than
+<n> bytes.
+
+GIT_TEST_OE_DELTA_SIZE=<n> exercises the uncomon pack-objects code
+path where deltas larger than this limit require extra memory
+allocation for bookkeeping.
+
 Naming Tests
 ------------
 
@@ -451,6 +478,22 @@ Don't:
    the test, as any intermediate step can fail and abort the test,
    causing the next test to start in an unexpected directory.  Do so
    inside a subshell if necessary.
+
+ - save and verify the standard error of compound commands, i.e. group
+   commands, subshells, and shell functions (except test helper
+   functions like 'test_must_fail') like this:
+
+     ( cd dir && git cmd ) 2>error &&
+     test_cmp expect error
+
+   When running the test with '-x' tracing, then the trace of commands
+   executed in the compound command will be included in standard error
+   as well, quite possibly throwing off the subsequent checks examining
+   the output.  Instead, save only the relevant git command's standard
+   error:
+
+     ( cd dir && git cmd 2>../error ) &&
+     test_cmp expect error
 
  - Break the TAP output
 
@@ -655,7 +698,7 @@ library for your script to use.
 		test_expect_code 1 git merge "merge msg" B master
 	'
 
- - test_must_fail <git-command>
+ - test_must_fail [<options>] <git-command>
 
    Run a git command and ensure it fails in a controlled way.  Use
    this instead of "! <git-command>".  When git-command dies due to a
@@ -663,10 +706,20 @@ library for your script to use.
    treats it as just another expected failure, which would let such a
    bug go unnoticed.
 
- - test_might_fail <git-command>
+   Accepts the following options:
+
+     ok=<signal-name>[,<...>]:
+       Don't treat an exit caused by the given signal as error.
+       Multiple signals can be specified as a comma separated list.
+       Currently recognized signal names are: sigpipe, success.
+       (Don't use 'success', use 'test_might_fail' instead.)
+
+ - test_might_fail [<options>] <git-command>
 
    Similar to test_must_fail, but tolerate success, too.  Use this
    instead of "<git-command> || :" to catch failures due to segv.
+
+   Accepts the same options as test_must_fail.
 
  - test_cmp <expected> <actual>
 

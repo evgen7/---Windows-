@@ -42,6 +42,8 @@ test_decode_color () {
 		function name(n) {
 			if (n == 0) return "RESET";
 			if (n == 1) return "BOLD";
+			if (n == 2) return "FAINT";
+			if (n == 3) return "ITALIC";
 			if (n == 7) return "REVERSE";
 			if (n == 30) return "BLACK";
 			if (n == 31) return "RED";
@@ -145,12 +147,28 @@ test_pause () {
 	"$SHELL_PATH" <&6 >&5 2>&7
 }
 
-# Wrap git in gdb. Adding this to a command can make it easier to
-# understand what is going on in a failing test.
+# Wrap git with a debugger. Adding this to a command can make it easier
+# to understand what is going on in a failing test.
 #
-# Example: "debug git checkout master".
+# Examples:
+#     debug git checkout master
+#     debug --debugger=nemiver git $ARGS
+#     debug -d "valgrind --tool=memcheck --track-origins=yes" git $ARGS
 debug () {
-	 GIT_TEST_GDB=1 "$@" <&6 >&5 2>&7
+	case "$1" in
+	-d)
+		GIT_DEBUGGER="$2" &&
+		shift 2
+		;;
+	--debugger=*)
+		GIT_DEBUGGER="${1#*=}" &&
+		shift 1
+		;;
+	*)
+		GIT_DEBUGGER=1
+		;;
+	esac &&
+	GIT_DEBUGGER="${GIT_DEBUGGER}" "$@" <&6 >&5 2>&7
 }
 
 # Call test_commit with the arguments
@@ -278,8 +296,20 @@ write_script () {
 # The single parameter is the prerequisite tag (a simple word, in all
 # capital letters by convention).
 
+test_unset_prereq () {
+	! test_have_prereq "$1" ||
+	satisfied_prereq="${satisfied_prereq% $1 *} ${satisfied_prereq#* $1 }"
+}
+
 test_set_prereq () {
-	satisfied_prereq="$satisfied_prereq$1 "
+	case "$1" in
+	!*)
+		test_unset_prereq "${1#!}"
+		;;
+	*)
+		satisfied_prereq="$satisfied_prereq$1 "
+		;;
+	esac
 }
 satisfied_prereq=" "
 lazily_testable_prereq= lazily_tested_prereq=
@@ -537,6 +567,14 @@ test_path_is_dir () {
 	fi
 }
 
+test_path_exists () {
+	if ! test -e "$1"
+	then
+		echo "Path $1 doesn't exist. $2"
+		false
+	fi
+}
+
 # Check if the directory exists and is empty as expected, barf otherwise.
 test_dir_is_empty () {
 	test_path_is_dir "$1" &&
@@ -610,6 +648,14 @@ list_contains () {
 #
 # Writing this as "! git checkout ../outerspace" is wrong, because
 # the failure could be due to a segv.  We want a controlled failure.
+#
+# Accepts the following options:
+#
+#   ok=<signal-name>[,<...>]:
+#     Don't treat an exit caused by the given signal as error.
+#     Multiple signals can be specified as a comma separated list.
+#     Currently recognized signal names are: sigpipe, success.
+#     (Don't use 'success', use 'test_might_fail' instead.)
 
 test_must_fail () {
 	case "$1" in
@@ -621,30 +667,30 @@ test_must_fail () {
 		_test_ok=
 		;;
 	esac
-	"$@"
+	"$@" 2>&7
 	exit_code=$?
 	if test $exit_code -eq 0 && ! list_contains "$_test_ok" success
 	then
-		echo >&2 "test_must_fail: command succeeded: $*"
+		echo >&4 "test_must_fail: command succeeded: $*"
 		return 1
 	elif test_match_signal 13 $exit_code && list_contains "$_test_ok" sigpipe
 	then
 		return 0
 	elif test $exit_code -gt 129 && test $exit_code -le 192
 	then
-		echo >&2 "test_must_fail: died by signal $(($exit_code - 128)): $*"
+		echo >&4 "test_must_fail: died by signal $(($exit_code - 128)): $*"
 		return 1
 	elif test $exit_code -eq 127
 	then
-		echo >&2 "test_must_fail: command not found: $*"
+		echo >&4 "test_must_fail: command not found: $*"
 		return 1
 	elif test $exit_code -eq 126
 	then
-		echo >&2 "test_must_fail: valgrind error: $*"
+		echo >&4 "test_must_fail: valgrind error: $*"
 		return 1
 	fi
 	return 0
-}
+} 7>&2 2>&4
 
 # Similar to test_must_fail, but tolerates success, too.  This is
 # meant to be used in contexts like:
@@ -656,10 +702,12 @@ test_must_fail () {
 #
 # Writing "git config --unset all.configuration || :" would be wrong,
 # because we want to notice if it fails due to segv.
+#
+# Accepts the same options as test_must_fail.
 
 test_might_fail () {
-	test_must_fail ok=success "$@"
-}
+	test_must_fail ok=success "$@" 2>&7
+} 7>&2 2>&4
 
 # Similar to test_must_fail and test_might_fail, but check that a
 # given command exited with a given exit code. Meant to be used as:
@@ -671,16 +719,16 @@ test_might_fail () {
 test_expect_code () {
 	want_code=$1
 	shift
-	"$@"
+	"$@" 2>&7
 	exit_code=$?
 	if test $exit_code = $want_code
 	then
 		return 0
 	fi
 
-	echo >&2 "test_expect_code: command exited with $exit_code, we wanted $want_code $*"
+	echo >&4 "test_expect_code: command exited with $exit_code, we wanted $want_code $*"
 	return 1
-}
+} 7>&2 2>&4
 
 # test_cmp is a helper function to compare actual and expected output.
 # You can use it like:
@@ -696,7 +744,7 @@ test_expect_code () {
 # - not all diff versions understand "-u"
 
 test_cmp() {
-	$GIT_TEST_CMP "$@"
+	GIT_ALLOC_LIMIT=0 $GIT_TEST_CMP "$@"
 }
 
 # test_cmp_bin - helper to compare binary files
@@ -705,12 +753,66 @@ test_cmp_bin() {
 	cmp "$@"
 }
 
+# Use this instead of test_cmp to compare files that contain expected and
+# actual output from git commands that can be translated.  When running
+# under GETTEXT_POISON this pretends that the command produced expected
+# results.
+test_i18ncmp () {
+	test -n "$GETTEXT_POISON" || test_cmp "$@"
+}
+
+# Use this instead of "grep expected-string actual" to see if the
+# output from a git command that can be translated either contains an
+# expected string, or does not contain an unwanted one.  When running
+# under GETTEXT_POISON this pretends that the command produced expected
+# results.
+test_i18ngrep () {
+	eval "last_arg=\${$#}"
+
+	test -f "$last_arg" ||
+	error "bug in the test script: test_i18ngrep requires a file" \
+	      "to read as the last parameter"
+
+	if test $# -lt 2 ||
+	   { test "x!" = "x$1" && test $# -lt 3 ; }
+	then
+		error "bug in the test script: too few parameters to test_i18ngrep"
+	fi
+
+	if test -n "$GETTEXT_POISON"
+	then
+		# pretend success
+		return 0
+	fi
+
+	if test "x!" = "x$1"
+	then
+		shift
+		! grep "$@" && return 0
+
+		echo >&4 "error: '! grep $@' did find a match in:"
+	else
+		grep "$@" && return 0
+
+		echo >&4 "error: 'grep $@' didn't find a match in:"
+	fi
+
+	if test -s "$last_arg"
+	then
+		cat >&4 "$last_arg"
+	else
+		echo >&4 "<File '$last_arg' is empty>"
+	fi
+
+	return 1
+}
+
 # Call any command "$@" but be more verbose about its
 # failure. This is handy for commands like "test" which do
 # not output anything when they fail.
 verbose () {
 	"$@" && return 0
-	echo >&2 "command failed: $(git rev-parse --sq-quote "$@")"
+	echo >&4 "command failed: $(git rev-parse --sq-quote "$@")"
 	return 1
 }
 
@@ -718,6 +820,7 @@ verbose () {
 # otherwise.
 
 test_must_be_empty () {
+	test_path_is_file "$1" &&
 	if test -s "$1"
 	then
 		echo "'$1' is not empty, it contains:"
@@ -797,7 +900,8 @@ test_create_repo () {
 	mkdir -p "$repo"
 	(
 		cd "$repo" || error "Cannot setup test environment"
-		"$GIT_EXEC_PATH/git-init" "--template=$GIT_BUILD_DIR/templates/blt/" >&3 2>&4 ||
+		"${GIT_TEST_INSTALLED:-$GIT_EXEC_PATH}/git$X" init \
+			"--template=$GIT_BUILD_DIR/templates/blt/" >&3 2>&4 ||
 		error "cannot run git init -- have you built things yet?"
 		mv .git/hooks .git/hooks-disabled
 	) || exit
@@ -828,8 +932,8 @@ test_write_lines () {
 }
 
 perl () {
-	command "$PERL_PATH" "$@"
-}
+	command "$PERL_PATH" "$@" 2>&7
+} 7>&2 2>&4
 
 # Is the value one of the various ways to spell a boolean true/false?
 test_normalize_bool () {
@@ -889,72 +993,6 @@ test_skip_or_die () {
 	esac
 }
 
-# The following mingw_* functions obey POSIX shell syntax, but are actually
-# bash scripts, and are meant to be used only with bash on Windows.
-
-# A test_cmp function that treats LF and CRLF equal and avoids to fork
-# diff when possible.
-mingw_test_cmp () {
-	# Read text into shell variables and compare them. If the results
-	# are different, use regular diff to report the difference.
-	local test_cmp_a= test_cmp_b=
-
-	# When text came from stdin (one argument is '-') we must feed it
-	# to diff.
-	local stdin_for_diff=
-
-	# Since it is difficult to detect the difference between an
-	# empty input file and a failure to read the files, we go straight
-	# to diff if one of the inputs is empty.
-	if test -s "$1" && test -s "$2"
-	then
-		# regular case: both files non-empty
-		mingw_read_file_strip_cr_ test_cmp_a <"$1"
-		mingw_read_file_strip_cr_ test_cmp_b <"$2"
-	elif test -s "$1" && test "$2" = -
-	then
-		# read 2nd file from stdin
-		mingw_read_file_strip_cr_ test_cmp_a <"$1"
-		mingw_read_file_strip_cr_ test_cmp_b
-		stdin_for_diff='<<<"$test_cmp_b"'
-	elif test "$1" = - && test -s "$2"
-	then
-		# read 1st file from stdin
-		mingw_read_file_strip_cr_ test_cmp_a
-		mingw_read_file_strip_cr_ test_cmp_b <"$2"
-		stdin_for_diff='<<<"$test_cmp_a"'
-	fi
-	test -n "$test_cmp_a" &&
-	test -n "$test_cmp_b" &&
-	test "$test_cmp_a" = "$test_cmp_b" ||
-	eval "diff -u \"\$@\" $stdin_for_diff"
-}
-
-# $1 is the name of the shell variable to fill in
-mingw_read_file_strip_cr_ () {
-	# Read line-wise using LF as the line separator
-	# and use IFS to strip CR.
-	local line
-	while :
-	do
-		if IFS=$'\r' read -r -d $'\n' line
-		then
-			# good
-			line=$line$'\n'
-		else
-			# we get here at EOF, but also if the last line
-			# was not terminated by LF; in the latter case,
-			# some text was read
-			if test -z "$line"
-			then
-				# EOF, really
-				break
-			fi
-		fi
-		eval "$1=\$$1\$line"
-	done
-}
-
 # Like "env FOO=BAR some-program", but run inside a subshell, which means
 # it also works for shell functions (though those functions cannot impact
 # the environment outside of the test_env invocation).
@@ -969,13 +1007,13 @@ test_env () {
 				shift
 				;;
 			*)
-				"$@"
+				"$@" 2>&7
 				exit
 				;;
 			esac
 		done
 	)
-}
+} 7>&2 2>&4
 
 # Returns true if the numeric exit code in "$2" represents the expected signal
 # in "$1". Signals should be given numerically.
@@ -1017,6 +1055,40 @@ nongit () {
 		GIT_CEILING_DIRECTORIES=$(pwd) &&
 		export GIT_CEILING_DIRECTORIES &&
 		cd non-repo &&
-		"$@"
+		"$@" 2>&7
 	)
+} 7>&2 2>&4
+
+# convert stdin to pktline representation; note that empty input becomes an
+# empty packet, not a flush packet (for that you can just print 0000 yourself).
+packetize() {
+	cat >packetize.tmp &&
+	len=$(wc -c <packetize.tmp) &&
+	printf '%04x%s' "$(($len + 4))" &&
+	cat packetize.tmp &&
+	rm -f packetize.tmp
+}
+
+# Parse the input as a series of pktlines, writing the result to stdout.
+# Sideband markers are removed automatically, and the output is routed to
+# stderr if appropriate.
+#
+# NUL bytes are converted to "\\0" for ease of parsing with text tools.
+depacketize () {
+	perl -e '
+		while (read(STDIN, $len, 4) == 4) {
+			if ($len eq "0000") {
+				print "FLUSH\n";
+			} else {
+				read(STDIN, $buf, hex($len) - 4);
+				$buf =~ s/\0/\\0/g;
+				if ($buf =~ s/^[\x2\x3]//) {
+					print STDERR $buf;
+				} else {
+					$buf =~ s/^\x1//;
+					print $buf;
+				}
+			}
+		}
+	'
 }

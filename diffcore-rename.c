@@ -4,6 +4,7 @@
 #include "cache.h"
 #include "diff.h"
 #include "diffcore.h"
+#include "object-store.h"
 #include "hashmap.h"
 #include "progress.h"
 
@@ -57,8 +58,8 @@ static int add_rename_dst(struct diff_filespec *two)
 	ALLOC_GROW(rename_dst, rename_dst_nr + 1, rename_dst_alloc);
 	rename_dst_nr++;
 	if (first < rename_dst_nr)
-		memmove(rename_dst + first + 1, rename_dst + first,
-			(rename_dst_nr - first - 1) * sizeof(*rename_dst));
+		MOVE_ARRAY(rename_dst + first + 1, rename_dst + first,
+			   rename_dst_nr - first - 1);
 	rename_dst[first].two = alloc_filespec(two->path);
 	fill_filespec(rename_dst[first].two, &two->oid, two->oid_valid,
 		      two->mode);
@@ -81,6 +82,18 @@ static struct diff_rename_src *register_rename_src(struct diff_filepair *p)
 
 	first = 0;
 	last = rename_src_nr;
+
+	if (last > 0) {
+		struct diff_rename_src *src = &(rename_src[last-1]);
+		int cmp = strcmp(one->path, src->p->one->path);
+		if (!cmp)
+			return src;
+		if (cmp > 0) {
+			first = last;
+			goto append_it;
+		}
+	}
+
 	while (last > first) {
 		int next = (last + first) >> 1;
 		struct diff_rename_src *src = &(rename_src[next]);
@@ -94,12 +107,13 @@ static struct diff_rename_src *register_rename_src(struct diff_filepair *p)
 		first = next+1;
 	}
 
+append_it:
 	/* insert to make it at "first" */
 	ALLOC_GROW(rename_src, rename_src_nr + 1, rename_src_alloc);
 	rename_src_nr++;
 	if (first < rename_src_nr)
-		memmove(rename_src + first + 1, rename_src + first,
-			(rename_src_nr - first - 1) * sizeof(*rename_src));
+		MOVE_ARRAY(rename_src + first + 1, rename_src + first,
+			   rename_src_nr - first - 1);
 	rename_src[first].p = p;
 	rename_src[first].score = score;
 	return &(rename_src[first]);
@@ -260,8 +274,8 @@ static unsigned int hash_filespec(struct diff_filespec *filespec)
 	if (!filespec->oid_valid) {
 		if (diff_populate_filespec(filespec, 0))
 			return 0;
-		hash_sha1_file(filespec->data, filespec->size, "blob",
-			       filespec->oid.hash);
+		hash_object_file(filespec->data, filespec->size, "blob",
+				 &filespec->oid);
 	}
 	return sha1hash(filespec->oid.hash);
 }

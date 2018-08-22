@@ -19,7 +19,7 @@ test_expect_success 'prepare repository' '
 	echo AIT >a && echo BIT >b && echo CIT >c && echo DIT >d &&
 	git update-index --add a b c d &&
 	echo git >a &&
-	cat "$TEST_DIRECTORY"/test-binary-1.png >b &&
+	cat "$TEST_DIRECTORY"/diff-lib/test-binary-1.png >b &&
 	echo git >c &&
 	cat b b >d
 '
@@ -102,10 +102,8 @@ test_expect_success 'apply binary patch' '
 
 test_expect_success 'diff --no-index with binary creation' '
 	echo Q | q_to_nul >binary &&
-	(: hide error code from diff, which just indicates differences
-	 git diff --binary --no-index /dev/null binary >current ||
-	 true
-	) &&
+	# hide error code from diff, which just indicates differences
+	test_might_fail git diff --binary --no-index /dev/null binary >current &&
 	rm binary &&
 	git apply --binary <current &&
 	echo Q >expected &&

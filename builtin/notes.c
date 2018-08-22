@@ -11,10 +11,12 @@
 #include "config.h"
 #include "builtin.h"
 #include "notes.h"
+#include "object-store.h"
+#include "repository.h"
 #include "blob.h"
 #include "pretty.h"
 #include "refs.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "run-command.h"
 #include "parse-options.h"
 #include "string-list.h"
@@ -118,11 +120,11 @@ static int list_each_note(const struct object_id *object_oid,
 	return 0;
 }
 
-static void copy_obj_to_fd(int fd, const unsigned char *sha1)
+static void copy_obj_to_fd(int fd, const struct object_id *oid)
 {
 	unsigned long size;
 	enum object_type type;
-	char *buf = read_sha1_file(sha1, &type, &size);
+	char *buf = read_object_file(oid, &type, &size);
 	if (buf) {
 		if (size)
 			write_or_die(fd, buf, size);
@@ -162,7 +164,7 @@ static void write_commented_object(int fd, const struct object_id *object)
 }
 
 static void prepare_note_data(const struct object_id *object, struct note_data *d,
-		const unsigned char *old_note)
+		const struct object_id *old_note)
 {
 	if (d->use_editor || !d->given) {
 		int fd;
@@ -198,9 +200,9 @@ static void prepare_note_data(const struct object_id *object, struct note_data *
 	}
 }
 
-static void write_note_data(struct note_data *d, unsigned char *sha1)
+static void write_note_data(struct note_data *d, struct object_id *oid)
 {
-	if (write_sha1_file(d->buf.buf, d->buf.len, blob_type, sha1)) {
+	if (write_object_file(d->buf.buf, d->buf.len, blob_type, oid)) {
 		error(_("unable to write note object"));
 		if (d->edit_path)
 			error(_("the note contents have been left in %s"),
@@ -253,7 +255,7 @@ static int parse_reuse_arg(const struct option *opt, const char *arg, int unset)
 
 	if (get_oid(arg, &object))
 		die(_("failed to resolve '%s' as a valid ref."), arg);
-	if (!(buf = read_sha1_file(object.hash, &type, &len))) {
+	if (!(buf = read_object_file(&object, &type, &len))) {
 		free(buf);
 		die(_("failed to read object '%s'."), arg);
 	}
@@ -413,7 +415,7 @@ static int add(int argc, const char **argv, const char *prefix)
 			parse_reuse_arg},
 		OPT_BOOL(0, "allow-empty", &allow_empty,
 			N_("allow storing empty note")),
-		OPT__FORCE(&force, N_("replace existing notes")),
+		OPT__FORCE(&force, N_("replace existing notes"), PARSE_OPT_NOCOMPLETE),
 		OPT_END()
 	};
 
@@ -457,11 +459,11 @@ static int add(int argc, const char **argv, const char *prefix)
 			oid_to_hex(&object));
 	}
 
-	prepare_note_data(&object, &d, note ? note->hash : NULL);
+	prepare_note_data(&object, &d, note);
 	if (d.buf.len || allow_empty) {
-		write_note_data(&d, new_note.hash);
+		write_note_data(&d, &new_note);
 		if (add_note(t, &object, &new_note, combine_notes_overwrite))
-			die("BUG: combine_notes_overwrite failed");
+			BUG("combine_notes_overwrite failed");
 		commit_notes(t, "Notes added by 'git notes add'");
 	} else {
 		fprintf(stderr, _("Removing note for object %s\n"),
@@ -484,7 +486,7 @@ static int copy(int argc, const char **argv, const char *prefix)
 	struct notes_tree *t;
 	const char *rewrite_cmd = NULL;
 	struct option options[] = {
-		OPT__FORCE(&force, N_("replace existing notes")),
+		OPT__FORCE(&force, N_("replace existing notes"), PARSE_OPT_NOCOMPLETE),
 		OPT_BOOL(0, "stdin", &from_stdin, N_("read objects from stdin")),
 		OPT_STRING(0, "for-rewrite", &rewrite_cmd, N_("command"),
 			   N_("load rewriting config for <command> (implies "
@@ -544,7 +546,7 @@ static int copy(int argc, const char **argv, const char *prefix)
 	}
 
 	if (add_note(t, &object, from_note, combine_notes_overwrite))
-		die("BUG: combine_notes_overwrite failed");
+		BUG("combine_notes_overwrite failed");
 	commit_notes(t, "Notes added by 'git notes copy'");
 out:
 	free_notes(t);
@@ -602,13 +604,13 @@ static int append_edit(int argc, const char **argv, const char *prefix)
 	t = init_notes_check(argv[0], NOTES_INIT_WRITABLE);
 	note = get_note(t, &object);
 
-	prepare_note_data(&object, &d, edit && note ? note->hash : NULL);
+	prepare_note_data(&object, &d, edit && note ? note : NULL);
 
 	if (note && !edit) {
 		/* Append buf to previous note contents */
 		unsigned long size;
 		enum object_type type;
-		char *prev_buf = read_sha1_file(note->hash, &type, &size);
+		char *prev_buf = read_object_file(note, &type, &size);
 
 		strbuf_grow(&d.buf, size + 1);
 		if (d.buf.len && prev_buf && size)
@@ -619,9 +621,9 @@ static int append_edit(int argc, const char **argv, const char *prefix)
 	}
 
 	if (d.buf.len || allow_empty) {
-		write_note_data(&d, new_note.hash);
+		write_note_data(&d, &new_note);
 		if (add_note(t, &object, &new_note, combine_notes_overwrite))
-			die("BUG: combine_notes_overwrite failed");
+			BUG("combine_notes_overwrite failed");
 		logmsg = xstrfmt("Notes added by 'git notes %s'", argv[0]);
 	} else {
 		fprintf(stderr, _("Removing note for object %s\n"),
@@ -710,7 +712,7 @@ static int merge_commit(struct notes_merge_options *o)
 
 	if (get_oid("NOTES_MERGE_PARTIAL", &oid))
 		die(_("failed to read ref NOTES_MERGE_PARTIAL"));
-	else if (!(partial = lookup_commit_reference(&oid)))
+	else if (!(partial = lookup_commit_reference(the_repository, &oid)))
 		die(_("could not find commit from NOTES_MERGE_PARTIAL."));
 	else if (parse_commit(partial))
 		die(_("could not parse commit from NOTES_MERGE_PARTIAL."));
@@ -778,13 +780,13 @@ static int merge(int argc, const char **argv, const char *prefix)
 			   N_("resolve notes conflicts using the given strategy "
 			      "(manual/ours/theirs/union/cat_sort_uniq)")),
 		OPT_GROUP(N_("Committing unmerged notes")),
-		{ OPTION_SET_INT, 0, "commit", &do_commit, NULL,
-			N_("finalize notes merge by committing unmerged notes"),
-			PARSE_OPT_NOARG | PARSE_OPT_NONEG, NULL, 1},
+		OPT_SET_INT_F(0, "commit", &do_commit,
+			      N_("finalize notes merge by committing unmerged notes"),
+			      1, PARSE_OPT_NONEG),
 		OPT_GROUP(N_("Aborting notes merge resolution")),
-		{ OPTION_SET_INT, 0, "abort", &do_abort, NULL,
-			N_("abort notes merge"),
-			PARSE_OPT_NOARG | PARSE_OPT_NONEG, NULL, 1},
+		OPT_SET_INT_F(0, "abort", &do_abort,
+			      N_("abort notes merge"),
+			      1, PARSE_OPT_NONEG),
 		OPT_END()
 	};
 
@@ -831,7 +833,7 @@ static int merge(int argc, const char **argv, const char *prefix)
 		const char *short_ref = NULL;
 
 		if (!skip_prefix(o.local_ref, "refs/notes/", &short_ref))
-			die("BUG: local ref %s is outside of refs/notes/",
+			BUG("local ref %s is outside of refs/notes/",
 			    o.local_ref);
 
 		strbuf_addf(&merge_key, "notes.%s.mergeStrategy", short_ref);

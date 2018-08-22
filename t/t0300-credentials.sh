@@ -30,7 +30,7 @@ test_expect_success 'setup helper scripts' '
 	test -z "$pass" || echo password=$pass
 	EOF
 
-	PATH="$PWD:$PATH"
+	PATH="$PWD$PATH_SEP$PATH"
 '
 
 test_expect_success 'credential_fill invokes helper' '
@@ -294,8 +294,7 @@ test_expect_success 'helpers can abort the process' '
 		-c credential.helper="!f() { echo quit=1; }; f" \
 		-c credential.helper="verbatim foo bar" \
 		credential fill >stdout &&
-	>expect &&
-	test_cmp expect stdout
+	test_must_be_empty stdout
 '
 
 test_expect_success 'empty helper spec resets helper list' '

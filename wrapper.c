@@ -445,21 +445,21 @@ FILE *fopen_or_warn(const char *path, const char *mode)
 	return NULL;
 }
 
-int xmkstemp(char *template)
+int xmkstemp(char *filename_template)
 {
 	int fd;
 	char origtemplate[PATH_MAX];
-	strlcpy(origtemplate, template, sizeof(origtemplate));
+	strlcpy(origtemplate, filename_template, sizeof(origtemplate));
 
-	fd = mkstemp(template);
+	fd = mkstemp(filename_template);
 	if (fd < 0) {
 		int saved_errno = errno;
 		const char *nonrelative_template;
 
-		if (strlen(template) != strlen(origtemplate))
-			template = origtemplate;
+		if (strlen(filename_template) != strlen(origtemplate))
+			filename_template = origtemplate;
 
-		nonrelative_template = absolute_path(template);
+		nonrelative_template = absolute_path(filename_template);
 		errno = saved_errno;
 		die_errno("Unable to create temporary file '%s'",
 			nonrelative_template);
@@ -481,7 +481,7 @@ int git_mkstemps_mode(char *pattern, int suffix_len, int mode)
 	static const int num_letters = 62;
 	uint64_t value;
 	struct timeval tv;
-	char *template;
+	char *filename_template;
 	size_t len;
 	int fd, count;
 
@@ -503,16 +503,16 @@ int git_mkstemps_mode(char *pattern, int suffix_len, int mode)
 	 */
 	gettimeofday(&tv, NULL);
 	value = ((size_t)(tv.tv_usec << 16)) ^ tv.tv_sec ^ getpid();
-	template = &pattern[len - 6 - suffix_len];
+	filename_template = &pattern[len - 6 - suffix_len];
 	for (count = 0; count < TMP_MAX; ++count) {
 		uint64_t v = value;
 		/* Fill in the random bits. */
-		template[0] = letters[v % num_letters]; v /= num_letters;
-		template[1] = letters[v % num_letters]; v /= num_letters;
-		template[2] = letters[v % num_letters]; v /= num_letters;
-		template[3] = letters[v % num_letters]; v /= num_letters;
-		template[4] = letters[v % num_letters]; v /= num_letters;
-		template[5] = letters[v % num_letters]; v /= num_letters;
+		filename_template[0] = letters[v % num_letters]; v /= num_letters;
+		filename_template[1] = letters[v % num_letters]; v /= num_letters;
+		filename_template[2] = letters[v % num_letters]; v /= num_letters;
+		filename_template[3] = letters[v % num_letters]; v /= num_letters;
+		filename_template[4] = letters[v % num_letters]; v /= num_letters;
+		filename_template[5] = letters[v % num_letters]; v /= num_letters;
 
 		fd = open(pattern, O_CREAT | O_EXCL | O_RDWR, mode);
 		if (fd >= 0)
@@ -541,21 +541,21 @@ int git_mkstemp_mode(char *pattern, int mode)
 	return git_mkstemps_mode(pattern, 0, mode);
 }
 
-int xmkstemp_mode(char *template, int mode)
+int xmkstemp_mode(char *filename_template, int mode)
 {
 	int fd;
 	char origtemplate[PATH_MAX];
-	strlcpy(origtemplate, template, sizeof(origtemplate));
+	strlcpy(origtemplate, filename_template, sizeof(origtemplate));
 
-	fd = git_mkstemp_mode(template, mode);
+	fd = git_mkstemp_mode(filename_template, mode);
 	if (fd < 0) {
 		int saved_errno = errno;
 		const char *nonrelative_template;
 
-		if (!template[0])
-			template = origtemplate;
+		if (!filename_template[0])
+			filename_template = origtemplate;
 
-		nonrelative_template = absolute_path(template);
+		nonrelative_template = absolute_path(filename_template);
 		errno = saved_errno;
 		die_errno("Unable to create temporary file '%s'",
 			nonrelative_template);
@@ -643,9 +643,9 @@ int xsnprintf(char *dst, size_t max, const char *fmt, ...)
 	va_end(ap);
 
 	if (len < 0)
-		die("BUG: your snprintf is broken");
+		BUG("your snprintf is broken");
 	if (len >= max)
-		die("BUG: attempt to snprintf into too-small buffer");
+		BUG("attempt to snprintf into too-small buffer");
 	return len;
 }
 
@@ -689,4 +689,17 @@ int xgethostname(char *buf, size_t len)
 	if (!ret)
 		buf[len - 1] = 0;
 	return ret;
+}
+
+int is_empty_or_missing_file(const char *filename)
+{
+	struct stat st;
+
+	if (stat(filename, &st) < 0) {
+		if (errno == ENOENT)
+			return 1;
+		die_errno(_("could not stat %s"), filename);
+	}
+
+	return !st.st_size;
 }

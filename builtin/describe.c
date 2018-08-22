@@ -6,17 +6,21 @@
 #include "blob.h"
 #include "refs.h"
 #include "builtin.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "parse-options.h"
 #include "revision.h"
 #include "diff.h"
 #include "hashmap.h"
 #include "argv-array.h"
 #include "run-command.h"
+#include "object-store.h"
 #include "revision.h"
 #include "list-objects.h"
+#include "commit-slab.h"
 
 #define MAX_TAGS	(FLAG_BITS - 1)
+
+define_commit_slab(commit_names, struct commit_name *);
 
 static const char * const describe_usage[] = {
 	N_("git describe [<options>] [<commit-ish>...]"),
@@ -37,6 +41,7 @@ static struct string_list patterns = STRING_LIST_INIT_NODUP;
 static struct string_list exclude_patterns = STRING_LIST_INIT_NODUP;
 static int always;
 static const char *suffix, *dirty, *broken;
+static struct commit_names commit_names;
 
 /* diff-index command arguments to check if working tree is dirty. */
 static const char *diff_index_args[] = {
@@ -88,13 +93,13 @@ static int replace_name(struct commit_name *e,
 		struct tag *t;
 
 		if (!e->tag) {
-			t = lookup_tag(&e->oid);
+			t = lookup_tag(the_repository, &e->oid);
 			if (!t || parse_tag(t))
 				return 1;
 			e->tag = t;
 		}
 
-		t = lookup_tag(oid);
+		t = lookup_tag(the_repository, oid);
 		if (!t || parse_tag(t))
 			return 0;
 		*tag = t;
@@ -262,7 +267,7 @@ static unsigned long finish_depth_computation(
 static void append_name(struct commit_name *n, struct strbuf *dst)
 {
 	if (n->prio == 2 && !n->tag) {
-		n->tag = lookup_tag(&n->oid);
+		n->tag = lookup_tag(the_repository, &n->oid);
 		if (!n->tag || parse_tag(n->tag))
 			die(_("annotated tag %s not available"), n->path);
 	}
@@ -274,15 +279,18 @@ static void append_name(struct commit_name *n, struct strbuf *dst)
 		n->name_checked = 1;
 	}
 
-	if (n->tag)
+	if (n->tag) {
+		if (all)
+			strbuf_addstr(dst, "tags/");
 		strbuf_addstr(dst, n->tag->tag);
-	else
+	} else {
 		strbuf_addstr(dst, n->path);
+	}
 }
 
 static void append_suffix(int depth, const struct object_id *oid, struct strbuf *dst)
 {
-	strbuf_addf(dst, "-%d-g%s", depth, find_unique_abbrev(oid->hash, abbrev));
+	strbuf_addf(dst, "-%d-g%s", depth, find_unique_abbrev(oid, abbrev));
 }
 
 static void describe_commit(struct object_id *oid, struct strbuf *dst)
@@ -295,7 +303,7 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	unsigned long seen_commits = 0;
 	unsigned int unannotated_cnt = 0;
 
-	cmit = lookup_commit_reference(oid);
+	cmit = lookup_commit_reference(the_repository, oid);
 
 	n = find_commit_name(&cmit->object.oid);
 	if (n && (tags || all || n->prio == 2)) {
@@ -318,11 +326,15 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	if (!have_util) {
 		struct hashmap_iter iter;
 		struct commit *c;
-		struct commit_name *n = hashmap_iter_first(&names, &iter);
+		struct commit_name *n;
+
+		init_commit_names(&commit_names);
+		n = hashmap_iter_first(&names, &iter);
 		for (; n; n = hashmap_iter_next(&iter)) {
-			c = lookup_commit_reference_gently(&n->peeled, 1);
+			c = lookup_commit_reference_gently(the_repository,
+							   &n->peeled, 1);
 			if (c)
-				c->util = n;
+				*commit_names_at(&commit_names, c) = n;
 		}
 		have_util = 1;
 	}
@@ -333,8 +345,11 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	while (list) {
 		struct commit *c = pop_commit(&list);
 		struct commit_list *parents = c->parents;
+		struct commit_name **slot;
+
 		seen_commits++;
-		n = c->util;
+		slot = commit_names_peek(&commit_names, c);
+		n = slot ? *slot : NULL;
 		if (n) {
 			if (!tags && !all && n->prio < 2) {
 				unannotated_cnt++;
@@ -380,7 +395,7 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	if (!match_cnt) {
 		struct object_id *cmit_oid = &cmit->object.oid;
 		if (always) {
-			strbuf_addstr(dst, find_unique_abbrev(cmit_oid->hash, abbrev));
+			strbuf_add_unique_abbrev(dst, cmit_oid, abbrev);
 			if (suffix)
 				strbuf_addstr(dst, suffix);
 			return;
@@ -495,11 +510,11 @@ static void describe(const char *arg, int last_one)
 
 	if (get_oid(arg, &oid))
 		die(_("Not a valid object name %s"), arg);
-	cmit = lookup_commit_reference_gently(&oid, 1);
+	cmit = lookup_commit_reference_gently(the_repository, &oid, 1);
 
 	if (cmit)
 		describe_commit(&oid, &sb);
-	else if (lookup_blob(&oid))
+	else if (oid_object_info(the_repository, &oid, NULL) == OBJ_BLOB)
 		describe_blob(oid, &sb);
 	else
 		die(_("%s is neither a commit nor blob"), arg);
@@ -609,7 +624,7 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 				suffix = broken;
 			}
 		} else if (dirty) {
-			static struct lock_file index_lock;
+			struct lock_file index_lock = LOCK_INIT;
 			struct rev_info revs;
 			struct argv_array args = ARGV_ARRAY_INIT;
 			int fd, result;

@@ -16,6 +16,7 @@
 #include "column.h"
 #include "color.h"
 #include "pathspec.h"
+#include "help.h"
 
 static int force = -1; /* unset */
 static int interactive;
@@ -40,6 +41,15 @@ enum color_clean {
 	CLEAN_COLOR_HEADER = 3,
 	CLEAN_COLOR_HELP = 4,
 	CLEAN_COLOR_ERROR = 5
+};
+
+static const char *color_interactive_slots[] = {
+	[CLEAN_COLOR_ERROR]  = "error",
+	[CLEAN_COLOR_HEADER] = "header",
+	[CLEAN_COLOR_HELP]   = "help",
+	[CLEAN_COLOR_PLAIN]  = "plain",
+	[CLEAN_COLOR_PROMPT] = "prompt",
+	[CLEAN_COLOR_RESET]  = "reset",
 };
 
 static int clean_use_color = -1;
@@ -82,22 +92,7 @@ struct menu_stuff {
 	void *stuff;
 };
 
-static int parse_clean_color_slot(const char *var)
-{
-	if (!strcasecmp(var, "reset"))
-		return CLEAN_COLOR_RESET;
-	if (!strcasecmp(var, "plain"))
-		return CLEAN_COLOR_PLAIN;
-	if (!strcasecmp(var, "prompt"))
-		return CLEAN_COLOR_PROMPT;
-	if (!strcasecmp(var, "header"))
-		return CLEAN_COLOR_HEADER;
-	if (!strcasecmp(var, "help"))
-		return CLEAN_COLOR_HELP;
-	if (!strcasecmp(var, "error"))
-		return CLEAN_COLOR_ERROR;
-	return -1;
-}
+define_list_config_array(color_interactive_slots);
 
 static int git_clean_config(const char *var, const char *value, void *cb)
 {
@@ -113,7 +108,7 @@ static int git_clean_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 	if (skip_prefix(var, "color.interactive.", &slot_name)) {
-		int slot = parse_clean_color_slot(slot_name);
+		int slot = LOOKUP_CONFIG(color_interactive_slots, slot_name);
 		if (slot < 0)
 			return 0;
 		if (!value)
@@ -197,7 +192,8 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		strbuf_setlen(path, len);
 		strbuf_addstr(path, e->d_name);
 		if (lstat(path->buf, &st))
-			; /* fall thru */
+			warning("Could not stat path '%s': %s",
+				path->buf, strerror(errno));
 		else if (S_ISDIR(st.st_mode)) {
 			if (remove_dirs(path, prefix, force_flag, dry_run, quiet, &gone))
 				ret = 1;
@@ -581,6 +577,7 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 			       clean_get_color(CLEAN_COLOR_RESET));
 		}
 
+		fflush(stdout);
 		if (strbuf_getline_lf(&choice, stdin) != EOF) {
 			strbuf_trim(&choice);
 		} else {
@@ -663,6 +660,7 @@ static int filter_by_patterns_cmd(void)
 		clean_print_color(CLEAN_COLOR_PROMPT);
 		printf(_("Input ignore patterns>> "));
 		clean_print_color(CLEAN_COLOR_RESET);
+		fflush(stdout);
 		if (strbuf_getline_lf(&confirm, stdin) != EOF)
 			strbuf_trim(&confirm);
 		else
@@ -761,6 +759,7 @@ static int ask_each_cmd(void)
 			qname = quote_path_relative(item->string, NULL, &buf);
 			/* TRANSLATORS: Make sure to keep [y/N] as is */
 			printf(_("Remove %s [y/N]? "), qname);
+			fflush(stdout);
 			if (strbuf_getline_lf(&confirm, stdin) != EOF) {
 				strbuf_trim(&confirm);
 			} else {
@@ -909,7 +908,7 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	struct option options[] = {
 		OPT__QUIET(&quiet, N_("do not print names of files removed")),
 		OPT__DRY_RUN(&dry_run, N_("dry run")),
-		OPT__FORCE(&force, N_("force")),
+		OPT__FORCE(&force, N_("force"), PARSE_OPT_NOCOMPLETE),
 		OPT_BOOL('i', "interactive", &interactive, N_("interactive cleaning")),
 		OPT_BOOL('d', NULL, &remove_directories,
 				N_("remove whole directories")),
@@ -981,7 +980,7 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 			continue;
 
 		if (pathspec.nr)
-			matches = dir_path_match(ent, &pathspec, 0, NULL);
+			matches = dir_path_match(&the_index, ent, &pathspec, 0, NULL);
 
 		if (pathspec.nr && !matches)
 			continue;

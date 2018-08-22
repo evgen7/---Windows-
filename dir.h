@@ -3,6 +3,7 @@
 
 /* See Documentation/technical/api-directory-listing.txt */
 
+#include "cache.h"
 #include "strbuf.h"
 
 struct dir_entry {
@@ -74,9 +75,9 @@ struct exclude_list_group {
 	struct exclude_list *el;
 };
 
-struct sha1_stat {
+struct oid_stat {
 	struct stat_data stat;
-	unsigned char sha1[20];
+	struct object_id oid;
 	int valid;
 };
 
@@ -118,14 +119,14 @@ struct untracked_cache_dir {
 	/* all data except 'dirs' in this struct are good */
 	unsigned int valid : 1;
 	unsigned int recurse : 1;
-	/* null SHA-1 means this directory does not have .gitignore */
-	unsigned char exclude_sha1[20];
+	/* null object ID means this directory does not have .gitignore */
+	struct object_id exclude_oid;
 	char name[FLEX_ARRAY];
 };
 
 struct untracked_cache {
-	struct sha1_stat ss_info_exclude;
-	struct sha1_stat ss_excludes_file;
+	struct oid_stat ss_info_exclude;
+	struct oid_stat ss_excludes_file;
 	const char *exclude_per_dir;
 	struct strbuf ident;
 	/*
@@ -195,8 +196,8 @@ struct dir_struct {
 
 	/* Enable untracked file cache if set */
 	struct untracked_cache *untracked;
-	struct sha1_stat ss_info_exclude;
-	struct sha1_stat ss_excludes_file;
+	struct oid_stat ss_info_exclude;
+	struct oid_stat ss_excludes_file;
 	unsigned unmanaged_exclude_files;
 };
 
@@ -215,7 +216,8 @@ extern int count_slashes(const char *s);
 extern int simple_length(const char *match);
 extern int no_wildcard(const char *string);
 extern char *common_prefix(const struct pathspec *pathspec);
-extern int match_pathspec(const struct pathspec *pathspec,
+extern int match_pathspec(const struct index_state *istate,
+			  const struct pathspec *pathspec,
 			  const char *name, int namelen,
 			  int prefix, char *seen, int is_dir);
 extern int report_path_error(const char *ps_matched, const struct pathspec *pathspec, const char *prefix);
@@ -325,32 +327,35 @@ extern int git_fnmatch(const struct pathspec_item *item,
 		       const char *pattern, const char *string,
 		       int prefix);
 
-extern int submodule_path_match(const struct pathspec *ps,
+extern int submodule_path_match(const struct index_state *istate,
+				const struct pathspec *ps,
 				const char *submodule_name,
 				char *seen);
 
-static inline int ce_path_match(const struct cache_entry *ce,
+static inline int ce_path_match(const struct index_state *istate,
+				const struct cache_entry *ce,
 				const struct pathspec *pathspec,
 				char *seen)
 {
-	return match_pathspec(pathspec, ce->name, ce_namelen(ce), 0, seen,
+	return match_pathspec(istate, pathspec, ce->name, ce_namelen(ce), 0, seen,
 			      S_ISDIR(ce->ce_mode) || S_ISGITLINK(ce->ce_mode));
 }
 
-static inline int dir_path_match(const struct dir_entry *ent,
+static inline int dir_path_match(const struct index_state *istate,
+				 const struct dir_entry *ent,
 				 const struct pathspec *pathspec,
 				 int prefix, char *seen)
 {
 	int has_trailing_dir = ent->len && ent->name[ent->len - 1] == '/';
 	int len = has_trailing_dir ? ent->len - 1 : ent->len;
-	return match_pathspec(pathspec, ent->name, len, prefix, seen,
+	return match_pathspec(istate, pathspec, ent->name, len, prefix, seen,
 			      has_trailing_dir);
 }
 
 int cmp_dir_entry(const void *p1, const void *p2);
 int check_dir_entry_contains(const struct dir_entry *out, const struct dir_entry *in);
 
-void untracked_cache_invalidate_path(struct index_state *, const char *);
+void untracked_cache_invalidate_path(struct index_state *, const char *, int safe_path);
 void untracked_cache_remove_from_index(struct index_state *, const char *);
 void untracked_cache_add_to_index(struct index_state *, const char *);
 
@@ -359,7 +364,17 @@ struct untracked_cache *read_untracked_extension(const void *data, unsigned long
 void write_untracked_extension(struct strbuf *out, struct untracked_cache *untracked);
 void add_untracked_cache(struct index_state *istate);
 void remove_untracked_cache(struct index_state *istate);
-extern void connect_work_tree_and_git_dir(const char *work_tree, const char *git_dir);
+
+/*
+ * Connect a worktree to a git directory by creating (or overwriting) a
+ * '.git' file containing the location of the git directory. In the git
+ * directory set the core.worktree setting to indicate where the worktree is.
+ * When `recurse_into_nested` is set, recurse into any nested submodules,
+ * connecting them as well.
+ */
+extern void connect_work_tree_and_git_dir(const char *work_tree,
+					  const char *git_dir,
+					  int recurse_into_nested);
 extern void relocate_gitdir(const char *path,
 			    const char *old_git_dir,
 			    const char *new_git_dir);

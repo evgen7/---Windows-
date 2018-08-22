@@ -1,11 +1,12 @@
 #include "cache.h"
 #include "run-command.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "sigchain.h"
 #include "argv-array.h"
 #include "thread-utils.h"
 #include "strbuf.h"
 #include "string-list.h"
+#include "quote.h"
 
 void child_process_init(struct child_process *child)
 {
@@ -244,7 +245,7 @@ int sane_execvp(const char *file, char * const argv[])
 static const char **prepare_shell_cmd(struct argv_array *out, const char **argv)
 {
 	if (!argv[0])
-		die("BUG: shell command is empty");
+		BUG("shell command is empty");
 
 	if (strcspn(argv[0], "|&;<>()$`\\\"' \t\n*?[#~=%") != strlen(argv[0])) {
 #ifndef GIT_WINDOWS_NATIVE
@@ -382,7 +383,7 @@ static void child_err_spew(struct child_process *cmd, struct child_err *cerr)
 static void prepare_cmd(struct argv_array *out, const struct child_process *cmd)
 {
 	if (!cmd->argv[0])
-		die("BUG: command is empty");
+		BUG("command is empty");
 
 	/*
 	 * Add SHELL_PATH so in the event exec fails with ENOEXEC we can
@@ -470,15 +471,12 @@ struct atfork_state {
 	sigset_t old;
 };
 
-#ifndef NO_PTHREADS
-static void bug_die(int err, const char *msg)
-{
-	if (err) {
-		errno = err;
-		die_errno("BUG: %s", msg);
-	}
-}
-#endif
+#define CHECK_BUG(err, msg) \
+	do { \
+		int e = (err); \
+		if (e) \
+			BUG("%s: %s", msg, strerror(e)); \
+	} while(0)
 
 static void atfork_prepare(struct atfork_state *as)
 {
@@ -490,9 +488,9 @@ static void atfork_prepare(struct atfork_state *as)
 	if (sigprocmask(SIG_SETMASK, &all, &as->old))
 		die_errno("sigprocmask");
 #else
-	bug_die(pthread_sigmask(SIG_SETMASK, &all, &as->old),
+	CHECK_BUG(pthread_sigmask(SIG_SETMASK, &all, &as->old),
 		"blocking all signals");
-	bug_die(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &as->cs),
+	CHECK_BUG(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &as->cs),
 		"disabling cancellation");
 #endif
 }
@@ -503,9 +501,9 @@ static void atfork_parent(struct atfork_state *as)
 	if (sigprocmask(SIG_SETMASK, &as->old, NULL))
 		die_errno("sigprocmask");
 #else
-	bug_die(pthread_setcancelstate(as->cs, NULL),
+	CHECK_BUG(pthread_setcancelstate(as->cs, NULL),
 		"re-enabling cancellation");
-	bug_die(pthread_sigmask(SIG_SETMASK, &as->old, NULL),
+	CHECK_BUG(pthread_sigmask(SIG_SETMASK, &as->old, NULL),
 		"restoring signal mask");
 #endif
 }
@@ -554,6 +552,90 @@ static int wait_or_whine(pid_t pid, const char *argv0, int in_signal)
 
 	errno = failed_errno;
 	return code;
+}
+
+static void trace_add_env(struct strbuf *dst, const char *const *deltaenv)
+{
+	struct string_list envs = STRING_LIST_INIT_DUP;
+	const char *const *e;
+	int i;
+	int printed_unset = 0;
+
+	/* Last one wins, see run-command.c:prep_childenv() for context */
+	for (e = deltaenv; e && *e; e++) {
+		struct strbuf key = STRBUF_INIT;
+		char *equals = strchr(*e, '=');
+
+		if (equals) {
+			strbuf_add(&key, *e, equals - *e);
+			string_list_insert(&envs, key.buf)->util = equals + 1;
+		} else {
+			string_list_insert(&envs, *e)->util = NULL;
+		}
+		strbuf_release(&key);
+	}
+
+	/* "unset X Y...;" */
+	for (i = 0; i < envs.nr; i++) {
+		const char *var = envs.items[i].string;
+		const char *val = envs.items[i].util;
+
+		if (val || !getenv(var))
+			continue;
+
+		if (!printed_unset) {
+			strbuf_addstr(dst, " unset");
+			printed_unset = 1;
+		}
+		strbuf_addf(dst, " %s", var);
+	}
+	if (printed_unset)
+		strbuf_addch(dst, ';');
+
+	/* ... followed by "A=B C=D ..." */
+	for (i = 0; i < envs.nr; i++) {
+		const char *var = envs.items[i].string;
+		const char *val = envs.items[i].util;
+		const char *oldval;
+
+		if (!val)
+			continue;
+
+		oldval = getenv(var);
+		if (oldval && !strcmp(val, oldval))
+			continue;
+
+		strbuf_addf(dst, " %s=", var);
+		sq_quote_buf_pretty(dst, val);
+	}
+	string_list_clear(&envs, 0);
+}
+
+static void trace_run_command(const struct child_process *cp)
+{
+	struct strbuf buf = STRBUF_INIT;
+
+	if (!trace_want(&trace_default_key))
+		return;
+
+	strbuf_addstr(&buf, "trace: run_command:");
+	if (cp->dir) {
+		strbuf_addstr(&buf, " cd ");
+		sq_quote_buf_pretty(&buf, cp->dir);
+		strbuf_addch(&buf, ';');
+	}
+	/*
+	 * The caller is responsible for initializing cp->env from
+	 * cp->env_array if needed. We only check one place.
+	 */
+	if (cp->env)
+		trace_add_env(&buf, cp->env);
+	if (cp->git_cmd)
+		strbuf_addstr(&buf, " git");
+	sq_quote_argv_pretty(&buf, cp->argv);
+
+	trace_printf("%s", buf.buf);
+	strbuf_release(&buf);
 }
 
 int start_command(struct child_process *cmd)
@@ -624,8 +706,11 @@ fail_pipe:
 		cmd->err = fderr[0];
 	}
 
-	trace_argv_printf(cmd->argv, "trace: run_command:");
+	trace_run_command(cmd);
+
 	fflush(NULL);
+
+	cmd->slog_child_id = slog_child_starting(cmd);
 
 #ifndef GIT_WINDOWS_NATIVE
 {
@@ -840,6 +925,9 @@ fail_pipe:
 			close_pair(fderr);
 		else if (cmd->err)
 			close(cmd->err);
+
+		slog_child_ended(cmd->slog_child_id, cmd->pid, failed_errno);
+
 		child_process_clear(cmd);
 		errno = failed_errno;
 		return -1;
@@ -866,13 +954,20 @@ fail_pipe:
 int finish_command(struct child_process *cmd)
 {
 	int ret = wait_or_whine(cmd->pid, cmd->argv[0], 0);
+
+	slog_child_ended(cmd->slog_child_id, cmd->pid, ret);
+
 	child_process_clear(cmd);
 	return ret;
 }
 
 int finish_command_in_signal(struct child_process *cmd)
 {
-	return wait_or_whine(cmd->pid, cmd->argv[0], 1);
+	int ret = wait_or_whine(cmd->pid, cmd->argv[0], 1);
+
+	slog_child_ended(cmd->slog_child_id, cmd->pid, ret);
+
+	return ret;
 }
 
 
@@ -881,7 +976,7 @@ int run_command(struct child_process *cmd)
 	int code;
 
 	if (cmd->out < 0 || cmd->err < 0)
-		die("BUG: run_command with a pipe can cause deadlock");
+		BUG("run_command with a pipe can cause deadlock");
 
 	code = start_command(cmd);
 	if (code)
@@ -1471,7 +1566,7 @@ static void pp_init(struct parallel_processes *pp,
 
 	pp->data = data;
 	if (!get_next_task)
-		die("BUG: you need to specify a get_next_task function");
+		BUG("you need to specify a get_next_task function");
 	pp->get_next_task = get_next_task;
 
 	pp->start_failure = start_failure ? start_failure : default_start_failure;
@@ -1533,7 +1628,7 @@ static int pp_start_one(struct parallel_processes *pp)
 		if (pp->children[i].state == GIT_CP_FREE)
 			break;
 	if (i == pp->max_processes)
-		die("BUG: bookkeeping is hard");
+		BUG("bookkeeping is hard");
 
 	code = pp->get_next_task(&pp->children[i].process,
 				 &pp->children[i].err,

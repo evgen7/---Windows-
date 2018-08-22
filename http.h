@@ -10,45 +10,11 @@
 #include "remote.h"
 #include "url.h"
 
-/*
- * We detect based on the cURL version if multi-transfer is
- * usable in this implementation and define this symbol accordingly.
- * This shouldn't be set by the Makefile or by the user (e.g. via CFLAGS).
- */
-#undef USE_CURL_MULTI
+#if LIBCURL_VERSION_NUM < 0x071304
+#error "your libcurl version is too old; Git requires curl >= 7.19.4"
+#endif
 
-#if LIBCURL_VERSION_NUM >= 0x071000
-#define USE_CURL_MULTI
 #define DEFAULT_MAX_REQUESTS 5
-#endif
-
-#if LIBCURL_VERSION_NUM < 0x070704
-#define curl_global_cleanup() do { /* nothing */ } while (0)
-#endif
-#if LIBCURL_VERSION_NUM < 0x070800
-#define curl_global_init(a) do { /* nothing */ } while (0)
-#endif
-
-#if (LIBCURL_VERSION_NUM < 0x070c04) || (LIBCURL_VERSION_NUM == 0x071000)
-#define NO_CURL_EASY_DUPHANDLE
-#endif
-
-#if LIBCURL_VERSION_NUM < 0x070a03
-#define CURLE_HTTP_RETURNED_ERROR CURLE_HTTP_NOT_FOUND
-#endif
-
-#if LIBCURL_VERSION_NUM < 0x070c03
-#define NO_CURL_IOCTL
-#endif
-
-/*
- * CURLOPT_USE_SSL was known as CURLOPT_FTP_SSL up to 7.16.4,
- * and the constants were known as CURLFTPSSL_*
-*/
-#if !defined(CURLOPT_USE_SSL) && defined(CURLOPT_FTP_SSL)
-#define CURLOPT_USE_SSL CURLOPT_FTP_SSL
-#define CURLUSESSL_TRY CURLFTPSSL_TRY
-#endif
 
 struct slot_results {
 	CURLcode curl_result;
@@ -78,9 +44,7 @@ struct buffer {
 extern size_t fread_buffer(char *ptr, size_t eltsize, size_t nmemb, void *strbuf);
 extern size_t fwrite_buffer(char *ptr, size_t eltsize, size_t nmemb, void *strbuf);
 extern size_t fwrite_null(char *ptr, size_t eltsize, size_t nmemb, void *strbuf);
-#ifndef NO_CURL_IOCTL
 extern curlioerr ioctl_buffer(CURL *handle, int cmd, void *clientp);
-#endif
 
 /* Slot lifecycle functions */
 extern struct active_request_slot *get_active_slot(void);
@@ -97,11 +61,9 @@ extern void finish_all_active_slots(void);
 int run_one_slot(struct active_request_slot *slot,
 		 struct slot_results *results);
 
-#ifdef USE_CURL_MULTI
 extern void fill_active_slots(void);
 extern void add_fill_function(void *data, int (*fill)(void *));
 extern void step_active_slots(void);
-#endif
 
 extern void http_init(struct remote *remote, const char *url,
 		      int proactive_auth);
@@ -172,6 +134,13 @@ struct http_get_options {
 	 * for details.
 	 */
 	struct strbuf *base_url;
+
+	/*
+	 * If not NULL, contains additional HTTP headers to be sent with the
+	 * request. The strings in the list must not be freed until after the
+	 * request has completed.
+	 */
+	struct string_list *extra_headers;
 };
 
 /* Return values for http_get_*() */
@@ -200,7 +169,7 @@ struct http_pack_request {
 	struct packed_git *target;
 	struct packed_git **lst;
 	FILE *packfile;
-	char tmpfile[PATH_MAX];
+	struct strbuf tmpfile;
 	struct active_request_slot *slot;
 };
 
@@ -212,7 +181,7 @@ extern void release_http_pack_request(struct http_pack_request *preq);
 /* Helpers for fetching object */
 struct http_object_request {
 	char *url;
-	char tmpfile[PATH_MAX];
+	struct strbuf tmpfile;
 	int localfile;
 	CURLcode curl_result;
 	char errorstr[CURL_ERROR_SIZE];

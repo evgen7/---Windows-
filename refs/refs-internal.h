@@ -1,6 +1,8 @@
 #ifndef REFS_REFS_INTERNAL_H
 #define REFS_REFS_INTERNAL_H
 
+#include "iterator.h"
+
 /*
  * Data structures and functions for the internal use of the refs
  * module. Code outside of the refs module should use only the public
@@ -91,11 +93,10 @@ enum peel_status {
 enum peel_status peel_object(const struct object_id *name, struct object_id *oid);
 
 /*
- * Copy the reflog message msg to buf, which has been allocated sufficiently
- * large, while cleaning up the whitespaces.  Especially, convert LF to space,
- * because reflog file is one line per entry.
+ * Copy the reflog message msg to sb while cleaning up the whitespaces.
+ * Especially, convert LF to space, because reflog file is one line per entry.
  */
-int copy_reflog_msg(char *buf, const char *msg);
+void copy_reflog_msg(struct strbuf *sb, const char *msg);
 
 /**
  * Information needed for a single ref update. Set new_oid to the new
@@ -473,8 +474,9 @@ extern struct ref_iterator *current_ref_iter;
  * adapter between the callback style of reference iteration and the
  * iterator style.
  */
-int do_for_each_ref_iterator(struct ref_iterator *iter,
-			     each_ref_fn fn, void *cb_data);
+int do_for_each_repo_ref_iterator(struct repository *r,
+				  struct ref_iterator *iter,
+				  each_repo_ref_fn fn, void *cb_data);
 
 /*
  * Only include per-worktree refs in a do_for_each_ref*() iteration.

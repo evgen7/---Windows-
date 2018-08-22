@@ -47,9 +47,21 @@ test_expect_success 'paths and -a do not mix' '
 test_expect_success PERL 'can use paths with --interactive' '
 	echo bong-o-bong >file &&
 	# 2: update, 1:st path, that is all, 7: quit
-	( echo 2; echo 1; echo; echo 7 ) |
+	test_write_lines 2 1 "" 7 |
 	git commit -m foo --interactive file &&
 	git reset --hard HEAD^
+'
+
+test_expect_success 'removed files and relative paths' '
+	test_when_finished "rm -rf foo" &&
+	git init foo &&
+	>foo/foo.txt &&
+	git -C foo add foo.txt &&
+	git -C foo commit -m first &&
+	git -C foo rm foo.txt &&
+
+	mkdir -p foo/bar &&
+	git -C foo/bar commit -m second ../foo.txt
 '
 
 test_expect_success 'using invalid commit with -C' '
@@ -281,7 +293,7 @@ test_expect_success PERL 'interactive add' '
 test_expect_success PERL "commit --interactive doesn't change index if editor aborts" '
 	echo zoo >file &&
 	test_must_fail git diff --exit-code >diff1 &&
-	(echo u ; echo "*" ; echo q) |
+	test_write_lines u "*" q |
 	(
 		EDITOR=: &&
 		export EDITOR &&
@@ -399,8 +411,8 @@ test_expect_success 'sign off (1)' '
 	git commit -s -m "thank you" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
 	(
-		echo thank you
-		echo
+		echo thank you &&
+		echo &&
 		git var GIT_COMMITTER_IDENT |
 		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
 	) >expected &&
@@ -418,9 +430,9 @@ test_expect_success 'sign off (2)' '
 $existing" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
 	(
-		echo thank you
-		echo
-		echo $existing
+		echo thank you &&
+		echo &&
+		echo $existing &&
 		git var GIT_COMMITTER_IDENT |
 		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
 	) >expected &&
@@ -438,9 +450,9 @@ test_expect_success 'signoff gap' '
 $alt" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" > actual &&
 	(
-		echo welcome
-		echo
-		echo $alt
+		echo welcome &&
+		echo &&
+		echo $alt &&
 		git var GIT_COMMITTER_IDENT |
 		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
 	) >expected &&
@@ -458,11 +470,11 @@ We have now
 $alt" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" > actual &&
 	(
-		echo welcome
-		echo
-		echo We have now
-		echo $alt
-		echo
+		echo welcome &&
+		echo &&
+		echo We have now &&
+		echo $alt &&
+		echo &&
 		git var GIT_COMMITTER_IDENT |
 		sed -e "s/>.*/>/" -e "s/^/Signed-off-by: /"
 	) >expected &&
@@ -479,11 +491,11 @@ non-trailer line
 Myfooter: x" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" > actual &&
 	(
-		echo subject
-		echo
-		echo non-trailer line
-		echo Myfooter: x
-		echo
+		echo subject &&
+		echo &&
+		echo non-trailer line &&
+		echo Myfooter: x &&
+		echo &&
 		echo "Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
 	) >expected &&
 	test_cmp expected actual &&
@@ -496,10 +508,10 @@ non-trailer line
 Myfooter: x" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" > actual &&
 	(
-		echo subject
-		echo
-		echo non-trailer line
-		echo Myfooter: x
+		echo subject &&
+		echo &&
+		echo non-trailer line &&
+		echo Myfooter: x &&
 		echo "Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
 	) >expected &&
 	test_cmp expected actual
@@ -512,10 +524,10 @@ test_expect_success 'multiple -m' '
 	git commit -m "one" -m "two" -m "three" &&
 	git cat-file commit HEAD | sed -e "1,/^\$/d" >actual &&
 	(
-		echo one
-		echo
-		echo two
-		echo
+		echo one &&
+		echo &&
+		echo two &&
+		echo &&
 		echo three
 	) >expected &&
 	test_cmp expected actual
@@ -570,13 +582,11 @@ test_expect_success 'same tree (merge and amend merge)' '
 
 	git merge -s ours side -m "empty ok" &&
 	git diff HEAD^ HEAD >actual &&
-	: >expected &&
-	test_cmp expected actual &&
+	test_must_be_empty actual &&
 
 	git commit --amend -m "empty really ok" &&
 	git diff HEAD^ HEAD >actual &&
-	: >expected &&
-	test_cmp expected actual
+	test_must_be_empty actual
 
 '
 

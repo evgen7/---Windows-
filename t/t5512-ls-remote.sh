@@ -10,9 +10,12 @@ test_expect_success setup '
 	test_tick &&
 	git commit -m initial &&
 	git tag mark &&
+	git tag mark1.1 &&
+	git tag mark1.2 &&
+	git tag mark1.10 &&
 	git show-ref --tags -d | sed -e "s/ /	/" >expected.tag &&
 	(
-		echo "$(git rev-parse HEAD)	HEAD"
+		echo "$(git rev-parse HEAD)	HEAD" &&
 		git show-ref -d	| sed -e "s/ /	/"
 	) >expected.all &&
 
@@ -37,6 +40,39 @@ test_expect_success 'ls-remote --tags self' '
 test_expect_success 'ls-remote self' '
 	git ls-remote self >actual &&
 	test_cmp expected.all actual
+'
+
+test_expect_success 'ls-remote --sort="version:refname" --tags self' '
+	cat >expect <<-EOF &&
+	$(git rev-parse mark)	refs/tags/mark
+	$(git rev-parse mark1.1)	refs/tags/mark1.1
+	$(git rev-parse mark1.2)	refs/tags/mark1.2
+	$(git rev-parse mark1.10)	refs/tags/mark1.10
+	EOF
+	git ls-remote --sort="version:refname" --tags self >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'ls-remote --sort="-version:refname" --tags self' '
+	cat >expect <<-EOF &&
+	$(git rev-parse mark1.10)	refs/tags/mark1.10
+	$(git rev-parse mark1.2)	refs/tags/mark1.2
+	$(git rev-parse mark1.1)	refs/tags/mark1.1
+	$(git rev-parse mark)	refs/tags/mark
+	EOF
+	git ls-remote --sort="-version:refname" --tags self >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'ls-remote --sort="-refname" --tags self' '
+	cat >expect <<-EOF &&
+	$(git rev-parse mark1.2)	refs/tags/mark1.2
+	$(git rev-parse mark1.10)	refs/tags/mark1.10
+	$(git rev-parse mark1.1)	refs/tags/mark1.1
+	$(git rev-parse mark)	refs/tags/mark
+	EOF
+	git ls-remote --sort="-refname" --tags self >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'dies when no remote specified and no default remotes found' '
@@ -69,7 +105,7 @@ test_expect_success 'use branch.<name>.remote if possible' '
 	git clone . other.git &&
 	(
 		cd other.git &&
-		echo "$(git rev-parse HEAD)	HEAD"
+		echo "$(git rev-parse HEAD)	HEAD" &&
 		git show-ref	| sed -e "s/ /	/"
 	) >exp &&
 
@@ -95,9 +131,9 @@ test_expect_success 'confuses pattern as remote when no remote specified' '
 	cat >exp <<-EOF &&
 	fatal: '\''$does_not_exist'\'' does not appear to be a git repository
 	fatal: Could not read from remote repository.
-
-	Please make sure you have the correct access rights
-	and the repository exists.
+	fatal: 
+	fatal: Please make sure you have the correct access rights
+	fatal: and the repository exists.
 	EOF
 	#
 	# Do not expect "git ls-remote <pattern>" to work; ls-remote needs
@@ -119,19 +155,17 @@ test_expect_success 'die with non-2 for wrong repository even with --exit-code' 
 
 test_expect_success 'Report success even when nothing matches' '
 	git ls-remote other.git "refs/nsn/*" >actual &&
-	>expect &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'Report no-match with --exit-code' '
 	test_expect_code 2 git ls-remote --exit-code other.git "refs/nsn/*" >actual &&
-	>expect &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'Report match with --exit-code' '
 	git ls-remote --exit-code other.git "refs/tags/*" >actual &&
-	git ls-remote . tags/mark >expect &&
+	git ls-remote . tags/mark* >expect &&
 	test_cmp expect actual
 '
 
@@ -171,13 +205,17 @@ test_expect_success 'overrides work between mixed transfer/upload-pack hideRefs'
 '
 
 test_expect_success 'ls-remote --symref' '
-	cat >expect <<-\EOF &&
+	git fetch origin &&
+	cat >expect <<-EOF &&
 	ref: refs/heads/master	HEAD
-	1bd44cb9d13204b0fe1958db0082f5028a16eb3a	HEAD
-	1bd44cb9d13204b0fe1958db0082f5028a16eb3a	refs/heads/master
-	1bd44cb9d13204b0fe1958db0082f5028a16eb3a	refs/remotes/origin/HEAD
-	1bd44cb9d13204b0fe1958db0082f5028a16eb3a	refs/remotes/origin/master
-	1bd44cb9d13204b0fe1958db0082f5028a16eb3a	refs/tags/mark
+	$(git rev-parse HEAD)	HEAD
+	$(git rev-parse refs/heads/master)	refs/heads/master
+	$(git rev-parse HEAD)	refs/remotes/origin/HEAD
+	$(git rev-parse refs/remotes/origin/master)	refs/remotes/origin/master
+	$(git rev-parse refs/tags/mark)	refs/tags/mark
+	$(git rev-parse refs/tags/mark1.1)	refs/tags/mark1.1
+	$(git rev-parse refs/tags/mark1.10)	refs/tags/mark1.10
+	$(git rev-parse refs/tags/mark1.2)	refs/tags/mark1.2
 	EOF
 	git ls-remote --symref >actual &&
 	test_cmp expect actual

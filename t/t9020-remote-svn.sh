@@ -12,8 +12,14 @@ then
 	test_done
 fi
 
+if test_have_prereq MINGW
+then
+	skip_all='skipping remote-svn tests for lack of POSIX'
+	test_done
+fi
+
 # Override svnrdump with our simulator
-PATH="$HOME:$PATH"
+PATH="$HOME$PATH_SEP$PATH"
 export PATH PYTHON_PATH GIT_BUILD_DIR
 
 write_script "$HOME/svnrdump" <<\EOF
@@ -25,8 +31,8 @@ init_git () {
 	git init &&
 	#git remote add svnsim testsvn::sim:///$TEST_DIRECTORY/t9020/example.svnrdump
 	# let's reuse an existing dump file!?
-	git remote add svnsim testsvn::sim://$TEST_DIRECTORY/t9154/svn.dump
-	git remote add svnfile testsvn::file://$TEST_DIRECTORY/t9154/svn.dump
+	git remote add svnsim "testsvn::sim://$TEST_DIRECTORY/t9154/svn.dump"
+	git remote add svnfile "testsvn::file://$TEST_DIRECTORY/t9154/svn.dump"
 }
 
 if test -e "$GIT_BUILD_DIR/git-remote-testsvn"

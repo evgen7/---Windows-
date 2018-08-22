@@ -54,7 +54,7 @@ test_expect_success !MINGW,TTY 'LESS and LV envvars set by git-sh-setup' '
 		sane_unset LESS LV &&
 		PAGER="env >pager-env.out; wc" &&
 		export PAGER &&
-		PATH="$(git --exec-path):$PATH" &&
+		PATH="$(git --exec-path)$PATH_SEP$PATH" &&
 		export PATH &&
 		test_terminal sh -c ". git-sh-setup && git_pager"
 	) &&
@@ -108,13 +108,6 @@ test_expect_success TTY 'configuration can disable pager' '
 	test_config pager.grep false &&
 	test_terminal git grep initial &&
 	! test -e paginated.out
-'
-
-test_expect_success TTY 'git config uses a pager if configured to' '
-	rm -f paginated.out &&
-	test_config pager.config true &&
-	test_terminal git config --list &&
-	test -e paginated.out
 '
 
 test_expect_success TTY 'configuration can enable pager (from subdir)' '
@@ -252,6 +245,48 @@ test_expect_success TTY 'git branch --set-upstream-to ignores pager.branch' '
 	! test -e paginated.out
 '
 
+test_expect_success TTY 'git config ignores pager.config when setting' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.config config foo.bar bar &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git config --edit ignores pager.config' '
+	rm -f paginated.out editor.used &&
+	write_script editor <<-\EOF &&
+		touch editor.used
+	EOF
+	EDITOR=./editor test_terminal git -c pager.config config --edit &&
+	! test -e paginated.out &&
+	test -e editor.used
+'
+
+test_expect_success TTY 'git config --get ignores pager.config' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.config config --get foo.bar &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git config --get-urlmatch defaults to paging' '
+	rm -f paginated.out &&
+	test_terminal git -c http."https://foo.com/".bar=foo \
+			  config --get-urlmatch http https://foo.com &&
+	test -e paginated.out
+'
+
+test_expect_success TTY 'git config --get-all respects pager.config' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.config=false config --get-all foo.bar &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git config --list defaults to paging' '
+	rm -f paginated.out &&
+	test_terminal git config --list &&
+	test -e paginated.out
+'
+
+
 # A colored commit log will begin with an appropriate ANSI escape
 # for the first color; the text "commit" comes later.
 colorful() {
@@ -353,7 +388,7 @@ test_default_pager() {
 		EOF
 		chmod +x \$less &&
 		(
-			PATH=.:\$PATH &&
+			PATH=.$PATH_SEP\$PATH &&
 			export PATH &&
 			$full_command
 		) &&
@@ -591,12 +626,11 @@ test_expect_success TTY 'sub-commands of externals use their own pager' '
 
 test_expect_success TTY 'external command pagers override sub-commands' '
 	sane_unset PAGER GIT_PAGER &&
-	>expect &&
 	>actual &&
 	test_config pager.external false &&
 	test_config pager.log "sed s/^/log:/ >actual" &&
 	test_terminal git --exec-path=. external log --format=%s -1 &&
-	test_cmp expect actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'command with underscores does not complain' '

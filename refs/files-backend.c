@@ -9,6 +9,7 @@
 #include "../lockfile.h"
 #include "../object.h"
 #include "../dir.h"
+#include "../chdir-notify.h"
 
 /*
  * This backend uses the following flags in `ref_update::flags` for
@@ -61,10 +62,6 @@ struct ref_lock {
 	struct object_id old_oid;
 };
 
-/*
- * Future: need to be in "struct repository"
- * when doing a full libification.
- */
 struct files_ref_store {
 	struct ref_store base;
 	unsigned int store_flags;
@@ -106,6 +103,11 @@ static struct ref_store *files_ref_store_create(const char *gitdir,
 	refs->packed_ref_store = packed_ref_store_create(sb.buf, flags);
 	strbuf_release(&sb);
 
+	chdir_notify_reparent("files-backend $GIT_DIR",
+			      &refs->gitdir);
+	chdir_notify_reparent("files-backend $GIT_COMMONDIR",
+			      &refs->gitcommondir);
+
 	return ref_store;
 }
 
@@ -119,7 +121,7 @@ static void files_assert_main_repository(struct files_ref_store *refs,
 	if (refs->store_flags & REF_STORE_MAIN)
 		return;
 
-	die("BUG: operation %s only allowed for main ref store", caller);
+	BUG("operation %s only allowed for main ref store", caller);
 }
 
 /*
@@ -135,13 +137,13 @@ static struct files_ref_store *files_downcast(struct ref_store *ref_store,
 	struct files_ref_store *refs;
 
 	if (ref_store->be != &refs_be_files)
-		die("BUG: ref_store is type \"%s\" not \"files\" in %s",
+		BUG("ref_store is type \"%s\" not \"files\" in %s",
 		    ref_store->be->name, caller);
 
 	refs = (struct files_ref_store *)ref_store;
 
 	if ((refs->store_flags & required_flags) != required_flags)
-		die("BUG: operation %s requires abilities 0x%x, but only have 0x%x",
+		BUG("operation %s requires abilities 0x%x, but only have 0x%x",
 		    caller, required_flags, refs->store_flags);
 
 	return refs;
@@ -160,7 +162,7 @@ static void files_reflog_path(struct files_ref_store *refs,
 		strbuf_addf(sb, "%s/logs/%s", refs->gitcommondir, refname);
 		break;
 	default:
-		die("BUG: unknown ref type %d of ref %s",
+		BUG("unknown ref type %d of ref %s",
 		    ref_type(refname), refname);
 	}
 }
@@ -178,7 +180,7 @@ static void files_ref_path(struct files_ref_store *refs,
 		strbuf_addf(sb, "%s/%s", refs->gitcommondir, refname);
 		break;
 	default:
-		die("BUG: unknown ref type %d of ref %s",
+		BUG("unknown ref type %d of ref %s",
 		    ref_type(refname), refname);
 	}
 }
@@ -361,7 +363,7 @@ stat_ref:
 	/* Follow "normalized" - ie "refs/.." symlinks by hand */
 	if (S_ISLNK(st.st_mode)) {
 		strbuf_reset(&sb_contents);
-		if (strbuf_readlink(&sb_contents, path, 0) < 0) {
+		if (strbuf_readlink(&sb_contents, path, st.st_size) < 0) {
 			if (errno == ENOENT || errno == EINVAL)
 				/* inconsistent with lstat; retry */
 				goto stat_ref;
@@ -1580,26 +1582,17 @@ static int log_ref_write_fd(int fd, const struct object_id *old_oid,
 			    const struct object_id *new_oid,
 			    const char *committer, const char *msg)
 {
-	int msglen, written;
-	unsigned maxlen, len;
-	char *logrec;
+	struct strbuf sb = STRBUF_INIT;
+	int ret = 0;
 
-	msglen = msg ? strlen(msg) : 0;
-	maxlen = strlen(committer) + msglen + 100;
-	logrec = xmalloc(maxlen);
-	len = xsnprintf(logrec, maxlen, "%s %s %s\n",
-			oid_to_hex(old_oid),
-			oid_to_hex(new_oid),
-			committer);
-	if (msglen)
-		len += copy_reflog_msg(logrec + len - 1, msg) - 1;
-
-	written = len <= maxlen ? write_in_full(fd, logrec, len) : -1;
-	free(logrec);
-	if (written < 0)
-		return -1;
-
-	return 0;
+	strbuf_addf(&sb, "%s %s %s", oid_to_hex(old_oid), oid_to_hex(new_oid), committer);
+	if (msg && *msg)
+		copy_reflog_msg(&sb, msg);
+	strbuf_addch(&sb, '\n');
+	if (write_in_full(fd, sb.buf, sb.len) < 0)
+		ret = -1;
+	strbuf_release(&sb);
+	return ret;
 }
 
 static int files_log_ref_write(struct files_ref_store *refs,
@@ -1658,7 +1651,7 @@ static int write_ref_to_lockfile(struct ref_lock *lock,
 	struct object *o;
 	int fd;
 
-	o = parse_object(oid);
+	o = parse_object(the_repository, oid);
 	if (!o) {
 		strbuf_addf(err,
 			    "trying to write ref '%s' with nonexistent object %s",
@@ -1674,7 +1667,7 @@ static int write_ref_to_lockfile(struct ref_lock *lock,
 		return -1;
 	}
 	fd = get_lock_file_fd(&lock->lk);
-	if (write_in_full(fd, oid_to_hex(oid), GIT_SHA1_HEXSZ) < 0 ||
+	if (write_in_full(fd, oid_to_hex(oid), the_hash_algo->hexsz) < 0 ||
 	    write_in_full(fd, &term, 1) < 0 ||
 	    close_ref_gently(lock) < 0) {
 		strbuf_addf(err,
@@ -2004,7 +1997,7 @@ static int files_for_each_reflog_ent_reverse(struct ref_store *ref_store,
 
 	}
 	if (!ret && sb.len)
-		die("BUG: reverse reflog parser had leftover data");
+		BUG("reverse reflog parser had leftover data");
 
 	fclose(logfp);
 	strbuf_release(&sb);
@@ -2082,7 +2075,7 @@ static int files_reflog_iterator_advance(struct ref_iterator *ref_iterator)
 static int files_reflog_iterator_peel(struct ref_iterator *ref_iterator,
 				   struct object_id *peeled)
 {
-	die("BUG: ref_iterator_peel() called for reflog_iterator");
+	BUG("ref_iterator_peel() called for reflog_iterator");
 }
 
 static int files_reflog_iterator_abort(struct ref_iterator *ref_iterator)
@@ -2867,7 +2860,7 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 	assert(err);
 
 	if (transaction->state != REF_TRANSACTION_OPEN)
-		die("BUG: commit called for transaction that is not open");
+		BUG("commit called for transaction that is not open");
 
 	/* Fail if a refname appears more than once in the transaction: */
 	for (i = 0; i < transaction->nr; i++)
@@ -2893,7 +2886,7 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 	 */
 	if (refs_for_each_rawref(&refs->base, ref_present,
 				 &affected_refnames))
-		die("BUG: initial ref transaction called with existing refs");
+		BUG("initial ref transaction called with existing refs");
 
 	packed_transaction = ref_store_transaction_begin(refs->packed_ref_store, err);
 	if (!packed_transaction) {
@@ -2906,7 +2899,7 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 
 		if ((update->flags & REF_HAVE_OLD) &&
 		    !is_null_oid(&update->old_oid))
-			die("BUG: initial ref transaction with old_sha1 set");
+			BUG("initial ref transaction with old_sha1 set");
 		if (refs_verify_refname_available(&refs->base, update->refname,
 						  &affected_refnames, NULL,
 						  err)) {
@@ -2931,13 +2924,12 @@ static int files_initial_transaction_commit(struct ref_store *ref_store,
 
 	if (initial_ref_transaction_commit(packed_transaction, err)) {
 		ret = TRANSACTION_GENERIC_ERROR;
-		goto cleanup;
 	}
 
+	packed_refs_unlock(refs->packed_ref_store);
 cleanup:
 	if (packed_transaction)
 		ref_transaction_free(packed_transaction);
-	packed_refs_unlock(refs->packed_ref_store);
 	transaction->state = REF_TRANSACTION_CLOSED;
 	string_list_clear(&affected_refnames, 0);
 	return ret;
@@ -2990,7 +2982,7 @@ static int files_reflog_expire(struct ref_store *ref_store,
 {
 	struct files_ref_store *refs =
 		files_downcast(ref_store, REF_STORE_WRITE, "reflog_expire");
-	static struct lock_file reflog_lock;
+	struct lock_file reflog_lock = LOCK_INIT;
 	struct expire_reflog_cb cb;
 	struct ref_lock *lock;
 	struct strbuf log_file_sb = STRBUF_INIT;
@@ -3069,7 +3061,7 @@ static int files_reflog_expire(struct ref_store *ref_store,
 			rollback_lock_file(&reflog_lock);
 		} else if (update &&
 			   (write_in_full(get_lock_file_fd(&lock->lk),
-				oid_to_hex(&cb.last_kept_oid), GIT_SHA1_HEXSZ) < 0 ||
+				oid_to_hex(&cb.last_kept_oid), the_hash_algo->hexsz) < 0 ||
 			    write_str_in_full(get_lock_file_fd(&lock->lk), "\n") < 0 ||
 			    close_ref_gently(lock) < 0)) {
 			status |= error("couldn't write %s",

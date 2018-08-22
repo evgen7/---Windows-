@@ -14,12 +14,20 @@ test_description='test untracked cache'
 # See <20160803174522.5571-1-pclouds@gmail.com> if you want to know
 # more.
 
+GIT_FORCE_UNTRACKED_CACHE=true
+export GIT_FORCE_UNTRACKED_CACHE
+
 sync_mtime () {
 	find . -type d -ls >/dev/null
 }
 
 avoid_racy() {
 	sleep 1
+}
+
+status_is_clean() {
+	git status --porcelain >../status.actual &&
+	test_must_be_empty ../status.actual
 }
 
 test_lazy_prereq UNTRACKED_CACHE '
@@ -657,7 +665,7 @@ test_expect_success 'test ident field is working' '
 	mkdir ../other_worktree &&
 	cp -R done dthree dtwo four three ../other_worktree &&
 	GIT_WORK_TREE=../other_worktree git status 2>../err &&
-	echo "warning: Untracked cache is disabled on this system or location." >../expect &&
+	echo "warning: untracked cache is disabled on this system or location" >../expect &&
 	test_i18ncmp ../expect ../err
 '
 
@@ -681,6 +689,87 @@ test_expect_success 'untracked cache survives a commit' '
 	git commit -m commit &&
 	test-dump-untracked-cache >../after &&
 	test_cmp ../before ../after
+'
+
+test_expect_success 'teardown worktree' '
+	cd ..
+'
+
+test_expect_success SYMLINKS 'setup worktree for symlink test' '
+	git init worktree-symlink &&
+	cd worktree-symlink &&
+	git config core.untrackedCache true &&
+	mkdir one two &&
+	touch one/file two/file &&
+	git add one/file two/file &&
+	git commit -m"first commit" &&
+	git rm -rf one &&
+	ln -s two one &&
+	git add one &&
+	git commit -m"second commit"
+'
+
+test_expect_success SYMLINKS '"status" after symlink replacement should be clean with UC=true' '
+	git checkout HEAD~ &&
+	status_is_clean &&
+	status_is_clean &&
+	git checkout master &&
+	avoid_racy &&
+	status_is_clean &&
+	status_is_clean
+'
+
+test_expect_success SYMLINKS '"status" after symlink replacement should be clean with UC=false' '
+	git config core.untrackedCache false &&
+	git checkout HEAD~ &&
+	status_is_clean &&
+	status_is_clean &&
+	git checkout master &&
+	avoid_racy &&
+	status_is_clean &&
+	status_is_clean
+'
+
+test_expect_success 'setup worktree for non-symlink test' '
+	git init worktree-non-symlink &&
+	cd worktree-non-symlink &&
+	git config core.untrackedCache true &&
+	mkdir one two &&
+	touch one/file two/file &&
+	git add one/file two/file &&
+	git commit -m"first commit" &&
+	git rm -rf one &&
+	cp two/file one &&
+	git add one &&
+	git commit -m"second commit"
+'
+
+test_expect_success '"status" after file replacement should be clean with UC=true' '
+	git checkout HEAD~ &&
+	status_is_clean &&
+	status_is_clean &&
+	git checkout master &&
+	avoid_racy &&
+	status_is_clean &&
+	test-dump-untracked-cache >../actual &&
+	grep -F "recurse valid" ../actual >../actual.grep &&
+	cat >../expect.grep <<EOF &&
+/ 0000000000000000000000000000000000000000 recurse valid
+/two/ 0000000000000000000000000000000000000000 recurse valid
+EOF
+	status_is_clean &&
+	test_cmp ../expect.grep ../actual.grep
+'
+
+test_expect_success '"status" after file replacement should be clean with UC=false' '
+	git config core.untrackedCache false &&
+	git checkout HEAD~ &&
+	status_is_clean &&
+	status_is_clean &&
+	git checkout master &&
+	avoid_racy &&
+	status_is_clean &&
+	status_is_clean
 '
 
 test_done

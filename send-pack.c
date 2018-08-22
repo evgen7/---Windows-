@@ -2,6 +2,7 @@
 #include "config.h"
 #include "commit.h"
 #include "refs.h"
+#include "object-store.h"
 #include "pkt-line.h"
 #include "sideband.h"
 #include "run-command.h"
@@ -37,14 +38,24 @@ int option_parse_push_signed(const struct option *opt,
 	die("bad %s argument: %s", opt->long_name, arg);
 }
 
-static void feed_object(const unsigned char *sha1, FILE *fh, int negative)
+static int config_use_sideband = 1;
+
+static int send_pack_config(const char *var, const char *value, void *unused)
 {
-	if (negative && !has_sha1_file(sha1))
+	if (!strcmp("sendpack.sideband", var))
+		config_use_sideband = git_config_bool(var, value);
+
+	return 0;
+}
+
+static void feed_object(const struct object_id *oid, FILE *fh, int negative)
+{
+	if (negative && !has_sha1_file(oid->hash))
 		return;
 
 	if (negative)
 		putc('^', fh);
-	fputs(sha1_to_hex(sha1), fh);
+	fputs(oid_to_hex(oid), fh);
 	putc('\n', fh);
 }
 
@@ -58,35 +69,25 @@ static int pack_objects(int fd, struct ref *refs, struct oid_array *extra, struc
 	 * the revision parameters to it via its stdin and
 	 * let its stdout go back to the other end.
 	 */
-	const char *argv[] = {
-		"pack-objects",
-		"--all-progress-implied",
-		"--revs",
-		"--stdout",
-		NULL,
-		NULL,
-		NULL,
-		NULL,
-		NULL,
-		NULL,
-	};
 	struct child_process po = CHILD_PROCESS_INIT;
 	FILE *po_in;
 	int i;
 	int rc;
 
-	i = 4;
+	argv_array_push(&po.args, "pack-objects");
+	argv_array_push(&po.args, "--all-progress-implied");
+	argv_array_push(&po.args, "--revs");
+	argv_array_push(&po.args, "--stdout");
 	if (args->use_thin_pack)
-		argv[i++] = "--thin";
+		argv_array_push(&po.args, "--thin");
 	if (args->use_ofs_delta)
-		argv[i++] = "--delta-base-offset";
+		argv_array_push(&po.args, "--delta-base-offset");
 	if (args->quiet || !args->progress)
-		argv[i++] = "-q";
+		argv_array_push(&po.args, "-q");
 	if (args->progress)
-		argv[i++] = "--progress";
-	if (is_repository_shallow())
-		argv[i++] = "--shallow";
-	po.argv = argv;
+		argv_array_push(&po.args, "--progress");
+	if (is_repository_shallow(the_repository))
+		argv_array_push(&po.args, "--shallow");
 	po.in = -1;
 	po.out = args->stateless_rpc ? -1 : fd;
 	po.git_cmd = 1;
@@ -99,13 +100,13 @@ static int pack_objects(int fd, struct ref *refs, struct oid_array *extra, struc
 	 */
 	po_in = xfdopen(po.in, "w");
 	for (i = 0; i < extra->nr; i++)
-		feed_object(extra->oid[i].hash, po_in, 1);
+		feed_object(&extra->oid[i], po_in, 1);
 
 	while (refs) {
 		if (!is_null_oid(&refs->old_oid))
-			feed_object(refs->old_oid.hash, po_in, 1);
+			feed_object(&refs->old_oid, po_in, 1);
 		if (!is_null_oid(&refs->new_oid))
-			feed_object(refs->new_oid.hash, po_in, 0);
+			feed_object(&refs->new_oid, po_in, 0);
 		refs = refs->next;
 	}
 
@@ -147,6 +148,8 @@ static int pack_objects(int fd, struct ref *refs, struct oid_array *extra, struc
 static int receive_unpack_status(int in)
 {
 	const char *line = packet_read_line(in, NULL);
+	if (!line)
+		return error(_("unexpected flush packet while reading remote unpack status"));
 	if (!skip_prefix(line, "unpack ", &line))
 		return error(_("unable to parse remote unpack status: %s"), line);
 	if (strcmp(line, "ok"))
@@ -228,7 +231,7 @@ static int advertise_shallow_grafts_cb(const struct commit_graft *graft, void *c
 
 static void advertise_shallow_grafts_buf(struct strbuf *sb)
 {
-	if (!is_repository_shallow())
+	if (!is_repository_shallow(the_repository))
 		return;
 	for_each_commit_graft(advertise_shallow_grafts_cb, sb);
 }
@@ -399,6 +402,8 @@ int send_pack(struct send_pack_args *args,
 	struct async demux;
 	const char *push_cert_nonce = NULL;
 
+	git_config(send_pack_config, NULL);
+
 	/* Does the other end support the reporting? */
 	if (server_supports("report-status"))
 		status_report = 1;
@@ -406,7 +411,7 @@ int send_pack(struct send_pack_args *args,
 		allow_deleting_refs = 1;
 	if (server_supports("ofs-delta"))
 		args->use_ofs_delta = 1;
-	if (server_supports("side-band-64k"))
+	if (config_use_sideband && server_supports("side-band-64k"))
 		use_sideband = 1;
 	if (server_supports("quiet"))
 		quiet_supported = 1;
@@ -545,7 +550,7 @@ int send_pack(struct send_pack_args *args,
 	}
 
 	if (args->stateless_rpc) {
-		if (!args->dry_run && (cmds_sent || is_repository_shallow())) {
+		if (!args->dry_run && (cmds_sent || is_repository_shallow(the_repository))) {
 			packet_buf_flush(&req_buf);
 			send_sideband(out, -1, req_buf.buf, req_buf.len, LARGE_PACKET_MAX);
 		}

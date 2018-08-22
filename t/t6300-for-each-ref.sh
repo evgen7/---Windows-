@@ -310,7 +310,7 @@ test_expect_success 'exercise strftime with odd fields' '
 	echo >expected &&
 	git for-each-ref --format="%(authordate:format:)" refs/heads >actual &&
 	test_cmp expected actual &&
-	long="long format -- $_z40$_z40$_z40$_z40$_z40$_z40$_z40" &&
+	long="long format -- $ZERO_OID$ZERO_OID$ZERO_OID$ZERO_OID$ZERO_OID$ZERO_OID$ZERO_OID" &&
 	echo $long >expected &&
 	git for-each-ref --format="%(authordate:format:$long)" refs/heads >actual &&
 	test_cmp expected actual
@@ -373,11 +373,8 @@ test_expect_success 'Quoting style: tcl' '
 
 for i in "--perl --shell" "-s --python" "--python --tcl" "--tcl --perl"; do
 	test_expect_success "more than one quoting style: $i" "
-		git for-each-ref $i 2>&1 | (read line &&
-		case \$line in
-		\"error: more than one quoting style\"*) : happy;;
-		*) false
-		esac)
+		test_must_fail git for-each-ref $i 2>err &&
+		grep '^error: more than one quoting style' err
 	"
 done
 
@@ -796,6 +793,16 @@ test_expect_success ':remotename and :remoteref' '
 			refs/heads/push-simple)" &&
 		test from, = "$actual"
 	)
+'
+
+test_expect_success 'for-each-ref --ignore-case ignores case' '
+	git for-each-ref --format="%(refname)" refs/heads/MASTER >actual &&
+	test_must_be_empty actual &&
+
+	echo refs/heads/master >expect &&
+	git for-each-ref --format="%(refname)" --ignore-case \
+		refs/heads/MASTER >actual &&
+	test_cmp expect actual
 '
 
 test_done

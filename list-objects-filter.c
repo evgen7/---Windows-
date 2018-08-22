@@ -11,6 +11,7 @@
 #include "list-objects-filter.h"
 #include "list-objects-filter-options.h"
 #include "oidset.h"
+#include "object-store.h"
 
 /* Remember to update object flag allocation in object.h */
 /*
@@ -19,7 +20,7 @@
  * in the traversal (until we mark it SEEN).  This is a way to
  * let us silently de-dup calls to show() in the caller.  This
  * is subtly different from the "revision.h:SHOWN" and the
- * "sha1_name.c:ONELINE_SEEN" bits.  And also different from
+ * "sha1-name.c:ONELINE_SEEN" bits.  And also different from
  * the non-de-dup usage in pack-bitmap.c
  */
 #define FILTER_SHOWN_BUT_REVISIT (1<<21)
@@ -80,6 +81,55 @@ static void *filter_blobs_none__init(
 }
 
 /*
+ * A filter for list-objects to omit ALL trees and blobs from the traversal.
+ * Can OPTIONALLY collect a list of the omitted OIDs.
+ */
+struct filter_trees_none_data {
+	struct oidset *omits;
+};
+
+static enum list_objects_filter_result filter_trees_none(
+	enum list_objects_filter_situation filter_situation,
+	struct object *obj,
+	const char *pathname,
+	const char *filename,
+	void *filter_data_)
+{
+	struct filter_trees_none_data *filter_data = filter_data_;
+
+	switch (filter_situation) {
+	default:
+		die("unknown filter_situation");
+		return LOFR_ZERO;
+
+	case LOFS_BEGIN_TREE:
+	case LOFS_BLOB:
+		if (filter_data->omits)
+			oidset_insert(filter_data->omits, &obj->oid);
+		return LOFR_MARK_SEEN; /* but not LOFR_DO_SHOW (hard omit) */
+
+	case LOFS_END_TREE:
+		assert(obj->type == OBJ_TREE);
+		return LOFR_ZERO;
+
+	}
+}
+
+static void* filter_trees_none__init(
+	struct oidset *omitted,
+	struct list_objects_filter_options *filter_options,
+	filter_object_fn *filter_fn,
+	filter_free_fn *filter_free_fn)
+{
+	struct filter_trees_none_data *d = xcalloc(1, sizeof(*d));
+	d->omits = omitted;
+
+	*filter_fn = filter_trees_none;
+	*filter_free_fn = free;
+	return d;
+}
+
+/*
  * A filter for list-objects to omit large blobs.
  * And to OPTIONALLY collect a list of the omitted OIDs.
  */
@@ -117,7 +167,7 @@ static enum list_objects_filter_result filter_blobs_limit(
 		assert(obj->type == OBJ_BLOB);
 		assert((obj->flags & SEEN) == 0);
 
-		t = sha1_object_info(obj->oid.hash, &object_length);
+		t = oid_object_info(the_repository, &obj->oid, &object_length);
 		if (t != OBJ_BLOB) { /* probably OBJ_NONE */
 			/*
 			 * We DO NOT have the blob locally, so we cannot
@@ -373,6 +423,7 @@ static filter_init_fn s_filters[] = {
 	NULL,
 	filter_blobs_none__init,
 	filter_blobs_limit__init,
+	filter_trees_none__init,
 	filter_sparse_oid__init,
 	filter_sparse_path__init,
 };

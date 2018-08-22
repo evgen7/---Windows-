@@ -1,6 +1,15 @@
 #ifndef GIT_COMPAT_UTIL_H
 #define GIT_COMPAT_UTIL_H
 
+#ifdef USE_MSVC_CRTDBG
+/*
+ * For these to work they must appear very early in each
+ * file -- before most of the standard header files.
+ */
+#include <stdlib.h>
+#include <crtdbg.h>
+#endif
+
 #define _FILE_OFFSET_BITS 64
 
 
@@ -195,8 +204,10 @@
 #if defined(__MINGW32__)
 /* pull in Windows compatibility stuff */
 #include "compat/mingw.h"
+#include "compat/win32/fscache.h"
 #elif defined(_MSC_VER)
 #include "compat/msvc.h"
+#include "compat/win32/fscache.h"
 #else
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -220,7 +231,7 @@
 #endif
 #ifdef NO_INTPTR_T
 /*
- * On I16LP32, ILP32 and LP64 "long" is the save bet, however
+ * On I16LP32, ILP32 and LP64 "long" is the safe bet, however
  * on LLP86, IL33LLP64 and P64 it needs to be "long long",
  * while on IP16 and IP16L32 it is "int" (resp. "short")
  * Size needs to match (or exceed) 'sizeof(void *)'.
@@ -270,6 +281,33 @@ extern char *gitdirname(char *);
 
 #ifndef NO_ICONV
 #include <iconv.h>
+#ifdef _MSC_VER
+/*
+ * At least version 1.14.0.11 of the libiconv NuPkg at
+ * https://www.nuget.org/packages/libiconv/ does not set errno at all.
+ *
+ * Let's simulate it by testing whether we might have possibly run out of
+ * space.
+ */
+static inline size_t msvc_iconv(iconv_t conv,
+	const char **inpos, size_t *insize,
+	char **outpos, size_t *outsize)
+{
+	int saved_errno = errno;
+	size_t res;
+
+	errno = ENOENT;
+	res = iconv(conv, inpos, insize, outpos, outsize);
+	if (!res)
+		errno = saved_errno;
+	else if (errno == ENOENT)
+		errno = *outsize < 16 ? E2BIG : 0;
+
+	return res;
+}
+#undef iconv
+#define iconv msvc_iconv
+#endif
 #endif
 
 #ifndef NO_OPENSSL
@@ -282,6 +320,10 @@ extern char *gitdirname(char *);
 #endif
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#endif
+
+#ifdef HAVE_SYSINFO
+# include <sys/sysinfo.h>
 #endif
 
 /* On most systems <netdb.h> would have given us this, but
@@ -338,6 +380,14 @@ typedef uintmax_t timestamp_t;
 #define _PATH_DEFPATH "/usr/local/bin:/usr/bin:/bin"
 #endif
 
+#ifndef platform_core_config
+static inline int noop_core_config(const char *var, const char *value, void *cb)
+{
+	return 0;
+}
+#define platform_core_config noop_core_config
+#endif
+
 #ifndef has_dos_drive_prefix
 static inline int git_has_dos_drive_prefix(const char *path)
 {
@@ -378,6 +428,14 @@ static inline char *git_find_last_dir_sep(const char *path)
 #define find_last_dir_sep git_find_last_dir_sep
 #endif
 
+#ifndef query_user_email
+#define query_user_email() NULL
+#endif
+
+#ifndef git_program_data_config
+#define git_program_data_config() NULL
+#endif
+
 #if defined(__HP_cc) && (__HP_cc >= 61000)
 #define NORETURN __attribute__((noreturn))
 #define NORETURN_PTR
@@ -411,6 +469,14 @@ static inline char *git_find_last_dir_sep(const char *path)
 struct strbuf;
 
 /* General helper functions */
+
+/*
+ * Write the message to the file, prefixing and suffixing
+ * each line with `prefix` resp. `suffix`.
+ */
+void prefix_suffix_lines(FILE *f, const char *prefix,
+			 const char *message, const char *suffix);
+
 extern void vreportf(const char *prefix, const char *err, va_list params);
 extern NORETURN void usage(const char *err);
 extern NORETURN void usagef(const char *err, ...) __attribute__((format (printf, 1, 2)));
@@ -455,6 +521,7 @@ extern void (*get_warn_routine(void))(const char *warn, va_list params);
 extern void set_die_is_recursing_routine(int (*routine)(void));
 
 extern int starts_with(const char *str, const char *prefix);
+extern int istarts_with(const char *str, const char *prefix);
 
 /*
  * If the string "str" begins with the string found in "prefix", return 1.
@@ -826,8 +893,8 @@ extern ssize_t xpread(int fd, void *buf, size_t len, off_t offset);
 extern int xdup(int fd);
 extern FILE *xfopen(const char *path, const char *mode);
 extern FILE *xfdopen(int fd, const char *mode);
-extern int xmkstemp(char *template);
-extern int xmkstemp_mode(char *template, int mode);
+extern int xmkstemp(char *temp_filename);
+extern int xmkstemp_mode(char *temp_filename, int mode);
 extern char *xgetcwd(void);
 extern FILE *fopen_for_writing(const char *path);
 extern FILE *fopen_or_warn(const char *path, const char *mode);
@@ -1001,6 +1068,23 @@ static inline int sane_iscase(int x, int is_lower)
 		return (x & 0x20) == 0;
 }
 
+/*
+ * Like skip_prefix, but compare case-insensitively. Note that the comparison
+ * is done via tolower(), so it is strictly ASCII (no multi-byte characters or
+ * locale-specific conversions).
+ */
+static inline int skip_iprefix(const char *str, const char *prefix,
+			       const char **out)
+{
+	do {
+		if (!*prefix) {
+			*out = str;
+			return 1;
+		}
+	} while (tolower(*str++) == tolower(*prefix++));
+	return 0;
+}
+
 static inline int strtoul_ui(char const *s, int base, unsigned int *result)
 {
 	unsigned long ul;
@@ -1052,7 +1136,7 @@ int git_qsort_s(void *base, size_t nmemb, size_t size,
 
 #define QSORT_S(base, n, compar, ctx) do {			\
 	if (qsort_s((base), (n), sizeof(*(base)), compar, ctx))	\
-		die("BUG: qsort_s() failed");			\
+		BUG("qsort_s() failed");			\
 } while (0)
 
 #ifndef REG_STARTEND
@@ -1110,6 +1194,9 @@ static inline int regexec_buf(const regex_t *preg, const char *buf, size_t size,
 #if defined(__GNUC__) || (_MSC_VER >= 1400) || defined(__C99_MACRO_WITH_VA_ARGS)
 #define HAVE_VARIADIC_MACROS 1
 #endif
+
+/* usage.c: only to be used for testing BUG() implementation (see test-tool) */
+extern int BUG_exit_code;
 
 #ifdef HAVE_VARIADIC_MACROS
 __attribute__((format (printf, 3, 4))) NORETURN
@@ -1192,6 +1279,21 @@ static inline int is_missing_file_error(int errno_)
 	return (errno_ == ENOENT || errno_ == ENOTDIR);
 }
 
+/*
+ * Enable/disable a read-only cache for file system data on platforms that
+ * support it.
+ *
+ * Implementing a live-cache is complicated and requires special platform
+ * support (inotify, ReadDirectoryChangesW...). enable_fscache shall be used
+ * to mark sections of git code that extensively read from the file system
+ * without modifying anything. Implementations can use this to cache e.g. stat
+ * data or even file content without the need to synchronize with the file
+ * system.
+ */
+#ifndef enable_fscache
+#define enable_fscache(x) /* noop */
+#endif
+
 extern int cmd_main(int, const char **);
 
 /*
@@ -1213,5 +1315,20 @@ extern void unleak_memory(const void *ptr, size_t len);
 #else
 #define UNLEAK(var) do {} while (0)
 #endif
+
+#include "structured-logging.h"
+#if defined(STRUCTURED_LOGGING) && !defined(exit)
+/*
+ * Intercept all calls to exit() so that exit-code can be included
+ * in the "cmd_exit" message written by the at-exit routine.
+ */
+#define exit(code) exit(slog_exit_code(code))
+#endif
+
+/*
+ * This include must come after system headers, since it introduces macros that
+ * replace system names.
+ */
+#include "banned.h"
 
 #endif

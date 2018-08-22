@@ -12,7 +12,9 @@ SYNOPSIS
 'git worktree add' [-f] [--detach] [--checkout] [--lock] [-b <new-branch>] <path> [<commit-ish>]
 'git worktree list' [--porcelain]
 'git worktree lock' [--reason <string>] <worktree>
+'git worktree move' <worktree> <new-path>
 'git worktree prune' [-n] [-v] [--expire <expire>]
+'git worktree remove' [-f] <worktree>
 'git worktree unlock' <worktree>
 
 DESCRIPTION
@@ -25,18 +27,15 @@ out more than one branch at a time.  With `git worktree add` a new working
 tree is associated with the repository.  This new working tree is called a
 "linked working tree" as opposed to the "main working tree" prepared by "git
 init" or "git clone".  A repository has one main working tree (if it's not a
-bare repository) and zero or more linked working trees.
+bare repository) and zero or more linked working trees. When you are done
+with a linked working tree, remove it with `git worktree remove`.
 
-When you are done with a linked working tree you can simply delete it.
-The working tree's administrative files in the repository (see
-"DETAILS" below) will eventually be removed automatically (see
+If a working tree is deleted without using `git worktree remove`, then
+its associated administrative files, which reside in the repository
+(see "DETAILS" below), will eventually be removed automatically (see
 `gc.worktreePruneExpire` in linkgit:git-config[1]), or you can run
 `git worktree prune` in the main or any linked working tree to
 clean up any stale administrative files.
-
-If you move a linked working tree, you need to manually update the
-administrative files so that they do not get pruned automatically. See
-section "DETAILS" for more information.
 
 If a linked working tree is stored on a portable device or network share
 which is not always mounted, you can prevent its administrative files from
@@ -52,17 +51,32 @@ is linked to the current repository, sharing everything except working
 directory specific files such as HEAD, index, etc. `-` may also be
 specified as `<commit-ish>`; it is synonymous with `@{-1}`.
 +
-If <commit-ish> is a branch name (call it `<branch>` and is not found,
+If <commit-ish> is a branch name (call it `<branch>`) and is not found,
 and neither `-b` nor `-B` nor `--detach` are used, but there does
 exist a tracking branch in exactly one remote (call it `<remote>`)
-with a matching name, treat as equivalent to
+with a matching name, treat as equivalent to:
++
 ------------
 $ git worktree add --track -b <branch> <path> <remote>/<branch>
 ------------
 +
+If the branch exists in multiple remotes and one of them is named by
+the `checkout.defaultRemote` configuration variable, we'll use that
+one for the purposes of disambiguation, even if the `<branch>` isn't
+unique across all remotes. Set it to
+e.g. `checkout.defaultRemote=origin` to always checkout remote
+branches from there if `<branch>` is ambiguous but exists on the
+'origin' remote. See also `checkout.defaultRemote` in
+linkgit:git-config[1].
++
 If `<commit-ish>` is omitted and neither `-b` nor `-B` nor `--detach` used,
-then, as a convenience, a new branch based at HEAD is created automatically,
-as if `-b $(basename <path>)` was specified.
+then, as a convenience, the new worktree is associated with a branch
+(call it `<branch>`) named after `$(basename <path>)`.  If `<branch>`
+doesn't exist, a new branch based on HEAD is automatically created as
+if `-b <branch>` was given.  If `<branch>` does exist, it will be
+checked out in the new worktree, if it's not checked out anywhere
+else, otherwise the command will refuse to create the worktree (unless
+`--force` is used).
 
 list::
 
@@ -79,9 +93,21 @@ files from being pruned automatically. This also prevents it from
 being moved or deleted. Optionally, specify a reason for the lock
 with `--reason`.
 
+move::
+
+Move a working tree to a new location. Note that the main working tree
+or linked working trees containing submodules cannot be moved.
+
 prune::
 
 Prune working tree information in $GIT_DIR/worktrees.
+
+remove::
+
+Remove a working tree. Only clean working trees (no untracked files
+and no modification in tracked files) can be removed. Unclean working
+trees or ones with submodules can be removed with `--force`. The main
+working tree cannot be removed.
 
 unlock::
 
@@ -92,9 +118,10 @@ OPTIONS
 
 -f::
 --force::
-	By default, `add` refuses to create a new working tree when `<commit-ish>` is a branch name and
-	is already checked out by another working tree. This option overrides
-	that safeguard.
+	By default, `add` refuses to create a new working tree when
+	`<commit-ish>` is a branch name and is already checked out by
+	another working tree and `remove` refuses to remove an unclean
+	working tree. This option overrides these safeguards.
 
 -b <new-branch>::
 -B <new-branch>::
@@ -118,7 +145,7 @@ OPTIONS
 --[no-]guess-remote::
 	With `worktree add <path>`, without `<commit-ish>`, instead
 	of creating a new branch from HEAD, if there exists a tracking
-	branch in exactly one remote matching the basename of `<path>,
+	branch in exactly one remote matching the basename of `<path>`,
 	base the new branch on the remote-tracking branch, and mark
 	the remote-tracking branch as "upstream" from the new branch.
 +
@@ -145,6 +172,10 @@ This can also be set up as the default behaviour by using the
 	With `list`, output in an easy-to-parse format for scripts.
 	This format will remain stable across Git versions and regardless of user
 	configuration.  See below for details.
+
+-q::
+--quiet::
+	With 'add', suppress feedback messages.
 
 -v::
 --verbose::
@@ -196,7 +227,7 @@ thumb is do not make any assumption about whether a path belongs to
 $GIT_DIR or $GIT_COMMON_DIR when you need to directly access something
 inside $GIT_DIR. Use `git rev-parse --git-path` to get the final path.
 
-If you move a linked working tree, you need to update the 'gitdir' file
+If you manually move a linked working tree, you need to update the 'gitdir' file
 in the entry's directory. For example, if a linked working tree is moved
 to `/newpath/test-next` and its `.git` file points to
 `/path/main/.git/worktrees/test-next`, then update
@@ -220,7 +251,7 @@ The worktree list command has two output formats.  The default format shows the
 details on a single line with columns.  For example:
 
 ------------
-S git worktree list
+$ git worktree list
 /path/to/bare-source            (bare)
 /path/to/linked-worktree        abcd1234 [master]
 /path/to/other-linked-worktree  1234abc  (detached HEAD)
@@ -235,7 +266,7 @@ if the value is true.  An empty line indicates the end of a worktree.  For
 example:
 
 ------------
-S git worktree list --porcelain
+$ git worktree list --porcelain
 worktree /path/to/bare-source
 bare
 
@@ -266,8 +297,7 @@ $ pushd ../temp
 # ... hack hack hack ...
 $ git commit -a -m 'emergency fix for boss'
 $ popd
-$ rm -rf ../temp
-$ git worktree prune
+$ git worktree remove ../temp
 ------------
 
 BUGS
@@ -275,13 +305,6 @@ BUGS
 Multiple checkout in general is still experimental, and the support
 for submodules is incomplete. It is NOT recommended to make multiple
 checkouts of a superproject.
-
-git-worktree could provide more automation for tasks currently
-performed manually, such as:
-
-- `remove` to remove a linked working tree and its administrative files (and
-  warn if the working tree is dirty)
-- `mv` to move or rename a working tree and update its administrative files
 
 GIT
 ---

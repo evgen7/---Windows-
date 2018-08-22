@@ -11,7 +11,7 @@ SYNOPSIS
 [verse]
 'git' [--version] [--help] [-C <path>] [-c <name>=<value>]
     [--exec-path[=<path>]] [--html-path] [--man-path] [--info-path]
-    [-p|--paginate|--no-pager] [--no-replace-objects] [--bare]
+    [-p|--paginate|-P|--no-pager] [--no-replace-objects] [--bare]
     [--git-dir=<path>] [--work-tree=<path>] [--namespace=<name>]
     [--super-prefix=<path>]
     <command> [<args>]
@@ -103,6 +103,7 @@ foo.bar= ...`) sets `foo.bar` to the empty string which `git config
 	configuration options (see the "Configuration Mechanism" section
 	below).
 
+-P::
 --no-pager::
 	Do not pipe Git output into a pager.
 
@@ -162,6 +163,16 @@ foo.bar= ...`) sets `foo.bar` to the empty string which `git config
 --no-optional-locks::
 	Do not perform optional operations that require locks. This is
 	equivalent to setting the `GIT_OPTIONAL_LOCKS` to `0`.
+
+--list-cmds=group[,group...]::
+	List commands by group. This is an internal/experimental
+	option and may change or be removed in the future. Supported
+	groups are: builtins, parseopt (builtin commands that use
+	parse-options), main (all commands in libexec directory),
+	others (all other commands in `$PATH` that have git- prefix),
+	list-<category> (see categories in command-list.txt),
+	nohelpers (exclude helper commands), alias and config
+	(retrieve command list from config variable completion.commands)
 
 GIT COMMANDS
 ------------
@@ -556,7 +567,8 @@ for further details.
 
 `GIT_CONFIG_NOSYSTEM`::
 	Whether to skip reading settings from the system-wide
-	`$(prefix)/etc/gitconfig` file.  This environment variable can
+	`$(prefix)/etc/gitconfig` file (and on Windows, also from the
+	`%PROGRAMDATA%\Git\config` file).  This environment variable can
 	be used along with `$HOME` and `$XDG_CONFIG_HOME` to create a
 	predictable environment for a picky script, or you can set it
 	temporarily to avoid using a buggy `/etc/gitconfig` file while
@@ -645,6 +657,16 @@ of clones and fetches.
 	This option overrides setting the `GIT_CURL_VERBOSE` environment
 	variable.
 	See `GIT_TRACE` for available trace output options.
+
+`GIT_TRACE_CURL_NO_DATA`::
+	When a curl trace is enabled (see `GIT_TRACE_CURL` above), do not dump
+	data (that is, only dump info lines and headers).
+
+`GIT_REDACT_COOKIES`::
+	This can be set to a comma-separated list of strings. When a curl trace
+	is enabled (see `GIT_TRACE_CURL` above), whenever a "Cookies:" header
+	sent by the client is dumped, values of cookies whose key is in that
+	list (case-sensitive) are redacted.
 
 `GIT_LITERAL_PATHSPECS`::
 	Setting this variable to `1` will cause Git to treat all
@@ -745,6 +767,12 @@ standard output.
 	adequate and support for it is likely to be removed in the
 	foreseeable future (along with the variable).
 
+`GIT_SLOG_PARENT_SID`::
+	(Experimental) A transient environment variable set by top-level
+	Git commands and inherited by child Git commands.  It contains
+	a session id that will be written the structured logging output
+	to help associate child and parent processes.
+
 Discussion[[Discussion]]
 ------------------------
 
@@ -838,6 +866,9 @@ Reporting Bugs
 Report bugs to the Git mailing list <git@vger.kernel.org> where the
 development and maintenance is primarily done.  You do not have to be
 subscribed to the list to send a message there.
+
+Issues which are security relevant should be disclosed privately to
+the Git Security mailing list <git-security@googlegroups.com>.
 
 SEE ALSO
 --------

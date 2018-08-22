@@ -62,8 +62,11 @@ UI, Workflows & Features
  * The SubmittingPatches document has been converted to produce an
    HTML version via AsciiDoc/Asciidoctor.
 
- * We learned to talk to watchman to speed up "git status" and other
-   operations that need to see which paths have been modified.
+ * We learned to optionally talk to a file system monitor via new
+   fsmonitor extension to speed up "git status" and other operations
+   that need to see which paths have been modified.  Currently we only
+   support "watchman".  See File System Monitor section of
+   git-update-index(1) for more detail.
 
  * The "diff" family of commands learned to ignore differences in
    carriage return at the end of line.
@@ -341,7 +344,7 @@ Fixes since v2.15
  * Command line completion (in contrib/) has been taught about the
    "--copy" option of "git branch".
 
- * When "git rebase" prepared an mailbox of changes and fed it to "git
+ * When "git rebase" prepared a mailbox of changes and fed it to "git
    am" to replay them, it was confused when a stray "From " happened
    to be in the log message of one of the replayed changes.  This has
    been corrected.
@@ -433,6 +436,23 @@ Fixes since v2.15
    from strings read from various "state" files.
    (merge 041fe8fc83 ra/prompt-eread-fix later to maint).
 
+ * "git merge -s recursive" did not correctly abort when the index is
+   dirty, if the merged tree happened to be the same as the current
+   HEAD, which has been fixed.
+
+ * Bytes with high-bit set were encoded incorrectly and made
+   credential helper fail.
+   (merge 4c267f2ae3 jd/fix-strbuf-add-urlencode-bytes later to maint).
+
+ * "git rebase -p -X<option>" did not propagate the option properly
+   down to underlying merge strategy backend.
+   (merge dd6fb0053c js/fix-merge-arg-quoting-in-rebase-p later to maint).
+
+ * "git merge -s recursive" did not correctly abort when the index is
+   dirty, if the merged tree happened to be the same as the current
+   HEAD, which has been fixed.
+   (merge f309e8e768 ew/empty-merge-with-dirty-index-maint later to maint).
+
  * Other minor doc, test and build updates and code cleanups.
    (merge 1a1fc2d5b5 rd/man-prune-progress later to maint).
    (merge 0ba014035a rd/man-reflog-add-n later to maint).
@@ -456,3 +476,7 @@ Fixes since v2.15
    (merge c07b3adff1 bw/path-doc later to maint).
    (merge bf9d7df950 tz/lib-git-svn-svnserve-tests later to maint).
    (merge dec366c9a8 sr/http-sslverify-config-doc later to maint).
+   (merge 3f824e91c8 jk/test-suite-tracing later to maint).
+   (merge 1feb061701 db/doc-config-section-names-with-bs later to maint).
+   (merge 74dea0e13c jh/memihash-opt later to maint).
+   (merge 2e9fdc795c ma/bisect-leakfix later to maint).

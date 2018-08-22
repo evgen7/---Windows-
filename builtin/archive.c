@@ -55,7 +55,7 @@ static int run_remote_archiver(int argc, const char **argv,
 
 	buf = packet_read_line(fd[0], NULL);
 	if (!buf)
-		die(_("git archive: expected ACK/NAK, got EOF"));
+		die(_("git archive: expected ACK/NAK, got a flush packet"));
 	if (strcmp(buf, "ACK")) {
 		if (starts_with(buf, "NACK "))
 			die(_("git archive: NACK %s"), buf + 5);
@@ -105,5 +105,5 @@ int cmd_archive(int argc, const char **argv, const char *prefix)
 
 	setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
 
-	return write_archive(argc, argv, prefix, output, 0);
+	return write_archive(argc, argv, prefix, the_repository, output, 0);
 }

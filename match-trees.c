@@ -1,6 +1,7 @@
 #include "cache.h"
 #include "tree.h"
 #include "tree-walk.h"
+#include "object-store.h"
 
 static int score_missing(unsigned mode, const char *path)
 {
@@ -54,7 +55,7 @@ static void *fill_tree_desc_strict(struct tree_desc *desc,
 	enum object_type type;
 	unsigned long size;
 
-	buffer = read_sha1_file(hash->hash, &type, &size);
+	buffer = read_object_file(hash, &type, &size);
 	if (!buffer)
 		die("unable to read tree (%s)", oid_to_hex(hash));
 	if (type != OBJ_TREE)
@@ -82,34 +83,43 @@ static int score_trees(const struct object_id *hash1, const struct object_id *ha
 	int score = 0;
 
 	for (;;) {
-		struct name_entry e1, e2;
-		int got_entry_from_one = tree_entry(&one, &e1);
-		int got_entry_from_two = tree_entry(&two, &e2);
 		int cmp;
 
-		if (got_entry_from_one && got_entry_from_two)
-			cmp = base_name_entries_compare(&e1, &e2);
-		else if (got_entry_from_one)
+		if (one.size && two.size)
+			cmp = base_name_entries_compare(&one.entry, &two.entry);
+		else if (one.size)
 			/* two lacks this entry */
 			cmp = -1;
-		else if (got_entry_from_two)
+		else if (two.size)
 			/* two has more entries */
 			cmp = 1;
 		else
 			break;
 
-		if (cmp < 0)
+		if (cmp < 0) {
 			/* path1 does not appear in two */
-			score += score_missing(e1.mode, e1.path);
-		else if (cmp > 0)
+			score += score_missing(one.entry.mode, one.entry.path);
+			update_tree_entry(&one);
+		} else if (cmp > 0) {
 			/* path2 does not appear in one */
-			score += score_missing(e2.mode, e2.path);
-		else if (oidcmp(e1.oid, e2.oid))
-			/* they are different */
-			score += score_differs(e1.mode, e2.mode, e1.path);
-		else
-			/* same subtree or blob */
-			score += score_matches(e1.mode, e2.mode, e1.path);
+			score += score_missing(two.entry.mode, two.entry.path);
+			update_tree_entry(&two);
+		} else {
+			/* path appears in both */
+			if (oidcmp(one.entry.oid, two.entry.oid)) {
+				/* they are different */
+				score += score_differs(one.entry.mode,
+						       two.entry.mode,
+						       one.entry.path);
+			} else {
+				/* same subtree or blob */
+				score += score_matches(one.entry.mode,
+						       two.entry.mode,
+						       one.entry.path);
+			}
+			update_tree_entry(&one);
+			update_tree_entry(&two);
+		}
 	}
 	free(one_buf);
 	free(two_buf);
@@ -158,22 +168,20 @@ static void match_trees(const struct object_id *hash1,
 }
 
 /*
- * A tree "hash1" has a subdirectory at "prefix".  Come up with a
- * tree object by replacing it with another tree "hash2".
+ * A tree "oid1" has a subdirectory at "prefix".  Come up with a tree object by
+ * replacing it with another tree "oid2".
  */
-static int splice_tree(const unsigned char *hash1,
-		       const char *prefix,
-		       const unsigned char *hash2,
-		       unsigned char *result)
+static int splice_tree(const struct object_id *oid1, const char *prefix,
+		       const struct object_id *oid2, struct object_id *result)
 {
 	char *subpath;
 	int toplen;
 	char *buf;
 	unsigned long sz;
 	struct tree_desc desc;
-	unsigned char *rewrite_here;
-	const unsigned char *rewrite_with;
-	unsigned char subtree[20];
+	struct object_id *rewrite_here;
+	const struct object_id *rewrite_with;
+	struct object_id subtree;
 	enum object_type type;
 	int status;
 
@@ -182,9 +190,9 @@ static int splice_tree(const unsigned char *hash1,
 	if (*subpath)
 		subpath++;
 
-	buf = read_sha1_file(hash1, &type, &sz);
+	buf = read_object_file(oid1, &type, &sz);
 	if (!buf)
-		die("cannot read tree %s", sha1_to_hex(hash1));
+		die("cannot read tree %s", oid_to_hex(oid1));
 	init_tree_desc(&desc, buf, sz);
 
 	rewrite_here = NULL;
@@ -197,26 +205,26 @@ static int splice_tree(const unsigned char *hash1,
 		if (strlen(name) == toplen &&
 		    !memcmp(name, prefix, toplen)) {
 			if (!S_ISDIR(mode))
-				die("entry %s in tree %s is not a tree",
-				    name, sha1_to_hex(hash1));
-			rewrite_here = (unsigned char *) oid->hash;
+				die("entry %s in tree %s is not a tree", name,
+				    oid_to_hex(oid1));
+			rewrite_here = (struct object_id *)oid;
 			break;
 		}
 		update_tree_entry(&desc);
 	}
 	if (!rewrite_here)
-		die("entry %.*s not found in tree %s",
-		    toplen, prefix, sha1_to_hex(hash1));
+		die("entry %.*s not found in tree %s", toplen, prefix,
+		    oid_to_hex(oid1));
 	if (*subpath) {
-		status = splice_tree(rewrite_here, subpath, hash2, subtree);
+		status = splice_tree(rewrite_here, subpath, oid2, &subtree);
 		if (status)
 			return status;
-		rewrite_with = subtree;
+		rewrite_with = &subtree;
+	} else {
+		rewrite_with = oid2;
 	}
-	else
-		rewrite_with = hash2;
-	hashcpy(rewrite_here, rewrite_with);
-	status = write_sha1_file(buf, sz, tree_type, result);
+	oidcpy(rewrite_here, rewrite_with);
+	status = write_object_file(buf, sz, tree_type, result);
 	free(buf);
 	return status;
 }
@@ -271,7 +279,7 @@ void shift_tree(const struct object_id *hash1,
 		if (!*del_prefix)
 			return;
 
-		if (get_tree_entry(hash2->hash, del_prefix, shifted->hash, &mode))
+		if (get_tree_entry(hash2, del_prefix, shifted, &mode))
 			die("cannot find path %s in tree %s",
 			    del_prefix, oid_to_hex(hash2));
 		return;
@@ -280,7 +288,7 @@ void shift_tree(const struct object_id *hash1,
 	if (!*add_prefix)
 		return;
 
-	splice_tree(hash1->hash, add_prefix, hash2->hash, shifted->hash);
+	splice_tree(hash1, add_prefix, hash2, shifted);
 }
 
 /*
@@ -298,12 +306,12 @@ void shift_tree_by(const struct object_id *hash1,
 	unsigned candidate = 0;
 
 	/* Can hash2 be a tree at shift_prefix in tree hash1? */
-	if (!get_tree_entry(hash1->hash, shift_prefix, sub1.hash, &mode1) &&
+	if (!get_tree_entry(hash1, shift_prefix, &sub1, &mode1) &&
 	    S_ISDIR(mode1))
 		candidate |= 1;
 
 	/* Can hash1 be a tree at shift_prefix in tree hash2? */
-	if (!get_tree_entry(hash2->hash, shift_prefix, sub2.hash, &mode2) &&
+	if (!get_tree_entry(hash2, shift_prefix, &sub2, &mode2) &&
 	    S_ISDIR(mode2))
 		candidate |= 2;
 
@@ -334,7 +342,7 @@ void shift_tree_by(const struct object_id *hash1,
 		 * shift tree2 down by adding shift_prefix above it
 		 * to match tree1.
 		 */
-		splice_tree(hash1->hash, shift_prefix, hash2->hash, shifted->hash);
+		splice_tree(hash1, shift_prefix, hash2, shifted);
 	else
 		/*
 		 * shift tree2 up by removing shift_prefix from it

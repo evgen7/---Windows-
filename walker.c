@@ -1,5 +1,7 @@
 #include "cache.h"
 #include "walker.h"
+#include "repository.h"
+#include "object-store.h"
 #include "commit.h"
 #include "tree.h"
 #include "tree-walk.h"
@@ -22,7 +24,7 @@ void walker_say(struct walker *walker, const char *fmt, ...)
 static void report_missing(const struct object *obj)
 {
 	fprintf(stderr, "Cannot obtain needed %s %s\n",
-		obj->type ? typename(obj->type): "object",
+		obj->type ? type_name(obj->type): "object",
 		oid_to_hex(&obj->oid));
 	if (!is_null_oid(&current_commit_oid))
 		fprintf(stderr, "while processing commit %s.\n",
@@ -47,12 +49,14 @@ static int process_tree(struct walker *walker, struct tree *tree)
 		if (S_ISGITLINK(entry.mode))
 			continue;
 		if (S_ISDIR(entry.mode)) {
-			struct tree *tree = lookup_tree(entry.oid);
+			struct tree *tree = lookup_tree(the_repository,
+							entry.oid);
 			if (tree)
 				obj = &tree->object;
 		}
 		else {
-			struct blob *blob = lookup_blob(entry.oid);
+			struct blob *blob = lookup_blob(the_repository,
+							entry.oid);
 			if (blob)
 				obj = &blob->object;
 		}
@@ -72,6 +76,8 @@ static struct commit_list *complete = NULL;
 
 static int process_commit(struct walker *walker, struct commit *commit)
 {
+	struct commit_list *parents;
+
 	if (parse_commit(commit))
 		return -1;
 
@@ -86,19 +92,14 @@ static int process_commit(struct walker *walker, struct commit *commit)
 
 	walker_say(walker, "walk %s\n", oid_to_hex(&commit->object.oid));
 
-	if (walker->get_tree) {
-		if (process(walker, &commit->tree->object))
+	if (process(walker, &get_commit_tree(commit)->object))
+		return -1;
+
+	for (parents = commit->parents; parents; parents = parents->next) {
+		if (process(walker, &parents->item->object))
 			return -1;
-		if (!walker->get_all)
-			walker->get_tree = 0;
 	}
-	if (walker->get_history) {
-		struct commit_list *parents = commit->parents;
-		for (; parents; parents = parents->next) {
-			if (process(walker, &parents->item->object))
-				return -1;
-		}
-	}
+
 	return 0;
 }
 
@@ -134,7 +135,7 @@ static int process_object(struct walker *walker, struct object *obj)
 	}
 	return error("Unable to determine requirements "
 		     "of type %s for %s",
-		     typename(obj->type), oid_to_hex(&obj->oid));
+		     type_name(obj->type), oid_to_hex(&obj->oid));
 }
 
 static int process(struct walker *walker, struct object *obj)
@@ -180,7 +181,7 @@ static int loop(struct walker *walker)
 			}
 		}
 		if (!obj->type)
-			parse_object(&obj->oid);
+			parse_object(the_repository, &obj->oid);
 		if (process_object(walker, obj))
 			return -1;
 	}
@@ -206,7 +207,8 @@ static int interpret_target(struct walker *walker, char *target, struct object_i
 static int mark_complete(const char *path, const struct object_id *oid,
 			 int flag, void *cb_data)
 {
-	struct commit *commit = lookup_commit_reference_gently(oid, 1);
+	struct commit *commit = lookup_commit_reference_gently(the_repository,
+							       oid, 1);
 
 	if (commit) {
 		commit->object.flags |= COMPLETE;

@@ -31,7 +31,7 @@ test_expect_success \
 	(
 		cd import &&
 		echo foo >foo &&
-		ln -s foo foo.link
+		ln -s foo foo.link &&
 		mkdir -p dir/a/b/c/d/e &&
 		echo "deep dir" >dir/a/b/c/d/e/file &&
 		mkdir bar &&
@@ -288,12 +288,12 @@ test_expect_success 'able to dcommit to a subdirectory' '
 
 test_expect_success 'dcommit should not fail with a touched file' '
 	test_commit "commit-new-file-foo2" foo2 &&
-	test-chmtime =-60 foo &&
+	test-tool chmtime =-60 foo &&
 	git svn dcommit
 '
 
 test_expect_success 'rebase should not fail with a touched file' '
-	test-chmtime =-60 foo &&
+	test-tool chmtime =-60 foo &&
 	git svn rebase
 '
 

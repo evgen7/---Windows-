@@ -11,7 +11,7 @@ test_did_you_mean ()
 	sq="'" &&
 	cat >expected <<-EOF &&
 	fatal: Path '$2$3' $4, but not ${5:-$sq$3$sq}.
-	Did you mean '$1:$2$3'${2:+ aka $sq$1:./$3$sq}?
+	fatal: Did you mean '$1:$2$3'${2:+ aka $sq$1:./$3$sq}?
 	EOF
 	test_cmp expected error
 }
@@ -157,7 +157,7 @@ test_expect_success 'relative path not found' '
 test_expect_success 'relative path outside worktree' '
 	test_must_fail git rev-parse HEAD:../file.txt >output 2>error &&
 	test -z "$(cat output)" &&
-	grep "outside repository" error
+	test_i18ngrep "outside repository" error
 '
 
 test_expect_success 'relative path when cwd is outside worktree' '

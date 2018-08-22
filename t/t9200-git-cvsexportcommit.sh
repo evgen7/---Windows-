@@ -43,11 +43,11 @@ check_entries () {
 	sed -ne '/^\//p' "$1/CVS/Entries" | sort | cut -d/ -f2,3,5 >actual
 	if test -z "$2"
 	then
-		>expected
+		test_must_be_empty actual
 	else
 		printf '%s\n' "$2" | tr '|' '\012' >expected
+		test_cmp expected actual
 	fi
-	test_cmp expected actual
 }
 
 test_expect_success \
@@ -55,8 +55,8 @@ test_expect_success \
     'mkdir A B C D E F &&
      echo hello1 >A/newfile1.txt &&
      echo hello2 >B/newfile2.txt &&
-     cp "$TEST_DIRECTORY"/test-binary-1.png C/newfile3.png &&
-     cp "$TEST_DIRECTORY"/test-binary-1.png D/newfile4.png &&
+     cp "$TEST_DIRECTORY"/diff-lib/test-binary-1.png C/newfile3.png &&
+     cp "$TEST_DIRECTORY"/diff-lib/test-binary-1.png D/newfile4.png &&
      git add A/newfile1.txt &&
      git add B/newfile2.txt &&
      git add C/newfile3.png &&
@@ -81,8 +81,8 @@ test_expect_success \
      rm -f B/newfile2.txt &&
      rm -f C/newfile3.png &&
      echo Hello5  >E/newfile5.txt &&
-     cp "$TEST_DIRECTORY"/test-binary-2.png D/newfile4.png &&
-     cp "$TEST_DIRECTORY"/test-binary-1.png F/newfile6.png &&
+     cp "$TEST_DIRECTORY"/diff-lib/test-binary-2.png D/newfile4.png &&
+     cp "$TEST_DIRECTORY"/diff-lib/test-binary-1.png F/newfile6.png &&
      git add E/newfile5.txt &&
      git add F/newfile6.png &&
      git commit -a -m "Test: Remove, add and update" &&
@@ -170,7 +170,7 @@ test_expect_success \
      'mkdir "G g" &&
       echo ok then >"G g/with spaces.txt" &&
       git add "G g/with spaces.txt" && \
-      cp "$TEST_DIRECTORY"/test-binary-1.png "G g/with spaces.png" && \
+      cp "$TEST_DIRECTORY"/diff-lib/test-binary-1.png "G g/with spaces.png" && \
       git add "G g/with spaces.png" &&
       git commit -a -m "With spaces" &&
       id=$(git rev-list --max-count=1 HEAD) &&
@@ -182,12 +182,13 @@ test_expect_success \
 test_expect_success \
      'Update file with spaces in file name' \
      'echo Ok then >>"G g/with spaces.txt" &&
-      cat "$TEST_DIRECTORY"/test-binary-1.png >>"G g/with spaces.png" && \
+      cat "$TEST_DIRECTORY"/diff-lib/test-binary-1.png \
+	>>"G g/with spaces.png" && \
       git add "G g/with spaces.png" &&
       git commit -a -m "Update with spaces" &&
       id=$(git rev-list --max-count=1 HEAD) &&
       (cd "$CVSWORK" &&
-      git cvsexportcommit -c $id
+      git cvsexportcommit -c $id &&
       check_entries "G g" "with spaces.png/1.2/-kb|with spaces.txt/1.2/"
       )'
 
@@ -207,7 +208,7 @@ test_expect_success !MINGW \
      'mkdir -p Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö &&
       echo Foo >Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö/gårdetsågårdet.txt &&
       git add Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö/gårdetsågårdet.txt &&
-      cp "$TEST_DIRECTORY"/test-binary-1.png Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö/gårdetsågårdet.png &&
+      cp "$TEST_DIRECTORY"/diff-lib/test-binary-1.png Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö/gårdetsågårdet.png &&
       git add Å/goo/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/å/ä/ö/gårdetsågårdet.png &&
       git commit -a -m "Går det så går det" && \
       id=$(git rev-list --max-count=1 HEAD) &&
@@ -245,7 +246,7 @@ test_expect_success FILEMODE \
       git add G/off &&
       git commit -a -m "Execute test" &&
       (cd "$CVSWORK" &&
-      git cvsexportcommit -c HEAD
+      git cvsexportcommit -c HEAD &&
       test -x G/on &&
       ! test -x G/off
       )'
@@ -303,7 +304,7 @@ test_expect_success 're-commit a removed filename which remains in CVS attic' '
     git add attic_gremlin &&
     git commit -m "Added attic_gremlin" &&
 	git cvsexportcommit -w "$CVSWORK" -c HEAD &&
-    (cd "$CVSWORK"; cvs -Q update -d) &&
+    (cd "$CVSWORK" && cvs -Q update -d) &&
     test -f "$CVSWORK/attic_gremlin"
 '
 

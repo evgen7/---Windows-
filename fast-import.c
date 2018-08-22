@@ -154,6 +154,7 @@ Format of STDIN stream:
 
 #include "builtin.h"
 #include "cache.h"
+#include "repository.h"
 #include "config.h"
 #include "lockfile.h"
 #include "object.h"
@@ -168,6 +169,9 @@ Format of STDIN stream:
 #include "dir.h"
 #include "run-command.h"
 #include "packfile.h"
+#include "object-store.h"
+#include "mem-pool.h"
+#include "commit-reach.h"
 
 #define PACK_ID_BITS 16
 #define MAX_PACK_ID ((1<<PACK_ID_BITS)-1)
@@ -207,13 +211,6 @@ struct last_object {
 	off_t offset;
 	unsigned int depth;
 	unsigned no_swap : 1;
-};
-
-struct mem_pool {
-	struct mem_pool *next_pool;
-	char *next_free;
-	char *end;
-	uintmax_t space[FLEX_ARRAY]; /* more */
 };
 
 struct atom_str {
@@ -304,9 +301,8 @@ static int global_argc;
 static const char **global_argv;
 
 /* Memory pools */
-static size_t mem_pool_alloc = 2*1024*1024 - sizeof(struct mem_pool);
-static size_t total_allocd;
-static struct mem_pool *mem_pool;
+static struct mem_pool fi_mem_pool =  {NULL, 2*1024*1024 -
+				       sizeof(struct mp_block), 0 };
 
 /* Atom management */
 static unsigned int atom_table_sz = 4451;
@@ -316,7 +312,7 @@ static struct atom_str **atom_table;
 /* The .pack file being generated */
 static struct pack_idx_option pack_idx_opts;
 static unsigned int pack_id;
-static struct sha1file *pack_file;
+static struct hashfile *pack_file;
 static struct packed_git *pack_data;
 static struct packed_git **all_packs;
 static off_t pack_size;
@@ -341,6 +337,7 @@ static unsigned int tree_entry_alloc = 1000;
 static void *avail_tree_entry;
 static unsigned int avail_tree_table_sz = 100;
 static struct avail_tree_content **avail_tree_table;
+static size_t tree_entry_allocd;
 static struct strbuf old_tree = STRBUF_INIT;
 static struct strbuf new_tree = STRBUF_INIT;
 
@@ -634,49 +631,10 @@ static unsigned int hc_str(const char *s, size_t len)
 	return r;
 }
 
-static void *pool_alloc(size_t len)
-{
-	struct mem_pool *p;
-	void *r;
-
-	/* round up to a 'uintmax_t' alignment */
-	if (len & (sizeof(uintmax_t) - 1))
-		len += sizeof(uintmax_t) - (len & (sizeof(uintmax_t) - 1));
-
-	for (p = mem_pool; p; p = p->next_pool)
-		if ((p->end - p->next_free >= len))
-			break;
-
-	if (!p) {
-		if (len >= (mem_pool_alloc/2)) {
-			total_allocd += len;
-			return xmalloc(len);
-		}
-		total_allocd += sizeof(struct mem_pool) + mem_pool_alloc;
-		p = xmalloc(st_add(sizeof(struct mem_pool), mem_pool_alloc));
-		p->next_pool = mem_pool;
-		p->next_free = (char *) p->space;
-		p->end = p->next_free + mem_pool_alloc;
-		mem_pool = p;
-	}
-
-	r = p->next_free;
-	p->next_free += len;
-	return r;
-}
-
-static void *pool_calloc(size_t count, size_t size)
-{
-	size_t len = count * size;
-	void *r = pool_alloc(len);
-	memset(r, 0, len);
-	return r;
-}
-
 static char *pool_strdup(const char *s)
 {
 	size_t len = strlen(s) + 1;
-	char *r = pool_alloc(len);
+	char *r = mem_pool_alloc(&fi_mem_pool, len);
 	memcpy(r, s, len);
 	return r;
 }
@@ -685,7 +643,7 @@ static void insert_mark(uintmax_t idnum, struct object_entry *oe)
 {
 	struct mark_set *s = marks;
 	while ((idnum >> s->shift) >= 1024) {
-		s = pool_calloc(1, sizeof(struct mark_set));
+		s = mem_pool_calloc(&fi_mem_pool, 1, sizeof(struct mark_set));
 		s->shift = marks->shift + 10;
 		s->data.sets[0] = marks;
 		marks = s;
@@ -694,7 +652,7 @@ static void insert_mark(uintmax_t idnum, struct object_entry *oe)
 		uintmax_t i = idnum >> s->shift;
 		idnum -= i << s->shift;
 		if (!s->data.sets[i]) {
-			s->data.sets[i] = pool_calloc(1, sizeof(struct mark_set));
+			s->data.sets[i] = mem_pool_calloc(&fi_mem_pool, 1, sizeof(struct mark_set));
 			s->data.sets[i]->shift = s->shift - 10;
 		}
 		s = s->data.sets[i];
@@ -732,7 +690,7 @@ static struct atom_str *to_atom(const char *s, unsigned short len)
 		if (c->str_len == len && !strncmp(s, c->str_dat, len))
 			return c;
 
-	c = pool_alloc(sizeof(struct atom_str) + len + 1);
+	c = mem_pool_alloc(&fi_mem_pool, sizeof(struct atom_str) + len + 1);
 	c->str_len = len;
 	memcpy(c->str_dat, s, len);
 	c->str_dat[len] = 0;
@@ -763,7 +721,7 @@ static struct branch *new_branch(const char *name)
 	if (check_refname_format(name, REFNAME_ALLOW_ONELEVEL))
 		die("Branch name doesn't conform to GIT standards: %s", name);
 
-	b = pool_calloc(1, sizeof(struct branch));
+	b = mem_pool_calloc(&fi_mem_pool, 1, sizeof(struct branch));
 	b->name = pool_strdup(name);
 	b->table_next_branch = branch_table[hc];
 	b->branch_tree.versions[0].mode = S_IFDIR;
@@ -799,7 +757,7 @@ static struct tree_content *new_tree_content(unsigned int cnt)
 			avail_tree_table[hc] = f->next_avail;
 	} else {
 		cnt = cnt & 7 ? ((cnt / 8) + 1) * 8 : cnt;
-		f = pool_alloc(sizeof(*t) + sizeof(t->entries[0]) * cnt);
+		f = mem_pool_alloc(&fi_mem_pool, sizeof(*t) + sizeof(t->entries[0]) * cnt);
 		f->entry_capacity = cnt;
 	}
 
@@ -844,7 +802,7 @@ static struct tree_entry *new_tree_entry(void)
 
 	if (!avail_tree_entry) {
 		unsigned int n = tree_entry_alloc;
-		total_allocd += n * sizeof(struct tree_entry);
+		tree_entry_allocd += n * sizeof(struct tree_entry);
 		ALLOC_ARRAY(e, n);
 		avail_tree_entry = e;
 		while (n-- > 1) {
@@ -905,12 +863,12 @@ static void start_packfile(void)
 
 	p->pack_fd = pack_fd;
 	p->do_not_close = 1;
-	pack_file = sha1fd(pack_fd, p->pack_name);
+	pack_file = hashfd(pack_fd, p->pack_name);
 
 	hdr.hdr_signature = htonl(PACK_SIGNATURE);
 	hdr.hdr_version = htonl(2);
 	hdr.hdr_entries = 0;
-	sha1write(pack_file, &hdr, sizeof(hdr));
+	hashwrite(pack_file, &hdr, sizeof(hdr));
 
 	pack_data = p;
 	pack_size = sizeof(hdr);
@@ -1016,7 +974,7 @@ static void end_packfile(void)
 		struct tag *t;
 
 		close_pack_windows(pack_data);
-		sha1close(pack_file, cur_pack_oid.hash, 0);
+		finalize_hashfile(pack_file, cur_pack_oid.hash, 0);
 		fixup_pack_header_footer(pack_data->pack_fd, pack_data->sha1,
 				    pack_data->pack_name, object_count,
 				    cur_pack_oid.hash, pack_size);
@@ -1036,7 +994,7 @@ static void end_packfile(void)
 		if (!new_p)
 			die("core git rejected index %s", idx_name);
 		all_packs[pack_id] = new_p;
-		install_packed_git(new_p);
+		install_packed_git(the_repository, new_p);
 		free(idx_name);
 
 		/* Print the boundary */
@@ -1092,15 +1050,15 @@ static int store_object(
 	unsigned char hdr[96];
 	struct object_id oid;
 	unsigned long hdrlen, deltalen;
-	git_SHA_CTX c;
+	git_hash_ctx c;
 	git_zstream s;
 
 	hdrlen = xsnprintf((char *)hdr, sizeof(hdr), "%s %lu",
-			   typename(type), (unsigned long)dat->len) + 1;
-	git_SHA1_Init(&c);
-	git_SHA1_Update(&c, hdr, hdrlen);
-	git_SHA1_Update(&c, dat->buf, dat->len);
-	git_SHA1_Final(oid.hash, &c);
+			   type_name(type), (unsigned long)dat->len) + 1;
+	the_hash_algo->init_fn(&c);
+	the_hash_algo->update_fn(&c, hdr, hdrlen);
+	the_hash_algo->update_fn(&c, dat->buf, dat->len);
+	the_hash_algo->final_fn(oid.hash, &c);
 	if (oidout)
 		oidcpy(oidout, &oid);
 
@@ -1110,7 +1068,8 @@ static int store_object(
 	if (e->idx.offset) {
 		duplicate_count_by_type[type]++;
 		return 1;
-	} else if (find_sha1_pack(oid.hash, packed_git)) {
+	} else if (find_sha1_pack(oid.hash,
+				  get_all_packs(the_repository))) {
 		e->type = type;
 		e->pack_id = MAX_PACK_ID;
 		e->idx.offset = 1; /* just not zero! */
@@ -1118,11 +1077,13 @@ static int store_object(
 		return 1;
 	}
 
-	if (last && last->data.buf && last->depth < max_depth && dat->len > 20) {
+	if (last && last->data.len && last->data.buf && last->depth < max_depth
+		&& dat->len > the_hash_algo->rawsz) {
+
 		delta_count_attempts_by_type[type]++;
 		delta = diff_delta(last->data.buf, last->data.len,
 			dat->buf, dat->len,
-			&deltalen, dat->len - 20);
+			&deltalen, dat->len - the_hash_algo->rawsz);
 	} else
 		delta = NULL;
 
@@ -1180,23 +1141,23 @@ static int store_object(
 
 		hdrlen = encode_in_pack_object_header(hdr, sizeof(hdr),
 						      OBJ_OFS_DELTA, deltalen);
-		sha1write(pack_file, hdr, hdrlen);
+		hashwrite(pack_file, hdr, hdrlen);
 		pack_size += hdrlen;
 
 		hdr[pos] = ofs & 127;
 		while (ofs >>= 7)
 			hdr[--pos] = 128 | (--ofs & 127);
-		sha1write(pack_file, hdr + pos, sizeof(hdr) - pos);
+		hashwrite(pack_file, hdr + pos, sizeof(hdr) - pos);
 		pack_size += sizeof(hdr) - pos;
 	} else {
 		e->depth = 0;
 		hdrlen = encode_in_pack_object_header(hdr, sizeof(hdr),
 						      type, dat->len);
-		sha1write(pack_file, hdr, hdrlen);
+		hashwrite(pack_file, hdr, hdrlen);
 		pack_size += hdrlen;
 	}
 
-	sha1write(pack_file, out, s.total_out);
+	hashwrite(pack_file, out, s.total_out);
 	pack_size += s.total_out;
 
 	e->idx.crc32 = crc32_end(pack_file);
@@ -1215,9 +1176,9 @@ static int store_object(
 	return 0;
 }
 
-static void truncate_pack(struct sha1file_checkpoint *checkpoint)
+static void truncate_pack(struct hashfile_checkpoint *checkpoint)
 {
-	if (sha1file_truncate(pack_file, checkpoint))
+	if (hashfile_truncate(pack_file, checkpoint))
 		die_errno("cannot truncate pack to skip duplicate");
 	pack_size = checkpoint->offset;
 }
@@ -1231,9 +1192,9 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 	struct object_id oid;
 	unsigned long hdrlen;
 	off_t offset;
-	git_SHA_CTX c;
+	git_hash_ctx c;
 	git_zstream s;
-	struct sha1file_checkpoint checkpoint;
+	struct hashfile_checkpoint checkpoint;
 	int status = Z_OK;
 
 	/* Determine if we should auto-checkpoint. */
@@ -1241,13 +1202,13 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 		|| (pack_size + 60 + len) < pack_size)
 		cycle_packfile();
 
-	sha1file_checkpoint(pack_file, &checkpoint);
+	hashfile_checkpoint(pack_file, &checkpoint);
 	offset = checkpoint.offset;
 
 	hdrlen = xsnprintf((char *)out_buf, out_sz, "blob %" PRIuMAX, len) + 1;
 
-	git_SHA1_Init(&c);
-	git_SHA1_Update(&c, out_buf, hdrlen);
+	the_hash_algo->init_fn(&c);
+	the_hash_algo->update_fn(&c, out_buf, hdrlen);
 
 	crc32_begin(pack_file);
 
@@ -1265,7 +1226,7 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 			if (!n && feof(stdin))
 				die("EOF in data (%" PRIuMAX " bytes remaining)", len);
 
-			git_SHA1_Update(&c, in_buf, n);
+			the_hash_algo->update_fn(&c, in_buf, n);
 			s.next_in = in_buf;
 			s.avail_in = n;
 			len -= n;
@@ -1275,7 +1236,7 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 
 		if (!s.avail_out || status == Z_STREAM_END) {
 			size_t n = s.next_out - out_buf;
-			sha1write(pack_file, out_buf, n);
+			hashwrite(pack_file, out_buf, n);
 			pack_size += n;
 			s.next_out = out_buf;
 			s.avail_out = out_sz;
@@ -1291,7 +1252,7 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 		}
 	}
 	git_deflate_end(&s);
-	git_SHA1_Final(oid.hash, &c);
+	the_hash_algo->final_fn(oid.hash, &c);
 
 	if (oidout)
 		oidcpy(oidout, &oid);
@@ -1305,7 +1266,8 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 		duplicate_count_by_type[OBJ_BLOB]++;
 		truncate_pack(&checkpoint);
 
-	} else if (find_sha1_pack(oid.hash, packed_git)) {
+	} else if (find_sha1_pack(oid.hash,
+				  get_all_packs(the_repository))) {
 		e->type = OBJ_BLOB;
 		e->pack_id = MAX_PACK_ID;
 		e->idx.offset = 1; /* just not zero! */
@@ -1350,27 +1312,27 @@ static void *gfi_unpack_entry(
 {
 	enum object_type type;
 	struct packed_git *p = all_packs[oe->pack_id];
-	if (p == pack_data && p->pack_size < (pack_size + 20)) {
+	if (p == pack_data && p->pack_size < (pack_size + the_hash_algo->rawsz)) {
 		/* The object is stored in the packfile we are writing to
 		 * and we have modified it since the last time we scanned
 		 * back to read a previously written object.  If an old
-		 * window covered [p->pack_size, p->pack_size + 20) its
+		 * window covered [p->pack_size, p->pack_size + rawsz) its
 		 * data is stale and is not valid.  Closing all windows
 		 * and updating the packfile length ensures we can read
 		 * the newly written data.
 		 */
 		close_pack_windows(p);
-		sha1flush(pack_file);
+		hashflush(pack_file);
 
-		/* We have to offer 20 bytes additional on the end of
+		/* We have to offer rawsz bytes additional on the end of
 		 * the packfile as the core unpacker code assumes the
 		 * footer is present at the file end and must promise
-		 * at least 20 bytes within any window it maps.  But
+		 * at least rawsz bytes within any window it maps.  But
 		 * we don't actually create the footer here.
 		 */
-		p->pack_size = pack_size + 20;
+		p->pack_size = pack_size + the_hash_algo->rawsz;
 	}
-	return unpack_entry(p, oe->idx.offset, &type, sizep);
+	return unpack_entry(the_repository, p, oe->idx.offset, &type, sizep);
 }
 
 static const char *get_mode(const char *str, uint16_t *modep)
@@ -1410,7 +1372,7 @@ static void load_tree(struct tree_entry *root)
 			die("Can't load tree %s", oid_to_hex(oid));
 	} else {
 		enum object_type type;
-		buf = read_sha1_file(oid->hash, &type, &size);
+		buf = read_object_file(oid, &type, &size);
 		if (!buf || type != OBJ_TREE)
 			die("Can't load tree %s", oid_to_hex(oid));
 	}
@@ -1763,8 +1725,10 @@ static int update_branch(struct branch *b)
 	if (!force_update && !is_null_oid(&old_oid)) {
 		struct commit *old_cmit, *new_cmit;
 
-		old_cmit = lookup_commit_reference_gently(&old_oid, 0);
-		new_cmit = lookup_commit_reference_gently(&b->oid, 0);
+		old_cmit = lookup_commit_reference_gently(the_repository,
+							  &old_oid, 0);
+		new_cmit = lookup_commit_reference_gently(the_repository,
+							  &b->oid, 0);
 		if (!old_cmit || !new_cmit)
 			return error("Branch %s is missing commits.", b->name);
 
@@ -1856,7 +1820,7 @@ static void dump_marks_helper(FILE *f,
 
 static void dump_marks(void)
 {
-	static struct lock_file mark_lock;
+	struct lock_file mark_lock = LOCK_INIT;
 	FILE *f;
 
 	if (!export_marks_file || (import_marks_file && !import_marks_file_done))
@@ -1911,7 +1875,8 @@ static void read_marks(void)
 			die("corrupt mark line: %s", line);
 		e = find_object(&oid);
 		if (!e) {
-			enum object_type type = sha1_object_info(oid.hash, NULL);
+			enum object_type type = oid_object_info(the_repository,
+								&oid, NULL);
 			if (type < 0)
 				die("object not found: %s", oid_to_hex(&oid));
 			e = insert_object(&oid);
@@ -2204,7 +2169,7 @@ static void construct_path_with_fanout(const char *hex_sha1,
 		unsigned char fanout, char *path)
 {
 	unsigned int i = 0, j = 0;
-	if (fanout >= 20)
+	if (fanout >= the_hash_algo->rawsz)
 		die("Too large fanout (%u)", fanout);
 	while (fanout) {
 		path[i++] = hex_sha1[j++];
@@ -2212,8 +2177,8 @@ static void construct_path_with_fanout(const char *hex_sha1,
 		path[i++] = '/';
 		fanout--;
 	}
-	memcpy(path + i, hex_sha1 + j, GIT_SHA1_HEXSZ - j);
-	path[i + GIT_SHA1_HEXSZ - j] = '\0';
+	memcpy(path + i, hex_sha1 + j, the_hash_algo->hexsz - j);
+	path[i + the_hash_algo->hexsz - j] = '\0';
 }
 
 static uintmax_t do_change_note_fanout(
@@ -2421,7 +2386,7 @@ static void file_change_m(const char *p, struct branch *b)
 		else if (oe) {
 			if (oe->type != OBJ_COMMIT)
 				die("Not a commit (actually a %s): %s",
-					typename(oe->type), command_buf.buf);
+					type_name(oe->type), command_buf.buf);
 		}
 		/*
 		 * Accept the sha1 without checking; it expected to be in
@@ -2441,14 +2406,15 @@ static void file_change_m(const char *p, struct branch *b)
 		enum object_type expected = S_ISDIR(mode) ?
 						OBJ_TREE: OBJ_BLOB;
 		enum object_type type = oe ? oe->type :
-					sha1_object_info(oid.hash, NULL);
+					oid_object_info(the_repository, &oid,
+							NULL);
 		if (type < 0)
 			die("%s not found: %s",
 					S_ISDIR(mode) ?  "Tree" : "Blob",
 					command_buf.buf);
 		if (type != expected)
 			die("Not a %s (actually a %s): %s",
-				typename(expected), typename(type),
+				type_name(expected), type_name(type),
 				command_buf.buf);
 	}
 
@@ -2581,8 +2547,9 @@ static void note_change_n(const char *p, struct branch *b, unsigned char *old_fa
 		oidcpy(&commit_oid, &commit_oe->idx.oid);
 	} else if (!get_oid(p, &commit_oid)) {
 		unsigned long size;
-		char *buf = read_object_with_reference(commit_oid.hash,
-			commit_type, &size, commit_oid.hash);
+		char *buf = read_object_with_reference(&commit_oid,
+						       commit_type, &size,
+						       &commit_oid);
 		if (!buf || size < 46)
 			die("Not a valid commit: %s", p);
 		free(buf);
@@ -2599,14 +2566,15 @@ static void note_change_n(const char *p, struct branch *b, unsigned char *old_fa
 	} else if (oe) {
 		if (oe->type != OBJ_BLOB)
 			die("Not a blob (actually a %s): %s",
-				typename(oe->type), command_buf.buf);
+				type_name(oe->type), command_buf.buf);
 	} else if (!is_null_oid(&oid)) {
-		enum object_type type = sha1_object_info(oid.hash, NULL);
+		enum object_type type = oid_object_info(the_repository, &oid,
+							NULL);
 		if (type < 0)
 			die("Blob not found: %s", command_buf.buf);
 		if (type != OBJ_BLOB)
 			die("Not a blob (actually a %s): %s",
-			    typename(type), command_buf.buf);
+			    type_name(type), command_buf.buf);
 	}
 
 	construct_path_with_fanout(oid_to_hex(&commit_oid), *old_fanout, path);
@@ -2651,9 +2619,8 @@ static void parse_from_existing(struct branch *b)
 		unsigned long size;
 		char *buf;
 
-		buf = read_object_with_reference(b->oid.hash,
-						 commit_type, &size,
-						 b->oid.hash);
+		buf = read_object_with_reference(&b->oid, commit_type, &size,
+						 &b->oid);
 		parse_from_commit(b, buf, size);
 		free(buf);
 	}
@@ -2730,8 +2697,9 @@ static struct hash_list *parse_merge(unsigned int *count)
 			oidcpy(&n->oid, &oe->idx.oid);
 		} else if (!get_oid(from, &n->oid)) {
 			unsigned long size;
-			char *buf = read_object_with_reference(n->oid.hash,
-				commit_type, &size, n->oid.hash);
+			char *buf = read_object_with_reference(&n->oid,
+							       commit_type,
+							       &size, &n->oid);
 			if (!buf || size < 46)
 				die("Not a valid commit: %s", from);
 			free(buf);
@@ -2860,7 +2828,7 @@ static void parse_new_tag(const char *arg)
 	enum object_type type;
 	const char *v;
 
-	t = pool_alloc(sizeof(struct tag));
+	t = mem_pool_alloc(&fi_mem_pool, sizeof(struct tag));
 	memset(t, 0, sizeof(struct tag));
 	t->name = pool_strdup(arg);
 	if (last_tag)
@@ -2888,7 +2856,7 @@ static void parse_new_tag(const char *arg)
 	} else if (!get_oid(from, &oid)) {
 		struct object_entry *oe = find_object(&oid);
 		if (!oe) {
-			type = sha1_object_info(oid.hash, NULL);
+			type = oid_object_info(the_repository, &oid, NULL);
 			if (type < 0)
 				die("Not a valid object: %s", from);
 		} else
@@ -2914,7 +2882,7 @@ static void parse_new_tag(const char *arg)
 		    "object %s\n"
 		    "type %s\n"
 		    "tag %s\n",
-		    oid_to_hex(&oid), typename(type), t->name);
+		    oid_to_hex(&oid), type_name(type), t->name);
 	if (tagger)
 		strbuf_addf(&new_data,
 			    "tagger %s\n", tagger);
@@ -2964,7 +2932,7 @@ static void cat_blob(struct object_entry *oe, struct object_id *oid)
 	char *buf;
 
 	if (!oe || oe->pack_id == MAX_PACK_ID) {
-		buf = read_sha1_file(oid->hash, &type, &size);
+		buf = read_object_file(oid, &type, &size);
 	} else {
 		type = oe->type;
 		buf = gfi_unpack_entry(oe, &size);
@@ -2985,10 +2953,10 @@ static void cat_blob(struct object_entry *oe, struct object_id *oid)
 		die("Can't read object %s", oid_to_hex(oid));
 	if (type != OBJ_BLOB)
 		die("Object %s is a %s but a blob was expected.",
-		    oid_to_hex(oid), typename(type));
+		    oid_to_hex(oid), type_name(type));
 	strbuf_reset(&line);
 	strbuf_addf(&line, "%s %s %lu\n", oid_to_hex(oid),
-						typename(type), size);
+						type_name(type), size);
 	cat_blob_write(line.buf, line.len);
 	strbuf_release(&line);
 	cat_blob_write(buf, size);
@@ -3003,7 +2971,7 @@ static void cat_blob(struct object_entry *oe, struct object_id *oid)
 
 static void parse_get_mark(const char *p)
 {
-	struct object_entry *oe = oe;
+	struct object_entry *oe;
 	char output[GIT_MAX_HEXSZ + 2];
 
 	/* get-mark SP <object> LF */
@@ -3020,7 +2988,7 @@ static void parse_get_mark(const char *p)
 
 static void parse_cat_blob(const char *p)
 {
-	struct object_entry *oe = oe;
+	struct object_entry *oe;
 	struct object_id oid;
 
 	/* cat-blob SP <object> LF */
@@ -3046,7 +3014,8 @@ static struct object_entry *dereference(struct object_entry *oe,
 	unsigned long size;
 	char *buf = NULL;
 	if (!oe) {
-		enum object_type type = sha1_object_info(oid->hash, NULL);
+		enum object_type type = oid_object_info(the_repository, oid,
+							NULL);
 		if (type < 0)
 			die("object not found: %s", oid_to_hex(oid));
 		/* cache it! */
@@ -3069,7 +3038,7 @@ static struct object_entry *dereference(struct object_entry *oe,
 		buf = gfi_unpack_entry(oe, &size);
 	} else {
 		enum object_type unused;
-		buf = read_sha1_file(oid->hash, &unused, &size);
+		buf = read_object_file(oid, &unused, &size);
 	}
 	if (!buf)
 		die("Can't load object %s", oid_to_hex(oid));
@@ -3459,17 +3428,16 @@ int cmd_main(int argc, const char **argv)
 	atom_table = xcalloc(atom_table_sz, sizeof(struct atom_str*));
 	branch_table = xcalloc(branch_table_sz, sizeof(struct branch*));
 	avail_tree_table = xcalloc(avail_tree_table_sz, sizeof(struct avail_tree_content*));
-	marks = pool_calloc(1, sizeof(struct mark_set));
+	marks = mem_pool_calloc(&fi_mem_pool, 1, sizeof(struct mark_set));
 
 	global_argc = argc;
 	global_argv = argv;
 
-	rc_free = pool_alloc(cmd_save * sizeof(*rc_free));
+	rc_free = mem_pool_alloc(&fi_mem_pool, cmd_save * sizeof(*rc_free));
 	for (i = 0; i < (cmd_save - 1); i++)
 		rc_free[i].next = &rc_free[i + 1];
 	rc_free[cmd_save - 1].next = NULL;
 
-	prepare_packed_git();
 	start_packfile();
 	set_die_routine(die_nicely);
 	set_checkpoint_signal();
@@ -3539,8 +3507,8 @@ int cmd_main(int argc, const char **argv)
 		fprintf(stderr, "Total branches:  %10lu (%10lu loads     )\n", branch_count, branch_load_count);
 		fprintf(stderr, "      marks:     %10" PRIuMAX " (%10" PRIuMAX " unique    )\n", (((uintmax_t)1) << marks->shift) * 1024, marks_set_count);
 		fprintf(stderr, "      atoms:     %10u\n", atom_cnt);
-		fprintf(stderr, "Memory total:    %10" PRIuMAX " KiB\n", (total_allocd + alloc_count*sizeof(struct object_entry))/1024);
-		fprintf(stderr, "       pools:    %10lu KiB\n", (unsigned long)(total_allocd/1024));
+		fprintf(stderr, "Memory total:    %10" PRIuMAX " KiB\n", (tree_entry_allocd + fi_mem_pool.pool_alloc + alloc_count*sizeof(struct object_entry))/1024);
+		fprintf(stderr, "       pools:    %10lu KiB\n", (unsigned long)((tree_entry_allocd + fi_mem_pool.pool_alloc) /1024));
 		fprintf(stderr, "     objects:    %10" PRIuMAX " KiB\n", (alloc_count*sizeof(struct object_entry))/1024);
 		fprintf(stderr, "---------------------------------------------------------------------\n");
 		pack_report();

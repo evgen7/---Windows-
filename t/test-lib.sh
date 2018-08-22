@@ -15,6 +15,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see http://www.gnu.org/licenses/ .
 
+# On Unix/Linux, the path separator is the colon, on other systems it
+# may be different, though. On Windows, for example, it is a semicolon.
+# If the PATH variable contains semicolons, it is pretty safe to assume
+# that the path separator is a semicolon.
+case "$PATH" in
+*\;*) PATH_SEP=\; ;;
+*) PATH_SEP=: ;;
+esac
+
 # Test the binaries we have just built.  The tests are kept in
 # t/ subdirectory and are run in 'trash directory' subdirectory.
 if test -z "$TEST_DIRECTORY"
@@ -49,17 +58,25 @@ export ASAN_OPTIONS
 : ${LSAN_OPTIONS=abort_on_error=1}
 export LSAN_OPTIONS
 
+if test ! -f "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
+then
+	echo >&2 'error: GIT-BUILD-OPTIONS missing (has Git been built?).'
+	exit 1
+fi
+. "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
+export PERL_PATH SHELL_PATH
+
+test -z "$MSVC_DEPS" ||
+PATH="$GIT_BUILD_DIR/$MSVC_DEPS/bin$PATH_SEP$PATH"
+
 ################################################################
 # It appears that people try to run tests without building...
-"$GIT_BUILD_DIR/git" >/dev/null
+test -n "$GIT_TEST_INSTALLED" || "$GIT_BUILD_DIR/git$X" >/dev/null ||
 if test $? != 1
 then
 	echo >&2 'error: you do not seem to have built git yet.'
 	exit 1
 fi
-
-. "$GIT_BUILD_DIR"/GIT-BUILD-OPTIONS
-export PERL_PATH SHELL_PATH
 
 # if --tee was passed, write the output not only to the terminal, but
 # additionally to the file test-results/$BASENAME.out, too.
@@ -80,7 +97,7 @@ done,*)
 	# from any previous runs.
 	>"$GIT_TEST_TEE_OUTPUT_FILE"
 
-	(GIT_TEST_TEE_STARTED=done ${SHELL_PATH} "$0" "$@" 2>&1;
+	(GIT_TEST_TEE_STARTED=done ${TEST_SHELL_PATH} "$0" "$@" 2>&1;
 	 echo $? >"$BASE.exit") | tee -a "$GIT_TEST_TEE_OUTPUT_FILE"
 	test "$(cat "$BASE.exit")" = 0
 	exit
@@ -99,23 +116,19 @@ EDITOR=:
 # /usr/xpg4/bin/sh and /bin/ksh to bail out.  So keep the unsets
 # deriving from the command substitution clustered with the other
 # ones.
-unset VISUAL EMAIL LANGUAGE COLUMNS $("$PERL_PATH" -e '
-	my @env = keys %ENV;
-	my $ok = join("|", qw(
-		TRACE
-		DEBUG
-		TEST
-		.*_TEST
-		PROVE
-		VALGRIND
-		UNZIP
-		PERF_
-		CURL_VERBOSE
-		TRACE_CURL
-	));
-	my @vars = grep(/^GIT_/ && !/^GIT_($ok)/o, @env);
-	print join("\n", @vars);
-')
+unset VISUAL EMAIL LANGUAGE COLUMNS $(env | sed -n \
+	-e '/^GIT_TRACE/d' \
+	-e '/^GIT_DEBUG/d' \
+	-e '/^GIT_TEST/d' \
+	-e '/^GIT_.*_TEST/d' \
+	-e '/^GIT_PROVE/d' \
+	-e '/^GIT_VALGRIND/d' \
+	-e '/^GIT_UNZIP/d' \
+	-e '/^GIT_PERF_/d' \
+	-e '/^GIT_CURL_VERBOSE/d' \
+	-e '/^GIT_TRACE_CURL/d' \
+	-e 's/^\(GIT_[^=]*\)=.*/\1/p')
+unset XDG_CACHE_HOME
 unset XDG_CONFIG_HOME
 unset GITPERLLIB
 GIT_AUTHOR_EMAIL=author@example.com
@@ -183,6 +196,8 @@ _x40="$_x35$_x05"
 # Zero SHA-1
 _z40=0000000000000000000000000000000000000000
 
+OID_REGEX="$_x40"
+ZERO_OID=$_z40
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 EMPTY_BLOB=e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 
@@ -194,7 +209,7 @@ LF='
 # when case-folding filenames
 u200c=$(printf '\342\200\214')
 
-export _x05 _x35 _x40 _z40 LF u200c EMPTY_TREE EMPTY_BLOB
+export _x05 _x35 _x40 _z40 LF u200c EMPTY_TREE EMPTY_BLOB ZERO_OID OID_REGEX
 
 # Each test should start with something like this, after copyright notices:
 #
@@ -263,8 +278,24 @@ do
 		GIT_TEST_CHAIN_LINT=0
 		shift ;;
 	-x)
-		trace=t
-		verbose=t
+		# Some test scripts can't be reliably traced  with '-x',
+		# unless the test is run with a Bash version supporting
+		# BASH_XTRACEFD (introduced in Bash v4.1).  Check whether
+		# this test is marked as such, and ignore '-x' if it
+		# isn't executed with a suitable Bash version.
+		if test -z "$test_untraceable" || {
+		     test -n "$BASH_VERSION" && {
+		       test ${BASH_VERSINFO[0]} -gt 4 || {
+			 test ${BASH_VERSINFO[0]} -eq 4 &&
+			 test ${BASH_VERSINFO[1]} -ge 1
+		       }
+		     }
+		   }
+		then
+			trace=t
+		else
+			echo >&2 "warning: ignoring -x; '$0' is untraceable without BASH_XTRACEFD"
+		fi
 		shift ;;
 	--verbose-log)
 		verbose_log=t
@@ -281,6 +312,11 @@ then
 elif test -n "$valgrind"
 then
 	test -z "$verbose_log" && verbose=t
+fi
+
+if test -n "$trace" && test -z "$verbose_log"
+then
+	verbose=t
 fi
 
 if test -n "$color"
@@ -586,7 +622,9 @@ maybe_setup_valgrind () {
 }
 
 want_trace () {
-	test "$trace" = t && test "$verbose" = t
+	test "$trace" = t && {
+		test "$verbose" = t || test "$verbose_log" = t
+	}
 }
 
 # This is a separate function because some tests use
@@ -601,26 +639,45 @@ test_eval_inner_ () {
 }
 
 test_eval_ () {
-	# We run this block with stderr redirected to avoid extra cruft
-	# during a "-x" trace. Once in "set -x" mode, we cannot prevent
+	# If "-x" tracing is in effect, then we want to avoid polluting stderr
+	# with non-test commands. But once in "set -x" mode, we cannot prevent
 	# the shell from printing the "set +x" to turn it off (nor the saving
 	# of $? before that). But we can make sure that the output goes to
 	# /dev/null.
 	#
-	# The test itself is run with stderr put back to &4 (so either to
-	# /dev/null, or to the original stderr if --verbose was used).
-	{
+	# There are a few subtleties here:
+	#
+	#   - we have to redirect descriptor 4 in addition to 2, to cover
+	#     BASH_XTRACEFD
+	#
+	#   - the actual eval has to come before the redirection block (since
+	#     it needs to see descriptor 4 to set up its stderr)
+	#
+	#   - likewise, any error message we print must be outside the block to
+	#     access descriptor 4
+	#
+	#   - checking $? has to come immediately after the eval, but it must
+	#     be _inside_ the block to avoid polluting the "set -x" output
+	#
+
+	if test -n "$TEST_NO_REDIRECT"
+	then
+		test_eval_inner_ "$@"
+	else
 		test_eval_inner_ "$@" </dev/null >&3 2>&4
+	fi
+	{
 		test_eval_ret_=$?
 		if want_trace
 		then
 			set +x
-			if test "$test_eval_ret_" != 0
-			then
-				say_color error >&4 "error: last command exited with \$?=$test_eval_ret_"
-			fi
 		fi
-	} 2>/dev/null
+	} 2>/dev/null 4>&2
+
+	if test "$test_eval_ret_" != 0 && want_trace
+	then
+		say_color error >&4 "error: last command exited with \$?=$test_eval_ret_"
+	fi
 	return $test_eval_ret_
 }
 
@@ -635,7 +692,8 @@ test_run_ () {
 		trace=
 		# 117 is magic because it is unlikely to match the exit
 		# code of other programs
-		if test "OK-117" != "$(test_eval_ "(exit 117) && $1${LF}${LF}echo OK-\$?" 3>&1)"
+		if $(printf '%s\n' "$1" | sed -f "$GIT_BUILD_DIR/t/chainlint.sed" | grep -q '?![A-Z][A-Z]*?!') ||
+			test "OK-117" != "$(test_eval_ "(exit 117) && $1${LF}${LF}echo OK-\$?" 3>&1)"
 		then
 			error "bug in the test script: broken &&-chain or run-away HERE-DOC: $1"
 		fi
@@ -873,7 +931,7 @@ then
 		done
 	done
 	IFS=$OLDIFS
-	PATH=$GIT_VALGRIND/bin:$PATH
+	PATH=$GIT_VALGRIND/bin$PATH_SEP$PATH
 	GIT_EXEC_PATH=$GIT_VALGRIND/bin
 	export GIT_VALGRIND
 	GIT_VALGRIND_MODE="$valgrind"
@@ -885,7 +943,7 @@ elif test -n "$GIT_TEST_INSTALLED"
 then
 	GIT_EXEC_PATH=$($GIT_TEST_INSTALLED/git --exec-path)  ||
 	error "Cannot run git from $GIT_TEST_INSTALLED."
-	PATH=$GIT_TEST_INSTALLED:$GIT_BUILD_DIR:$PATH
+	PATH=$GIT_TEST_INSTALLED$PATH_SEP$GIT_BUILD_DIR/t/helper$PATH_SEP$PATH
 	GIT_EXEC_PATH=${GIT_TEST_EXEC_PATH:-$GIT_EXEC_PATH}
 else # normal case, use ../bin-wrappers only unless $with_dashes:
 	git_bin_dir="$GIT_BUILD_DIR/bin-wrappers"
@@ -897,11 +955,11 @@ else # normal case, use ../bin-wrappers only unless $with_dashes:
 		fi
 		with_dashes=t
 	fi
-	PATH="$git_bin_dir:$PATH"
+	PATH="$git_bin_dir$PATH_SEP$PATH"
 	GIT_EXEC_PATH=$GIT_BUILD_DIR
 	if test -n "$with_dashes"
 	then
-		PATH="$GIT_BUILD_DIR:$PATH"
+		PATH="$GIT_BUILD_DIR$PATH_SEP$PATH"
 	fi
 fi
 GIT_TEMPLATE_DIR="$GIT_BUILD_DIR"/templates/blt
@@ -919,16 +977,16 @@ then
 	fi
 fi
 
-GITPERLLIB="$GIT_BUILD_DIR"/perl/blib/lib:"$GIT_BUILD_DIR"/perl/blib/arch/auto/Git
+GITPERLLIB="$GIT_BUILD_DIR"/perl/build/lib
 export GITPERLLIB
 test -d "$GIT_BUILD_DIR"/templates/blt || {
 	error "You haven't built things yet, have you?"
 }
 
-if ! test -x "$GIT_BUILD_DIR"/t/helper/test-chmtime
+if ! test -x "$GIT_BUILD_DIR"/t/helper/test-tool
 then
-	echo >&2 'You need to build test-chmtime:'
-	echo >&2 'Run "make t/helper/test-chmtime" in the source (toplevel) directory'
+	echo >&2 'You need to build test-tool:'
+	echo >&2 'Run "make t/helper/test-tool" in the source (toplevel) directory'
 	exit 1
 fi
 
@@ -989,13 +1047,20 @@ yes () {
 uname_s=$(uname -s)
 case $uname_s in
 *MINGW*)
-	# Windows has its own (incompatible) sort and find
-	sort () {
-		/usr/bin/sort "$@"
-	}
-	find () {
-		/usr/bin/find "$@"
-	}
+	if test -x /usr/bin/sort
+	then
+		# Windows has its own (incompatible) sort; override
+		sort () {
+			/usr/bin/sort "$@"
+		}
+	fi
+	if test -x /usr/bin/find
+	then
+		# Windows has its own (incompatible) find; override
+		find () {
+			/usr/bin/find "$@"
+		}
+	fi
 	# git sees Windows-style pwd
 	pwd () {
 		builtin pwd -W
@@ -1007,7 +1072,13 @@ case $uname_s in
 	test_set_prereq NATIVE_CRLF
 	test_set_prereq SED_STRIPS_CR
 	test_set_prereq GREP_STRIPS_CR
-	GIT_TEST_CMP=mingw_test_cmp
+	GIT_TEST_CMP="test-tool cmp"
+	if ! type iconv >/dev/null 2>&1
+	then
+		iconv () {
+			test-tool iconv "$@"
+		}
+	fi
 	;;
 *CYGWIN*)
 	test_set_prereq POSIXPERM
@@ -1031,6 +1102,7 @@ test -n "$USE_LIBPCRE1$USE_LIBPCRE2" && test_set_prereq PCRE
 test -n "$USE_LIBPCRE1" && test_set_prereq LIBPCRE1
 test -n "$USE_LIBPCRE2" && test_set_prereq LIBPCRE2
 test -z "$NO_GETTEXT" && test_set_prereq GETTEXT
+test -z "$STRUCTURED_LOGGING" || test_set_prereq SLOG
 
 # Can we rely on git's output in the C locale?
 if test -n "$GETTEXT_POISON"
@@ -1042,31 +1114,11 @@ else
 	test_set_prereq C_LOCALE_OUTPUT
 fi
 
-# Use this instead of test_cmp to compare files that contain expected and
-# actual output from git commands that can be translated.  When running
-# under GETTEXT_POISON this pretends that the command produced expected
-# results.
-test_i18ncmp () {
-	test -n "$GETTEXT_POISON" || test_cmp "$@"
-}
-
-# Use this instead of "grep expected-string actual" to see if the
-# output from a git command that can be translated either contains an
-# expected string, or does not contain an unwanted one.  When running
-# under GETTEXT_POISON this pretends that the command produced expected
-# results.
-test_i18ngrep () {
-	if test -n "$GETTEXT_POISON"
-	then
-	    : # pretend success
-	elif test "x!" = "x$1"
-	then
-		shift
-		! grep "$@"
-	else
-		grep "$@"
-	fi
-}
+if test -z "$GIT_TEST_CHECK_CACHE_TREE"
+then
+	GIT_TEST_CHECK_CACHE_TREE=true
+	export GIT_TEST_CHECK_CACHE_TREE
+fi
 
 test_lazy_prereq PIPE '
 	# test whether the filesystem supports FIFOs
@@ -1089,17 +1141,26 @@ test_lazy_prereq CASE_INSENSITIVE_FS '
 	test "$(cat CamelCase)" != good
 '
 
+test_lazy_prereq FUNNYNAMES '
+	test_have_prereq !MINGW &&
+	touch -- \
+		"FUNNYNAMES tab	embedded" \
+		"FUNNYNAMES \"quote embedded\"" \
+		"FUNNYNAMES newline
+embedded" 2>/dev/null &&
+	rm -- \
+		"FUNNYNAMES tab	embedded" \
+		"FUNNYNAMES \"quote embedded\"" \
+		"FUNNYNAMES newline
+embedded" 2>/dev/null
+'
+
 test_lazy_prereq UTF8_NFD_TO_NFC '
 	# check whether FS converts nfd unicode to nfc
 	auml=$(printf "\303\244")
 	aumlcdiar=$(printf "\141\314\210")
 	>"$auml" &&
-	case "$(echo *)" in
-	"$aumlcdiar")
-		true ;;
-	*)
-		false ;;
-	esac
+	test -f "$aumlcdiar"
 '
 
 test_lazy_prereq AUTOIDENT '
@@ -1110,6 +1171,10 @@ test_lazy_prereq AUTOIDENT '
 
 test_lazy_prereq EXPENSIVE '
 	test -n "$GIT_TEST_LONG"
+'
+
+test_lazy_prereq EXPENSIVE_ON_WINDOWS '
+	test_have_prereq EXPENSIVE || test_have_prereq !MINGW,!CYGWIN
 '
 
 test_lazy_prereq USR_BIN_TIME '
@@ -1190,5 +1255,16 @@ test_lazy_prereq LONG_IS_64BIT '
 	test 8 -le "$(build_option sizeof-long)"
 '
 
-test_lazy_prereq TIME_IS_64BIT 'test-date is64bit'
-test_lazy_prereq TIME_T_IS_64BIT 'test-date time_t-is64bit'
+test_lazy_prereq TIME_IS_64BIT 'test-tool date is64bit'
+test_lazy_prereq TIME_T_IS_64BIT 'test-tool date time_t-is64bit'
+
+test_lazy_prereq CURL '
+	curl --version
+'
+
+# SHA1 is a test if the hash algorithm in use is SHA-1.  This is both for tests
+# which will not work with other hash algorithms and tests that work but don't
+# test anything meaningful (e.g. special values which cause short collisions).
+test_lazy_prereq SHA1 '
+	test $(git hash-object /dev/null) = e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+'

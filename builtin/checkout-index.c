@@ -157,7 +157,7 @@ int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 	struct option builtin_checkout_index_options[] = {
 		OPT_BOOL('a', "all", &all,
 			N_("check out all files in the index")),
-		OPT__FORCE(&force, N_("force overwrite of existing files")),
+		OPT__FORCE(&force, N_("force overwrite of existing files"), 0),
 		OPT__QUIET(&quiet,
 			N_("no warning for existing files and files not in index")),
 		OPT_BOOL('n', "no-create", &not_new,
@@ -172,7 +172,7 @@ int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 			N_("write the content to temporary files")),
 		OPT_STRING(0, "prefix", &state.base_dir, N_("string"),
 			N_("when creating files, prepend <string>")),
-		{ OPTION_CALLBACK, 0, "stage", NULL, "1-3|all",
+		{ OPTION_CALLBACK, 0, "stage", NULL, "(1|2|3|all)",
 			N_("copy out the files from named stage"),
 			PARSE_OPT_NONEG, option_parse_stage },
 		OPT_END()
@@ -190,6 +190,7 @@ int cmd_checkout_index(int argc, const char **argv, const char *prefix)
 
 	argc = parse_options(argc, argv, prefix, builtin_checkout_index_options,
 			builtin_checkout_index_usage, 0);
+	state.istate = &the_index;
 	state.force = force;
 	state.quiet = quiet;
 	state.not_new = not_new;

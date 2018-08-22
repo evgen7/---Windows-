@@ -6,13 +6,15 @@ test_description='rewrite diff'
 
 test_expect_success setup '
 
-	cat "$TEST_DIRECTORY"/../COPYING >test &&
+	cat "$TEST_DIRECTORY"/diff-lib/COPYING >test &&
 	git add test &&
 	tr \
 	  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" \
 	  "nopqrstuvwxyzabcdefghijklmNOPQRSTUVWXYZABCDEFGHIJKLM" \
-	  <"$TEST_DIRECTORY"/../COPYING >test &&
+	  <"$TEST_DIRECTORY"/diff-lib/COPYING >test &&
 	echo "to be deleted" >test2 &&
+	blob=$(git hash-object test2) &&
+	blob=$(git rev-parse --short $blob) &&
 	git add test2
 
 '
@@ -27,7 +29,7 @@ test_expect_success 'detect rewrite' '
 cat >expect <<EOF
 diff --git a/test2 b/test2
 deleted file mode 100644
-index 4202011..0000000
+index $blob..0000000
 --- a/test2
 +++ /dev/null
 @@ -1 +0,0 @@
@@ -43,7 +45,7 @@ test_expect_success 'show deletion diff without -D' '
 cat >expect <<EOF
 diff --git a/test2 b/test2
 deleted file mode 100644
-index 4202011..0000000
+index $blob..0000000
 EOF
 test_expect_success 'suppress deletion diff with -D' '
 

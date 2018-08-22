@@ -5,6 +5,7 @@
 #include "string-list.h"
 #include "color.h"
 #include "pathspec.h"
+#include "remote.h"
 
 struct worktree;
 
@@ -44,10 +45,11 @@ struct wt_status_change_data {
 	int worktree_status;
 	int index_status;
 	int stagemask;
-	int score;
 	int mode_head, mode_index, mode_worktree;
 	struct object_id oid_head, oid_index;
-	char *head_path;
+	int rename_status;
+	int rename_score;
+	char *rename_source;
 	unsigned dirty_submodule       : 2;
 	unsigned new_submodule_commits : 1;
 };
@@ -86,7 +88,10 @@ struct wt_status {
 	int show_branch;
 	int show_stash;
 	int hints;
-
+	enum ahead_behind_flags ahead_behind_flags;
+	int detect_rename;
+	int rename_score;
+	int rename_limit;
 	enum wt_status_format status_format;
 	unsigned char sha1_commit[GIT_MAX_RAWSZ]; /* when not Initial */
 
@@ -115,9 +120,9 @@ struct wt_status_state {
 	char *branch;
 	char *onto;
 	char *detached_from;
-	unsigned char detached_sha1[20];
-	unsigned char revert_head_sha1[20];
-	unsigned char cherry_pick_head_sha1[20];
+	struct object_id detached_oid;
+	struct object_id revert_head_oid;
+	struct object_id cherry_pick_head_oid;
 };
 
 size_t wt_status_locate_end(const char *s, size_t len);

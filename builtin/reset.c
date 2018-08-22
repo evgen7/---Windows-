@@ -24,10 +24,13 @@
 #include "cache-tree.h"
 #include "submodule.h"
 #include "submodule-config.h"
+#include "strbuf.h"
+#include "quote.h"
 
 static const char * const git_reset_usage[] = {
 	N_("git reset [--mixed | --soft | --hard | --merge | --keep] [-q] [<commit>]"),
 	N_("git reset [-q] [<tree-ish>] [--] <paths>..."),
+	N_("EXPERIMENTAL: git reset [-q] [--stdin [-z]] [<tree-ish>]"),
 	N_("git reset --patch [<tree-ish>] [--] [<paths>...]"),
 	NULL
 };
@@ -39,7 +42,7 @@ static const char *reset_type_names[] = {
 
 static inline int is_merge(void)
 {
-	return !access(git_path_merge_head(), F_OK);
+	return !access(git_path_merge_head(the_repository), F_OK);
 }
 
 static int reset_index(const struct object_id *oid, int reset_type, int quiet)
@@ -106,24 +109,16 @@ out:
 
 static void print_new_head_line(struct commit *commit)
 {
-	const char *hex, *body;
-	const char *msg;
+	struct strbuf buf = STRBUF_INIT;
 
-	hex = find_unique_abbrev(commit->object.oid.hash, DEFAULT_ABBREV);
-	printf(_("HEAD is now at %s"), hex);
-	msg = logmsg_reencode(commit, NULL, get_log_output_encoding());
-	body = strstr(msg, "\n\n");
-	if (body) {
-		const char *eol;
-		size_t len;
-		body = skip_blank_lines(body + 2);
-		eol = strchr(body, '\n');
-		len = eol ? eol - body : strlen(body);
-		printf(" %.*s\n", (int) len, body);
-	}
-	else
-		printf("\n");
-	unuse_commit_buffer(commit, msg);
+	printf(_("HEAD is now at %s"),
+		find_unique_abbrev(&commit->object.oid, DEFAULT_ABBREV));
+
+	pp_commit_easy(CMIT_FMT_ONELINE, commit, &buf);
+	if (buf.len > 0)
+		printf(" %s", buf.buf);
+	putchar('\n');
+	strbuf_release(&buf);
 }
 
 static void update_index_from_diff(struct diff_queue_struct *q,
@@ -142,7 +137,7 @@ static void update_index_from_diff(struct diff_queue_struct *q,
 			continue;
 		}
 
-		ce = make_cache_entry(one->mode, one->oid.hash, one->path,
+		ce = make_cache_entry(&the_index, one->mode, &one->oid, one->path,
 				      0, 0);
 		if (!ce)
 			die(_("make_cache_entry failed for path '%s'"),
@@ -288,7 +283,9 @@ static int git_reset_config(const char *var, const char *value, void *cb)
 int cmd_reset(int argc, const char **argv, const char *prefix)
 {
 	int reset_type = NONE, update_ref_status = 0, quiet = 0;
-	int patch_mode = 0, unborn;
+	int patch_mode = 0, nul_term_line = 0, read_from_stdin = 0, unborn;
+	char **stdin_paths = NULL;
+	int stdin_nr = 0, stdin_alloc = 0;
 	const char *rev;
 	struct object_id oid;
 	struct pathspec pathspec;
@@ -310,6 +307,10 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		OPT_BOOL('p', "patch", &patch_mode, N_("select hunks interactively")),
 		OPT_BOOL('N', "intent-to-add", &intent_to_add,
 				N_("record only the fact that removed paths will be added later")),
+		OPT_BOOL('z', NULL, &nul_term_line,
+			N_("EXPERIMENTAL: paths are separated with NUL character")),
+		OPT_BOOL(0, "stdin", &read_from_stdin,
+				N_("EXPERIMENTAL: read paths from <stdin>")),
 		OPT_END()
 	};
 
@@ -319,15 +320,51 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 						PARSE_OPT_KEEP_DASHDASH);
 	parse_args(&pathspec, argv, prefix, patch_mode, &rev);
 
+	if (read_from_stdin) {
+		strbuf_getline_fn getline_fn = nul_term_line ?
+			strbuf_getline_nul : strbuf_getline_lf;
+		int flags = PATHSPEC_PREFER_FULL;
+		struct strbuf buf = STRBUF_INIT;
+		struct strbuf unquoted = STRBUF_INIT;
+
+		if (patch_mode)
+			die(_("--stdin is incompatible with --patch"));
+
+		if (pathspec.nr)
+			die(_("--stdin is incompatible with path arguments"));
+
+		while (getline_fn(&buf, stdin) != EOF) {
+			if (!nul_term_line && buf.buf[0] == '"') {
+				strbuf_reset(&unquoted);
+				if (unquote_c_style(&unquoted, buf.buf, NULL))
+					die(_("line is badly quoted"));
+				strbuf_swap(&buf, &unquoted);
+			}
+			ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
+			stdin_paths[stdin_nr++] = xstrdup(buf.buf);
+			strbuf_reset(&buf);
+		}
+		strbuf_release(&unquoted);
+		strbuf_release(&buf);
+
+		ALLOC_GROW(stdin_paths, stdin_nr + 1, stdin_alloc);
+		stdin_paths[stdin_nr++] = NULL;
+		flags |= PATHSPEC_LITERAL_PATH;
+		parse_pathspec(&pathspec, 0, flags, prefix,
+			       (const char **)stdin_paths);
+
+	} else if (nul_term_line)
+		die(_("-z requires --stdin"));
+
 	unborn = !strcmp(rev, "HEAD") && get_oid("HEAD", &oid);
 	if (unborn) {
 		/* reset on unborn branch: treat as reset to empty tree */
-		hashcpy(oid.hash, EMPTY_TREE_SHA1_BIN);
+		oidcpy(&oid, the_hash_algo->empty_tree);
 	} else if (!pathspec.nr) {
 		struct commit *commit;
 		if (get_oid_committish(rev, &oid))
 			die(_("Failed to resolve '%s' as a valid revision."), rev);
-		commit = lookup_commit_reference(&oid);
+		commit = lookup_commit_reference(the_repository, &oid);
 		if (!commit)
 			die(_("Could not parse object '%s'."), rev);
 		oidcpy(&oid, &commit->object.oid);
@@ -404,10 +441,16 @@ int cmd_reset(int argc, const char **argv, const char *prefix)
 		update_ref_status = reset_refs(rev, &oid);
 
 		if (reset_type == HARD && !update_ref_status && !quiet)
-			print_new_head_line(lookup_commit_reference(&oid));
+			print_new_head_line(lookup_commit_reference(the_repository, &oid));
 	}
 	if (!pathspec.nr)
 		remove_branch_state();
+
+	if (stdin_paths) {
+		while (stdin_nr)
+			free(stdin_paths[--stdin_nr]);
+		free(stdin_paths);
+	}
 
 	return update_ref_status;
 }

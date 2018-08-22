@@ -97,19 +97,13 @@ void write_fsmonitor_extension(struct strbuf *sb, struct index_state *istate)
 static int query_fsmonitor(int version, uint64_t last_update, struct strbuf *query_result)
 {
 	struct child_process cp = CHILD_PROCESS_INIT;
-	char ver[64];
-	char date[64];
-	const char *argv[4];
 
-	if (!(argv[0] = core_fsmonitor))
+	if (!core_fsmonitor)
 		return -1;
 
-	snprintf(ver, sizeof(version), "%d", version);
-	snprintf(date, sizeof(date), "%" PRIuMAX, (uintmax_t)last_update);
-	argv[1] = ver;
-	argv[2] = date;
-	argv[3] = NULL;
-	cp.argv = argv;
+	argv_array_push(&cp.args, core_fsmonitor);
+	argv_array_pushf(&cp.args, "%d", version);
+	argv_array_pushf(&cp.args, "%" PRIuMAX, (uintmax_t)last_update);
 	cp.use_shell = 1;
 	cp.dir = get_git_work_tree();
 
@@ -130,7 +124,7 @@ static void fsmonitor_refresh_callback(struct index_state *istate, const char *n
 	 * as it could be a new untracked file.
 	 */
 	trace_printf_key(&trace_fsmonitor, "fsmonitor_refresh_callback '%s'", name);
-	untracked_cache_invalidate_path(istate, name);
+	untracked_cache_invalidate_path(istate, name, 0);
 }
 
 void refresh_fsmonitor(struct index_state *istate)
@@ -185,6 +179,9 @@ void refresh_fsmonitor(struct index_state *istate)
 		for (i = 0; i < istate->cache_nr; i++)
 			istate->cache[i]->ce_flags &= ~CE_FSMONITOR_VALID;
 
+		/* If we're going to check every file, ensure we save the results */
+		istate->cache_changed |= FSMONITOR_CHANGED;
+
 		if (istate->untracked)
 			istate->untracked->use_fsmonitor = 0;
 	}
@@ -193,6 +190,24 @@ void refresh_fsmonitor(struct index_state *istate)
 	/* Now that we've updated istate, save the last_update time */
 	istate->fsmonitor_last_update = last_update;
 }
+
+void mark_fsmonitor_valid(struct cache_entry *ce)
+{
+	if (core_fsmonitor) {
+		ce->ce_flags |= CE_FSMONITOR_VALID;
+		trace_printf_key(&trace_fsmonitor, "mark_fsmonitor_clean '%s'", ce->name);
+	}
+}
+
+void mark_fsmonitor_invalid(struct index_state *istate, struct cache_entry *ce)
+{
+	if (core_fsmonitor) {
+		ce->ce_flags &= ~CE_FSMONITOR_VALID;
+		untracked_cache_invalidate_path(istate, ce->name, 1);
+		trace_printf_key(&trace_fsmonitor, "mark_fsmonitor_invalid '%s'", ce->name);
+	}
+}
+
 
 void add_fsmonitor(struct index_state *istate)
 {

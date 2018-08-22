@@ -23,7 +23,7 @@ struct ref_dir *get_ref_dir(struct ref_entry *entry)
 	dir = &entry->u.subdir;
 	if (entry->flag & REF_INCOMPLETE) {
 		if (!dir->cache->fill_ref_dir)
-			die("BUG: incomplete ref_store without fill_ref_dir function");
+			BUG("incomplete ref_store without fill_ref_dir function");
 
 		dir->cache->fill_ref_dir(dir->cache->ref_store, dir, entry->name);
 		entry->flag &= ~REF_INCOMPLETE;
@@ -238,10 +238,8 @@ int remove_entry_from_dir(struct ref_dir *dir, const char *refname)
 		return -1;
 	entry = dir->entries[entry_index];
 
-	memmove(&dir->entries[entry_index],
-		&dir->entries[entry_index + 1],
-		(dir->nr - entry_index - 1) * sizeof(*dir->entries)
-		);
+	MOVE_ARRAY(&dir->entries[entry_index],
+		   &dir->entries[entry_index + 1], dir->nr - entry_index - 1);
 	dir->nr--;
 	if (dir->sorted > entry_index)
 		dir->sorted--;

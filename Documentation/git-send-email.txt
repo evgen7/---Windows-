@@ -9,7 +9,7 @@ git-send-email - Send a collection of patches as emails
 SYNOPSIS
 --------
 [verse]
-'git send-email' [options] <file|directory|rev-list options>...
+'git send-email' [<options>] <file|directory|rev-list options>...
 'git send-email' --dump-aliases
 
 
@@ -84,6 +84,11 @@ See the CONFIGURATION section for `sendemail.multiEdit`.
 	the value of GIT_AUTHOR_IDENT, or GIT_COMMITTER_IDENT if that is not
 	set, as returned by "git var -l".
 
+--reply-to=<address>::
+	Specify the address where replies from recipients should go to.
+	Use this if replies to messages should go to another address than what
+	is specified with the --from parameter.
+
 --in-reply-to=<identifier>::
 	Make the first mail (or all the mails with `--no-thread`) appear as a
 	reply to the given Message-Id, which avoids breaking threads to
@@ -132,15 +137,17 @@ Note that no attempts whatsoever are made to validate the encoding.
 	Specify encoding of compose message. Default is the value of the
 	'sendemail.composeencoding'; if that is unspecified, UTF-8 is assumed.
 
---transfer-encoding=(7bit|8bit|quoted-printable|base64)::
+--transfer-encoding=(7bit|8bit|quoted-printable|base64|auto)::
 	Specify the transfer encoding to be used to send the message over SMTP.
 	7bit will fail upon encountering a non-ASCII message.  quoted-printable
 	can be useful when the repository contains files that contain carriage
 	returns, but makes the raw patch email file (as saved from a MUA) much
 	harder to inspect manually.  base64 is even more fool proof, but also
-	even more opaque.  Default is the value of the `sendemail.transferEncoding`
-	configuration value; if that is unspecified, git will use 8bit and not
-	add a Content-Transfer-Encoding header.
+	even more opaque.  auto will use 8bit when possible, and quoted-printable
+	otherwise.
++
+Default is the value of the `sendemail.transferEncoding` configuration
+value; if that is unspecified, default to `auto`.
 
 --xmailer::
 --no-xmailer::
@@ -250,7 +257,7 @@ must be used for each option.
 
 --batch-size=<num>::
 	Some email servers (e.g. smtp.163.com) limit the number emails to be
-	sent per session (connection) and this will lead to a faliure when
+	sent per session (connection) and this will lead to a failure when
 	sending many messages.  With this option, send-email will disconnect after
 	sending $<num> messages and wait for a few seconds (see --relogin-delay)
 	and reconnect, to work around such a limit.  You may want to
@@ -393,8 +400,11 @@ have been specified, in which case default to 'compose'.
 +
 --
 		*	Invoke the sendemail-validate hook if present (see linkgit:githooks[5]).
-		*	Warn of patches that contain lines longer than 998 characters; this
-			is due to SMTP limits as described by http://www.ietf.org/rfc/rfc2821.txt.
+		*	Warn of patches that contain lines longer than
+			998 characters unless a suitable transfer encoding
+			('auto', 'base64', or 'quoted-printable') is used;
+			this is due to SMTP limits as described by
+			http://www.ietf.org/rfc/rfc5322.txt.
 --
 +
 Default is the value of `sendemail.validate`; if this is not set,
@@ -453,8 +463,8 @@ sendemail.confirm::
 	one of 'always', 'never', 'cc', 'compose', or 'auto'. See `--confirm`
 	in the previous section for the meaning of these values.
 
-EXAMPLE
--------
+EXAMPLES
+--------
 Use gmail as the smtp server
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 To use 'git send-email' to send your patches through the GMail SMTP server,
@@ -468,16 +478,7 @@ edit ~/.gitconfig to specify your account settings:
 
 If you have multifactor authentication setup on your gmail account, you will
 need to generate an app-specific password for use with 'git send-email'. Visit
-https://security.google.com/settings/security/apppasswords to setup an
-app-specific password.  Once setup, you can store it with the credentials
-helper:
-
-	$ git credential fill
-	protocol=smtp
-	host=smtp.gmail.com
-	username=youname@gmail.com
-	password=app-password
-
+https://security.google.com/settings/security/apppasswords to create it.
 
 Once your commits are ready to be sent to the mailing list, run the
 following commands:
@@ -485,6 +486,11 @@ following commands:
 	$ git format-patch --cover-letter -M origin/master -o outgoing/
 	$ edit outgoing/0000-*
 	$ git send-email outgoing/*
+
+The first time you run it, you will be prompted for your credentials.  Enter the
+app-specific or your regular password as appropriate.  If you have credential
+helper configured (see linkgit:git-credential[1]), the password will be saved in
+the credential store so you won't have to type it the next time.
 
 Note: the following perl modules are required
       Net::SMTP::SSL, MIME::Base64 and Authen::SASL

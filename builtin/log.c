@@ -7,6 +7,7 @@
 #include "cache.h"
 #include "config.h"
 #include "refs.h"
+#include "object-store.h"
 #include "color.h"
 #include "commit.h"
 #include "diff.h"
@@ -28,6 +29,13 @@
 #include "mailmap.h"
 #include "gpg-interface.h"
 #include "progress.h"
+#include "commit-slab.h"
+#include "repository.h"
+#include "commit-reach.h"
+#include "interdiff.h"
+#include "range-diff.h"
+
+#define MAIL_DEFAULT_WRAP 72
 
 /* Set a default date-time format for git log ("log.date" config variable) */
 static const char *default_date_mode = NULL;
@@ -146,6 +154,7 @@ static void cmd_log_init_finish(int argc, const char **argv, const char *prefix,
 	static struct string_list decorate_refs_include = STRING_LIST_INIT_NODUP;
 	struct decoration_filter decoration_filter = {&decorate_refs_include,
 						      &decorate_refs_exclude};
+	static struct revision_sources revision_sources;
 
 	const struct option builtin_log_options[] = {
 		OPT__QUIET(&quiet, N_("suppress diff output")),
@@ -188,12 +197,14 @@ static void cmd_log_init_finish(int argc, const char **argv, const char *prefix,
 	if (rev->show_notes)
 		init_display_notes(&rev->notes_opt);
 
-	if (rev->diffopt.pickaxe || rev->diffopt.filter ||
-	    rev->diffopt.flags.follow_renames)
+	if ((rev->diffopt.pickaxe_opts & DIFF_PICKAXE_KINDS_MASK) ||
+	    rev->diffopt.filter || rev->diffopt.flags.follow_renames)
 		rev->always_show_header = 0;
 
-	if (source)
-		rev->show_source = 1;
+	if (source) {
+		init_revision_sources(&revision_sources);
+		rev->sources = &revision_sources;
+	}
 
 	if (mailmap) {
 		rev->mailmap = xcalloc(1, sizeof(struct string_list));
@@ -516,7 +527,7 @@ static int show_tag_object(const struct object_id *oid, struct rev_info *rev)
 {
 	unsigned long size;
 	enum object_type type;
-	char *buf = read_sha1_file(oid->hash, &type, &size);
+	char *buf = read_object_file(oid, &type, &size);
 	int offset = 0;
 
 	if (!buf)
@@ -539,7 +550,7 @@ static int show_tag_object(const struct object_id *oid, struct rev_info *rev)
 	return 0;
 }
 
-static int show_tree_object(const unsigned char *sha1,
+static int show_tree_object(const struct object_id *oid,
 		struct strbuf *base,
 		const char *pathname, unsigned mode, int stage, void *context)
 {
@@ -612,7 +623,7 @@ int cmd_show(int argc, const char **argv, const char *prefix)
 			rev.shown_one = 1;
 			if (ret)
 				break;
-			o = parse_object(&t->tagged->oid);
+			o = parse_object(the_repository, &t->tagged->oid);
 			if (!o)
 				ret = error(_("Could not read object %s"),
 					    oid_to_hex(&t->tagged->oid));
@@ -899,8 +910,8 @@ static void get_patch_ids(struct rev_info *rev, struct patch_ids *ids)
 	o2 = rev->pending.objects[1].item;
 	flags1 = o1->flags;
 	flags2 = o2->flags;
-	c1 = lookup_commit_reference(&o1->oid);
-	c2 = lookup_commit_reference(&o2->oid);
+	c1 = lookup_commit_reference(the_repository, &o1->oid);
+	c2 = lookup_commit_reference(the_repository, &o2->oid);
 
 	if ((flags1 & UNINTERESTING) == (flags2 & UNINTERESTING))
 		die(_("Not a range."));
@@ -990,6 +1001,26 @@ static char *find_branch_name(struct rev_info *rev)
 	return branch;
 }
 
+static void show_diffstat(struct rev_info *rev,
+			  struct commit *origin, struct commit *head)
+{
+	struct diff_options opts;
+
+	memcpy(&opts, &rev->diffopt, sizeof(opts));
+	opts.output_format = DIFF_FORMAT_SUMMARY | DIFF_FORMAT_DIFFSTAT;
+	opts.stat_width = MAIL_DEFAULT_WRAP;
+
+	diff_setup_done(&opts);
+
+	diff_tree_oid(get_commit_tree_oid(origin),
+		      get_commit_tree_oid(head),
+		      "", &opts);
+	diffcore_std(&opts);
+	diff_flush(&opts);
+
+	fprintf(rev->diffopt.file, "\n");
+}
+
 static void make_cover_letter(struct rev_info *rev, int use_stdout,
 			      struct commit *origin,
 			      int nr, struct commit **list,
@@ -1003,7 +1034,6 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 	struct strbuf sb = STRBUF_INIT;
 	int i;
 	const char *encoding = "UTF-8";
-	struct diff_options opts;
 	int need_8bit_cte = 0;
 	struct pretty_print_context pp = {0};
 	struct commit *head = list[0];
@@ -1017,7 +1047,7 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 	    open_next_file(NULL, rev->numbered_files ? NULL : "cover-letter", rev, quiet))
 		return;
 
-	log_write_email_headers(rev, head, &pp.after_subject, &need_8bit_cte);
+	log_write_email_headers(rev, head, &pp.after_subject, &need_8bit_cte, 0);
 
 	for (i = 0; !need_8bit_cte && i < nr; i++) {
 		const char *buf = get_commit_buffer(list[i], NULL);
@@ -1044,7 +1074,7 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 
 	shortlog_init(&log);
 	log.wrap_lines = 1;
-	log.wrap = 72;
+	log.wrap = MAIL_DEFAULT_WRAP;
 	log.in1 = 2;
 	log.in2 = 4;
 	log.file = rev->diffopt.file;
@@ -1053,24 +1083,20 @@ static void make_cover_letter(struct rev_info *rev, int use_stdout,
 
 	shortlog_output(&log);
 
-	/*
-	 * We can only do diffstat with a unique reference point
-	 */
-	if (!origin)
-		return;
+	/* We can only do diffstat with a unique reference point */
+	if (origin)
+		show_diffstat(rev, origin, head);
 
-	memcpy(&opts, &rev->diffopt, sizeof(opts));
-	opts.output_format = DIFF_FORMAT_SUMMARY | DIFF_FORMAT_DIFFSTAT;
+	if (rev->idiff_oid1) {
+		fprintf_ln(rev->diffopt.file, "%s", rev->idiff_title);
+		show_interdiff(rev, 0);
+	}
 
-	diff_setup_done(&opts);
-
-	diff_tree_oid(&origin->tree->object.oid,
-		      &head->tree->object.oid,
-		      "", &opts);
-	diffcore_std(&opts);
-	diff_flush(&opts);
-
-	fprintf(rev->diffopt.file, "\n");
+	if (rev->rdiff1) {
+		fprintf_ln(rev->diffopt.file, "%s", rev->rdiff_title);
+		show_range_diff(rev->rdiff1, rev->rdiff2,
+				rev->creation_factor, 1, &rev->diffopt);
+	}
 }
 
 static const char *clean_message_id(const char *msg_id)
@@ -1334,6 +1360,8 @@ static struct commit *get_base_commit(const char *base_commit,
 	return base;
 }
 
+define_commit_slab(commit_base, int);
+
 static void prepare_bases(struct base_tree_info *bases,
 			  struct commit *base,
 			  struct commit **list,
@@ -1342,11 +1370,13 @@ static void prepare_bases(struct base_tree_info *bases,
 	struct commit *commit;
 	struct rev_info revs;
 	struct diff_options diffopt;
+	struct commit_base commit_base;
 	int i;
 
 	if (!base)
 		return;
 
+	init_commit_base(&commit_base);
 	diff_setup(&diffopt);
 	diffopt.flags.recursive = 1;
 	diff_setup_done(&diffopt);
@@ -1359,7 +1389,7 @@ static void prepare_bases(struct base_tree_info *bases,
 	for (i = 0; i < total; i++) {
 		list[i]->object.flags &= ~UNINTERESTING;
 		add_pending_object(&revs, &list[i]->object, "rev_list");
-		list[i]->util = (void *)1;
+		*commit_base_at(&commit_base, list[i]) = 1;
 	}
 	base->object.flags |= UNINTERESTING;
 	add_pending_object(&revs, &base->object, "base");
@@ -1373,7 +1403,7 @@ static void prepare_bases(struct base_tree_info *bases,
 	while ((commit = get_revision(&revs)) != NULL) {
 		struct object_id oid;
 		struct object_id *patch_id;
-		if (commit->util)
+		if (*commit_base_at(&commit_base, commit))
 			continue;
 		if (commit_patch_id(commit, &diffopt, &oid, 0))
 			die(_("cannot get patch id"));
@@ -1382,6 +1412,7 @@ static void prepare_bases(struct base_tree_info *bases,
 		oidcpy(patch_id, &oid);
 		bases->nr_patch_id++;
 	}
+	clear_commit_base(&commit_base);
 }
 
 static void print_bases(struct base_tree_info *bases, FILE *file)
@@ -1403,6 +1434,36 @@ static void print_bases(struct base_tree_info *bases, FILE *file)
 	bases->nr_patch_id = 0;
 	bases->alloc_patch_id = 0;
 	oidclr(&bases->base_commit);
+}
+
+static const char *diff_title(struct strbuf *sb, int reroll_count,
+		       const char *generic, const char *rerolled)
+{
+	if (reroll_count <= 0)
+		strbuf_addstr(sb, generic);
+	else /* RFC may be v0, so allow -v1 to diff against v0 */
+		strbuf_addf(sb, rerolled, reroll_count - 1);
+	return sb->buf;
+}
+
+static void infer_range_diff_ranges(struct strbuf *r1,
+				    struct strbuf *r2,
+				    const char *prev,
+				    struct commit *origin,
+				    struct commit *head)
+{
+	const char *head_oid = oid_to_hex(&head->object.oid);
+
+	if (!strstr(prev, "..")) {
+		strbuf_addf(r1, "%s..%s", head_oid, prev);
+		strbuf_addf(r2, "%s..%s", prev, head_oid);
+	} else if (!origin) {
+		die(_("failed to infer range-diff ranges"));
+	} else {
+		strbuf_addstr(r1, prev);
+		strbuf_addf(r2, "%s..%s",
+			    oid_to_hex(&origin->object.oid), head_oid);
+	}
 }
 
 int cmd_format_patch(int argc, const char **argv, const char *prefix)
@@ -1432,6 +1493,13 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	struct base_tree_info bases;
 	int show_progress = 0;
 	struct progress *progress = NULL;
+	struct oid_array idiff_prev = OID_ARRAY_INIT;
+	struct strbuf idiff_title = STRBUF_INIT;
+	const char *rdiff_prev = NULL;
+	struct strbuf rdiff1 = STRBUF_INIT;
+	struct strbuf rdiff2 = STRBUF_INIT;
+	struct strbuf rdiff_title = STRBUF_INIT;
+	int creation_factor = -1;
 
 	const struct option builtin_format_patch_options[] = {
 		{ OPTION_CALLBACK, 'n', "numbered", &numbered, NULL,
@@ -1471,9 +1539,9 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			 N_("output all-zero hash in From header")),
 		OPT_BOOL(0, "ignore-if-in-upstream", &ignore_if_in_upstream,
 			 N_("don't include a patch matching a commit upstream")),
-		{ OPTION_SET_INT, 'p', "no-stat", &use_patch_format, NULL,
-		  N_("show patch format instead of default (patch + stat)"),
-		  PARSE_OPT_NONEG | PARSE_OPT_NOARG, NULL, 1},
+		OPT_SET_INT_F('p', "no-stat", &use_patch_format,
+			      N_("show patch format instead of default (patch + stat)"),
+			      1, PARSE_OPT_NONEG),
 		OPT_GROUP(N_("Messaging")),
 		{ OPTION_CALLBACK, 0, "add-header", NULL, N_("header"),
 			    N_("add email header"), 0, header_callback },
@@ -1505,6 +1573,13 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		OPT__QUIET(&quiet, N_("don't print the patch filenames")),
 		OPT_BOOL(0, "progress", &show_progress,
 			 N_("show progress while generating patches")),
+		OPT_CALLBACK(0, "interdiff", &idiff_prev, N_("rev"),
+			     N_("show changes against <rev> in cover letter or single patch"),
+			     parse_opt_object_name),
+		OPT_STRING(0, "range-diff", &rdiff_prev, N_("refspec"),
+			   N_("show changes against <refspec> in cover letter or single patch")),
+		OPT_INTEGER(0, "creation-factor", &creation_factor,
+			    N_("percentage by which creation is weighted")),
 		OPT_END()
 	};
 
@@ -1594,14 +1669,14 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		numbered = 0;
 
 	if (numbered && keep_subject)
-		die (_("-n and -k are mutually exclusive."));
+		die(_("-n and -k are mutually exclusive"));
 	if (keep_subject && subject_prefix)
-		die (_("--subject-prefix/--rfc and -k are mutually exclusive."));
+		die(_("--subject-prefix/--rfc and -k are mutually exclusive"));
 	rev.preserve_subject = keep_subject;
 
 	argc = setup_revisions(argc, argv, &rev, &s_r_opt);
 	if (argc > 1)
-		die (_("unrecognized argument: %s"), argv[1]);
+		die(_("unrecognized argument: %s"), argv[1]);
 
 	if (rev.diffopt.output_format & DIFF_FORMAT_NAME)
 		die(_("--name-only does not make sense"));
@@ -1614,6 +1689,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		(!rev.diffopt.output_format ||
 		 rev.diffopt.output_format == DIFF_FORMAT_PATCH))
 		rev.diffopt.output_format = DIFF_FORMAT_DIFFSTAT | DIFF_FORMAT_SUMMARY;
+	if (!rev.diffopt.stat_width)
+		rev.diffopt.stat_width = MAIL_DEFAULT_WRAP;
 
 	/* Always generate a patch */
 	rev.diffopt.output_format |= DIFF_FORMAT_PATCH;
@@ -1688,7 +1765,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		if (rev.pending.nr == 2) {
 			struct object_array_entry *o = rev.pending.objects;
 			if (oidcmp(&o[0].item->oid, &o[1].item->oid) == 0)
-				return 0;
+				goto done;
 		}
 		get_patch_ids(&rev, &ids);
 	}
@@ -1712,7 +1789,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	}
 	if (nr == 0)
 		/* nothing to do */
-		return 0;
+		goto done;
 	total = nr;
 	if (cover_letter == -1) {
 		if (config_cover_letter == COVER_AUTO)
@@ -1724,6 +1801,35 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		numbered = 1;
 	if (numbered)
 		rev.total = total + start_number - 1;
+
+	if (idiff_prev.nr) {
+		if (!cover_letter && total != 1)
+			die(_("--interdiff requires --cover-letter or single patch"));
+		rev.idiff_oid1 = &idiff_prev.oid[idiff_prev.nr - 1];
+		rev.idiff_oid2 = get_commit_tree_oid(list[0]);
+		rev.idiff_title = diff_title(&idiff_title, reroll_count,
+					     _("Interdiff:"),
+					     _("Interdiff against v%d:"));
+	}
+
+	if (creation_factor < 0)
+		creation_factor = RANGE_DIFF_CREATION_FACTOR_DEFAULT;
+	else if (!rdiff_prev)
+		die(_("--creation-factor requires --range-diff"));
+
+	if (rdiff_prev) {
+		if (!cover_letter && total != 1)
+			die(_("--range-diff requires --cover-letter or single patch"));
+
+		infer_range_diff_ranges(&rdiff1, &rdiff2, rdiff_prev,
+					origin, list[0]);
+		rev.rdiff1 = rdiff1.buf;
+		rev.rdiff2 = rdiff2.buf;
+		rev.creation_factor = creation_factor;
+		rev.rdiff_title = diff_title(&rdiff_title, reroll_count,
+					     _("Range-diff:"),
+					     _("Range-diff against v%d:"));
+	}
 
 	if (!signature) {
 		; /* --no-signature inhibits all signatures */
@@ -1741,6 +1847,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	if (base_commit || base_auto) {
 		struct commit *base = get_base_commit(base_commit, list, nr);
 		reset_revision_walk();
+		clear_object_flags(UNINTERESTING);
 		prepare_bases(&bases, base, list, nr);
 	}
 
@@ -1761,6 +1868,9 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 		print_signature(rev.diffopt.file);
 		total++;
 		start_number--;
+		/* interdiff/range-diff in cover-letter; omit from patches */
+		rev.idiff_oid1 = NULL;
+		rev.rdiff1 = NULL;
 	}
 	rev.add_signoff = do_signoff;
 
@@ -1841,6 +1951,13 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	string_list_clear(&extra_hdr, 0);
 	if (ignore_if_in_upstream)
 		free_patch_ids(&ids);
+
+done:
+	oid_array_clear(&idiff_prev);
+	strbuf_release(&idiff_title);
+	strbuf_release(&rdiff1);
+	strbuf_release(&rdiff2);
+	strbuf_release(&rdiff_title);
 	return 0;
 }
 
@@ -1848,7 +1965,8 @@ static int add_pending_commit(const char *arg, struct rev_info *revs, int flags)
 {
 	struct object_id oid;
 	if (get_oid(arg, &oid) == 0) {
-		struct commit *commit = lookup_commit_reference(&oid);
+		struct commit *commit = lookup_commit_reference(the_repository,
+								&oid);
 		if (commit) {
 			commit->object.flags |= flags;
 			add_pending_object(revs, &commit->object, arg);
@@ -1868,12 +1986,12 @@ static void print_commit(char sign, struct commit *commit, int verbose,
 {
 	if (!verbose) {
 		fprintf(file, "%c %s\n", sign,
-		       find_unique_abbrev(commit->object.oid.hash, abbrev));
+		       find_unique_abbrev(&commit->object.oid, abbrev));
 	} else {
 		struct strbuf buf = STRBUF_INIT;
 		pp_commit_easy(CMIT_FMT_ONELINE, commit, &buf);
 		fprintf(file, "%c %s %s\n", sign,
-		       find_unique_abbrev(commit->object.oid.hash, abbrev),
+		       find_unique_abbrev(&commit->object.oid, abbrev),
 		       buf.buf);
 		strbuf_release(&buf);
 	}

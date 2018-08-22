@@ -24,7 +24,7 @@
 #include "cache.h"
 #include "config.h"
 #include "credential.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "run-command.h"
 #include "parse-options.h"
 #ifdef NO_OPENSSL
@@ -511,7 +511,7 @@ static int nfsnprintf(char *buf, int blen, const char *fmt, ...)
 
 	va_start(va, fmt);
 	if (blen <= 0 || (unsigned)(ret = vsnprintf(buf, blen, fmt, va)) >= (unsigned)blen)
-		die("BUG: buffer too small. Please report a bug.");
+		BUG("buffer too small. Please report a bug.");
 	va_end(va);
 	return ret;
 }
@@ -1189,11 +1189,11 @@ bail:
  */
 static void lf_to_crlf(struct strbuf *msg)
 {
-	char *new;
+	char *new_msg;
 	size_t i, j;
 	char lastc;
 
-	/* First pass: tally, in j, the size of the new string: */
+	/* First pass: tally, in j, the size of the new_msg string: */
 	for (i = j = 0, lastc = '\0'; i < msg->len; i++) {
 		if (msg->buf[i] == '\n' && lastc != '\r')
 			j++; /* a CR will need to be added here */
@@ -1201,18 +1201,18 @@ static void lf_to_crlf(struct strbuf *msg)
 		j++;
 	}
 
-	new = xmallocz(j);
+	new_msg = xmallocz(j);
 
 	/*
-	 * Second pass: write the new string.  Note that this loop is
+	 * Second pass: write the new_msg string.  Note that this loop is
 	 * otherwise identical to the first pass.
 	 */
 	for (i = j = 0, lastc = '\0'; i < msg->len; i++) {
 		if (msg->buf[i] == '\n' && lastc != '\r')
-			new[j++] = '\r';
-		lastc = new[j++] = msg->buf[i];
+			new_msg[j++] = '\r';
+		lastc = new_msg[j++] = msg->buf[i];
 	}
-	strbuf_attach(msg, new, j, j + 1);
+	strbuf_attach(msg, new_msg, j, j + 1);
 }
 
 /*

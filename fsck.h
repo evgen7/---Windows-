@@ -6,6 +6,7 @@
 #define FSCK_IGNORE 3
 
 struct fsck_options;
+struct object;
 
 void fsck_set_msg_type(struct fsck_options *options,
 		const char *msg_id, const char *msg_type);
@@ -52,5 +53,12 @@ int fsck_walk(struct object *obj, void *data, struct fsck_options *options);
 /* If NULL is passed for data, we assume the object is local and read it. */
 int fsck_object(struct object *obj, void *data, unsigned long size,
 	struct fsck_options *options);
+
+/*
+ * Some fsck checks are context-dependent, and may end up queued; run this
+ * after completing all fsck_object() calls in order to resolve any remaining
+ * checks.
+ */
+int fsck_finish(struct fsck_options *options);
 
 #endif

@@ -97,6 +97,7 @@ configuration variable documented in linkgit:git-config[1].
 	(and suppresses the output of submodule summaries when the config option
 	`status.submoduleSummary` is set).
 
+-i[<mode>]::
 --ignored[=<mode>]::
 	Show ignored files as well.
 +
@@ -106,14 +107,14 @@ It is optional: it defaults to 'traditional'.
 The possible options are:
 +
 	- 'traditional' - Shows ignored files and directories, unless
-			  --untracked-files=all is specifed, in which case
+			  --untracked-files=all is specified, in which case
 			  individual files in ignored directories are
 			  displayed.
 	- 'no'	        - Show no ignored files.
 	- 'matching'    - Shows ignored files and directories matching an
 			  ignore pattern.
 +
-When 'matching' mode is specified, paths that explicity match an
+When 'matching' mode is specified, paths that explicitly match an
 ignored pattern are shown. If a directory matches an ignore pattern,
 then it is shown, but not paths contained in the ignored directory. If
 a directory does not match an ignore pattern, but all contents are
@@ -129,6 +130,28 @@ ignored, then the directory is not shown, but all contents are shown.
 	column.status for option syntax.`--column` and `--no-column`
 	without options are equivalent to 'always' and 'never'
 	respectively.
+
+--ahead-behind::
+--no-ahead-behind::
+	Display or do not display detailed ahead/behind counts for the
+	branch relative to its upstream branch.  Defaults to true.
+
+--renames::
+--no-renames::
+	Turn on/off rename detection regardless of user configuration.
+	See also linkgit:git-diff[1] `--no-renames`.
+
+--find-renames[=<n>]::
+	Turn on rename detection, optionally setting the similarity
+	threshold.
+	See also linkgit:git-diff[1] `--find-renames`.
+
+--no-lock-index::
+--lock-index::
+	(DEPRECATED: use --no-optional-locks instead)
+	Specifies whether `git status` should try to lock the index and
+	update it afterwards if any changes were detected. Defaults to
+	`--lock-index`.
 
 <pathspec>...::
 	See the 'pathspec' entry in linkgit:gitglossary[7].
@@ -149,14 +172,15 @@ the status.relativePaths config option below.
 Short Format
 ~~~~~~~~~~~~
 
-In the short-format, the status of each path is shown as
+In the short-format, the status of each path is shown as one of these
+forms
 
-	XY PATH1 -> PATH2
+	XY PATH
+	XY ORIG_PATH -> PATH
 
-where `PATH1` is the path in the `HEAD`, and the " `-> PATH2`" part is
-shown only when `PATH1` corresponds to a different path in the
-index/worktree (i.e. the file is renamed). The `XY` is a two-letter
-status code.
+where `ORIG_PATH` is where the renamed/copied contents came
+from. `ORIG_PATH` is only shown when the entry is renamed or
+copied. The `XY` is a two-letter status code.
 
 The fields (including the `->`) are separated from each other by a
 single space. If a filename contains whitespace or other nonprintable
@@ -183,15 +207,17 @@ in which case `XY` are `!!`.
 
     X          Y     Meaning
     -------------------------------------------------
-              [MD]   not updated
+	     [AMD]   not updated
     M        [ MD]   updated in index
     A        [ MD]   added to index
-    D         [ M]   deleted from index
+    D                deleted from index
     R        [ MD]   renamed in index
     C        [ MD]   copied in index
     [MARC]           index and work tree matches
     [ MARC]     M    work tree changed since index
     [ MARC]     D    deleted in work tree
+    [ D]        R    renamed in work tree
+    [ D]        C    copied in work tree
     -------------------------------------------------
     D           D    unmerged, both deleted
     A           U    unmerged, added by us
@@ -309,13 +335,13 @@ Renamed or copied entries have the following format:
 		of similarity between the source and target of the
 		move or copy). For example "R100" or "C75".
     <path>      The pathname.  In a renamed/copied entry, this
-		is the path in the index and in the working tree.
+		is the target path.
     <sep>       When the `-z` option is used, the 2 pathnames are separated
 		with a NUL (ASCII 0x00) byte; otherwise, a tab (ASCII 0x09)
 		byte separates them.
-    <origPath>  The pathname in the commit at HEAD.  This is only
-		present in a renamed/copied entry, and tells
-		where the renamed/copied contents came from.
+    <origPath>  The pathname in the commit at HEAD or in the index.
+		This is only present in a renamed/copied entry, and
+		tells where the renamed/copied contents came from.
     --------------------------------------------------------
 
 Unmerged entries have the following format; the first character is

@@ -6,7 +6,7 @@
 test_description='Test git update-ref and basic ref logging'
 . ./test-lib.sh
 
-Z=$_z40
+Z=$ZERO_OID
 
 m=refs/heads/master
 n_dir=refs/heads/gu
@@ -390,7 +390,7 @@ test_expect_success 'Query "master@{2005-05-26 23:33:01}" (middle of history wit
 	test_when_finished "rm -f o e" &&
 	git rev-parse --verify "master@{2005-05-26 23:33:01}" >o 2>e &&
 	test $B = $(cat o) &&
-	test "warning: Log for ref $m has gap after $gd." = "$(cat e)"
+	test_i18ngrep -F "warning: log for ref $m has gap after $gd" e
 '
 test_expect_success 'Query "master@{2005-05-26 23:38:00}" (middle of history)' '
 	test_when_finished "rm -f o e" &&
@@ -408,7 +408,7 @@ test_expect_success 'Query "master@{2005-05-28}" (past end of history)' '
 	test_when_finished "rm -f o e" &&
 	git rev-parse --verify "master@{2005-05-28}" >o 2>e &&
 	test $D = $(cat o) &&
-	test "warning: Log for ref $m unexpectedly ended on $ld." = "$(cat e)"
+	test_i18ngrep -F "warning: log for ref $m unexpectedly ended on $ld" e
 '
 
 rm -f .git/$m .git/logs/$m expect
@@ -456,6 +456,66 @@ test_expect_success 'git cat-file blob master@{2005-05-26 23:30}:F (expect TEST)
 test_expect_success 'git cat-file blob master@{2005-05-26 23:42}:F (expect OTHER)' '
 	test OTHER = $(git cat-file blob "master@{2005-05-26 23:42}:F")
 '
+
+# Test adding and deleting pseudorefs
+
+test_expect_success 'given old value for missing pseudoref, do not create' '
+	test_must_fail git update-ref PSEUDOREF $A $B 2>err &&
+	test_path_is_missing .git/PSEUDOREF &&
+	test_i18ngrep "could not read ref" err
+'
+
+test_expect_success 'create pseudoref' '
+	git update-ref PSEUDOREF $A &&
+	test $A = $(cat .git/PSEUDOREF)
+'
+
+test_expect_success 'overwrite pseudoref with no old value given' '
+	git update-ref PSEUDOREF $B &&
+	test $B = $(cat .git/PSEUDOREF)
+'
+
+test_expect_success 'overwrite pseudoref with correct old value' '
+	git update-ref PSEUDOREF $C $B &&
+	test $C = $(cat .git/PSEUDOREF)
+'
+
+test_expect_success 'do not overwrite pseudoref with wrong old value' '
+	test_must_fail git update-ref PSEUDOREF $D $E 2>err &&
+	test $C = $(cat .git/PSEUDOREF) &&
+	test_i18ngrep "unexpected object ID" err
+'
+
+test_expect_success 'delete pseudoref' '
+	git update-ref -d PSEUDOREF &&
+	test_path_is_missing .git/PSEUDOREF
+'
+
+test_expect_success 'do not delete pseudoref with wrong old value' '
+	git update-ref PSEUDOREF $A &&
+	test_must_fail git update-ref -d PSEUDOREF $B 2>err &&
+	test $A = $(cat .git/PSEUDOREF) &&
+	test_i18ngrep "unexpected object ID" err
+'
+
+test_expect_success 'delete pseudoref with correct old value' '
+	git update-ref -d PSEUDOREF $A &&
+	test_path_is_missing .git/PSEUDOREF
+'
+
+test_expect_success 'create pseudoref with old OID zero' '
+	git update-ref PSEUDOREF $A $Z &&
+	test $A = $(cat .git/PSEUDOREF)
+'
+
+test_expect_success 'do not overwrite pseudoref with old OID zero' '
+	test_when_finished git update-ref -d PSEUDOREF &&
+	test_must_fail git update-ref PSEUDOREF $B $Z 2>err &&
+	test $A = $(cat .git/PSEUDOREF) &&
+	test_i18ngrep "already exists" err
+'
+
+# Test --stdin
 
 a=refs/heads/a
 b=refs/heads/b
@@ -590,7 +650,7 @@ test_expect_success 'stdin fails with duplicate refs' '
 	create $a $m
 	EOF
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed." err
+	test_i18ngrep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed" err
 '
 
 test_expect_success 'stdin create ref works' '
@@ -992,7 +1052,7 @@ test_expect_success 'stdin -z fails option with unknown name' '
 test_expect_success 'stdin -z fails with duplicate refs' '
 	printf $F "create $a" "$m" "create $b" "$m" "create $a" "$m" >stdin &&
 	test_must_fail git update-ref -z --stdin <stdin 2>err &&
-	grep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed." err
+	test_i18ngrep "fatal: multiple updates for ref '"'"'$a'"'"' not allowed" err
 '
 
 test_expect_success 'stdin -z create ref works' '
@@ -1223,7 +1283,7 @@ test_expect_success 'fails with duplicate HEAD update' '
 	update HEAD $B
 	EOF
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: multiple updates for '\''HEAD'\'' (including one via its referent .refs/heads/target1.) are not allowed" err &&
+	test_i18ngrep "fatal: multiple updates for '\''HEAD'\'' (including one via its referent .refs/heads/target1.) are not allowed" err &&
 	echo "refs/heads/target1" >expect &&
 	git symbolic-ref HEAD >actual &&
 	test_cmp expect actual &&
@@ -1240,7 +1300,7 @@ test_expect_success 'fails with duplicate ref update via symref' '
 	update refs/heads/symref2 $B
 	EOF
 	test_must_fail git update-ref --stdin <stdin 2>err &&
-	grep "fatal: multiple updates for '\''refs/heads/target2'\'' (including one via symref .refs/heads/symref2.) are not allowed" err &&
+	test_i18ngrep "fatal: multiple updates for '\''refs/heads/target2'\'' (including one via symref .refs/heads/symref2.) are not allowed" err &&
 	echo "refs/heads/target2" >expect &&
 	git symbolic-ref refs/heads/symref2 >actual &&
 	test_cmp expect actual &&

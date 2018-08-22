@@ -92,6 +92,7 @@ test_expect_success 'No extra GIT_* on alias scripts' '
 	env |
 		sed -n \
 			-e "/^GIT_PREFIX=/d" \
+			-e "/^GIT_SLOG_PARENT_SID=/d" \
 			-e "/^GIT_TEXTDOMAINDIR=/d" \
 			-e "/^GIT_/s/=.*//p" |
 		sort
@@ -167,9 +168,8 @@ test_expect_success 'reinit' '
 	) &&
 	test_i18ngrep "Initialized empty" again/out1 &&
 	test_i18ngrep "Reinitialized existing" again/out2 &&
-	>again/empty &&
-	test_i18ncmp again/empty again/err1 &&
-	test_i18ncmp again/empty again/err2
+	test_must_be_empty again/err1 &&
+	test_must_be_empty again/err2
 '
 
 test_expect_success 'init with --template' '
@@ -287,6 +287,7 @@ test_expect_success 'init notices EEXIST (2)' '
 '
 
 test_expect_success POSIXPERM,SANITY 'init notices EPERM' '
+	test_when_finished "chmod +w newdir" &&
 	rm -fr newdir &&
 	mkdir newdir &&
 	chmod -w newdir &&
@@ -400,14 +401,14 @@ test_expect_success SYMLINKS 're-init to move gitdir symlink' '
 # Tests for the hidden file attribute on windows
 is_hidden () {
 	# Use the output of `attrib`, ignore the absolute path
-	case "$(attrib "$1")" in *H*?:*) return 0;; esac
+	case "$("$SYSTEMROOT"/system32/attrib "$1")" in *H*?:*) return 0;; esac
 	return 1
 }
 
 test_expect_success MINGW '.git hidden' '
 	rm -rf newdir &&
 	(
-		unset GIT_DIR GIT_WORK_TREE
+		sane_unset GIT_DIR GIT_WORK_TREE &&
 		mkdir newdir &&
 		cd newdir &&
 		git init &&
@@ -419,7 +420,7 @@ test_expect_success MINGW '.git hidden' '
 test_expect_success MINGW 'bare git dir not hidden' '
 	rm -rf newdir &&
 	(
-		unset GIT_DIR GIT_WORK_TREE GIT_CONFIG
+		sane_unset GIT_DIR GIT_WORK_TREE GIT_CONFIG &&
 		mkdir newdir &&
 		cd newdir &&
 		git --bare init
@@ -451,6 +452,18 @@ test_expect_success 're-init from a linked worktree' '
 		find .git/worktrees -print | sort >actual &&
 		test_cmp expected actual
 	)
+'
+
+test_expect_success MINGW 'core.hidedotfiles = false' '
+	git config --global core.hidedotfiles false &&
+	rm -rf newdir &&
+	(
+		unset GIT_DIR GIT_WORK_TREE GIT_CONFIG
+		mkdir newdir &&
+		cd newdir &&
+		git init
+	) &&
+	! is_hidden newdir/.git
 '
 
 test_expect_success MINGW 'redirect std handles' '

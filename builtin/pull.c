@@ -9,32 +9,36 @@
 #include "config.h"
 #include "builtin.h"
 #include "parse-options.h"
-#include "exec_cmd.h"
+#include "exec-cmd.h"
 #include "run-command.h"
 #include "sha1-array.h"
 #include "remote.h"
 #include "dir.h"
 #include "refs.h"
+#include "refspec.h"
 #include "revision.h"
 #include "submodule.h"
 #include "submodule-config.h"
 #include "tempfile.h"
 #include "lockfile.h"
 #include "wt-status.h"
+#include "commit-reach.h"
 
 enum rebase_type {
 	REBASE_INVALID = -1,
 	REBASE_FALSE = 0,
 	REBASE_TRUE,
 	REBASE_PRESERVE,
+	REBASE_MERGES,
 	REBASE_INTERACTIVE
 };
 
 /**
  * Parses the value of --rebase. If value is a false value, returns
  * REBASE_FALSE. If value is a true value, returns REBASE_TRUE. If value is
- * "preserve", returns REBASE_PRESERVE. If value is a invalid value, dies with
- * a fatal error if fatal is true, otherwise returns REBASE_INVALID.
+ * "merges", returns REBASE_MERGES. If value is "preserve", returns
+ * REBASE_PRESERVE. If value is a invalid value, dies with a fatal error if
+ * fatal is true, otherwise returns REBASE_INVALID.
  */
 static enum rebase_type parse_config_rebase(const char *key, const char *value,
 		int fatal)
@@ -45,9 +49,11 @@ static enum rebase_type parse_config_rebase(const char *key, const char *value,
 		return REBASE_FALSE;
 	else if (v > 0)
 		return REBASE_TRUE;
-	else if (!strcmp(value, "preserve"))
+	else if (!strcmp(value, "preserve") || !strcmp(value, "p"))
 		return REBASE_PRESERVE;
-	else if (!strcmp(value, "interactive"))
+	else if (!strcmp(value, "merges") || !strcmp(value, "m"))
+		return REBASE_MERGES;
+	else if (!strcmp(value, "interactive") || !strcmp(value, "i"))
 		return REBASE_INTERACTIVE;
 
 	if (fatal)
@@ -130,7 +136,7 @@ static struct option pull_options[] = {
 	/* Options passed to git-merge or git-rebase */
 	OPT_GROUP(N_("Options related to merging")),
 	{ OPTION_CALLBACK, 'r', "rebase", &opt_rebase,
-	  "false|true|preserve|interactive",
+	  "(false|true|merges|preserve|interactive)",
 	  N_("incorporate changes by rebasing rather than merging"),
 	  PARSE_OPT_OPTARG, parse_opt_rebase },
 	OPT_PASSTHRU('n', NULL, &opt_diffstat, NULL,
@@ -193,7 +199,7 @@ static struct option pull_options[] = {
 	OPT_PASSTHRU(0, "upload-pack", &opt_upload_pack, N_("path"),
 		N_("path to upload pack on remote end"),
 		0),
-	OPT__FORCE(&opt_force, N_("force overwrite of local branch")),
+	OPT__FORCE(&opt_force, N_("force overwrite of local branch"), 0),
 	OPT_PASSTHRU('t', "tags", &opt_tags, NULL,
 		N_("fetch all tags and associated objects"),
 		PARSE_OPT_NOARG),
@@ -351,7 +357,7 @@ static int git_pull_config(const char *var, const char *value, void *cb)
  */
 static void get_merge_heads(struct oid_array *merge_heads)
 {
-	const char *filename = git_path_fetch_head();
+	const char *filename = git_path_fetch_head(the_repository);
 	FILE *fp;
 	struct strbuf sb = STRBUF_INIT;
 	struct object_id oid;
@@ -539,7 +545,7 @@ static int run_fetch(const char *repo, const char **refspecs)
 		argv_array_push(&args, repo);
 		argv_array_pushv(&args, refspecs);
 	} else if (*refspecs)
-		die("BUG: refspecs without repo?");
+		BUG("refspecs without repo?");
 	ret = run_command_v_opt(args.argv, RUN_GIT_CMD);
 	argv_array_clear(&args);
 	return ret;
@@ -574,6 +580,7 @@ static int rebase_submodules(void)
 	cp.no_stdin = 1;
 	argv_array_pushl(&cp.args, "submodule", "update",
 				   "--recursive", "--rebase", NULL);
+	argv_push_verbosity(&cp.args);
 
 	return run_command(&cp);
 }
@@ -586,6 +593,7 @@ static int update_submodules(void)
 	cp.no_stdin = 1;
 	argv_array_pushl(&cp.args, "submodule", "update",
 				   "--recursive", "--checkout", NULL);
+	argv_push_verbosity(&cp.args);
 
 	return run_command(&cp);
 }
@@ -666,19 +674,19 @@ static const char *get_upstream_branch(const char *remote)
 }
 
 /**
- * Derives the remote tracking branch from the remote and refspec.
+ * Derives the remote-tracking branch from the remote and refspec.
  *
  * FIXME: The current implementation assumes the default mapping of
  * refs/heads/<branch_name> to refs/remotes/<remote_name>/<branch_name>.
  */
 static const char *get_tracking_branch(const char *remote, const char *refspec)
 {
-	struct refspec *spec;
+	struct refspec_item spec;
 	const char *spec_src;
 	const char *merge_branch;
 
-	spec = parse_fetch_refspec(1, &refspec);
-	spec_src = spec->src;
+	refspec_item_init_or_die(&spec, refspec, REFSPEC_FETCH);
+	spec_src = spec.src;
 	if (!*spec_src || !strcmp(spec_src, "HEAD"))
 		spec_src = "HEAD";
 	else if (skip_prefix(spec_src, "heads/", &spec_src))
@@ -698,13 +706,13 @@ static const char *get_tracking_branch(const char *remote, const char *refspec)
 	} else
 		merge_branch = NULL;
 
-	free_refspec(1, spec);
+	refspec_item_clear(&spec);
 	return merge_branch;
 }
 
 /**
  * Given the repo and refspecs, sets fork_point to the point at which the
- * current branch forked from its remote tracking branch. Returns 0 on success,
+ * current branch forked from its remote-tracking branch. Returns 0 on success,
  * -1 on failure.
  */
 static int get_rebase_fork_point(struct object_id *fork_point, const char *repo,
@@ -758,10 +766,13 @@ static int get_octopus_merge_base(struct object_id *merge_base,
 {
 	struct commit_list *revs = NULL, *result;
 
-	commit_list_insert(lookup_commit_reference(curr_head), &revs);
-	commit_list_insert(lookup_commit_reference(merge_head), &revs);
+	commit_list_insert(lookup_commit_reference(the_repository, curr_head),
+			   &revs);
+	commit_list_insert(lookup_commit_reference(the_repository, merge_head),
+			   &revs);
 	if (!is_null_oid(fork_point))
-		commit_list_insert(lookup_commit_reference(fork_point), &revs);
+		commit_list_insert(lookup_commit_reference(the_repository, fork_point),
+				   &revs);
 
 	result = get_octopus_merge_bases(revs);
 	free_commit_list(revs);
@@ -798,7 +809,9 @@ static int run_rebase(const struct object_id *curr_head,
 	argv_push_verbosity(&args);
 
 	/* Options passed to git-rebase */
-	if (opt_rebase == REBASE_PRESERVE)
+	if (opt_rebase == REBASE_MERGES)
+		argv_array_push(&args, "--rebase-merges");
+	else if (opt_rebase == REBASE_PRESERVE)
 		argv_array_push(&args, "--preserve-merges");
 	else if (opt_rebase == REBASE_INTERACTIVE)
 		argv_array_push(&args, "--interactive");
@@ -855,7 +868,7 @@ int cmd_pull(int argc, const char **argv, const char *prefix)
 	if (read_cache_unmerged())
 		die_resolve_conflict("pull");
 
-	if (file_exists(git_path_merge_head()))
+	if (file_exists(git_path_merge_head(the_repository)))
 		die_conclude_merge();
 
 	if (get_oid("HEAD", &orig_head))
@@ -935,9 +948,11 @@ int cmd_pull(int argc, const char **argv, const char *prefix)
 			struct commit_list *list = NULL;
 			struct commit *merge_head, *head;
 
-			head = lookup_commit_reference(&orig_head);
+			head = lookup_commit_reference(the_repository,
+						       &orig_head);
 			commit_list_insert(head, &list);
-			merge_head = lookup_commit_reference(&merge_heads.oid[0]);
+			merge_head = lookup_commit_reference(the_repository,
+							     &merge_heads.oid[0]);
 			if (is_descendant_of(merge_head, list)) {
 				/* we can fast-forward this without invoking rebase */
 				opt_ff = "--ff-only";

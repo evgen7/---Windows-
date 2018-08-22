@@ -16,8 +16,7 @@ test_expect_success setup '
 	git checkout HEAD^0 &&
 	test_commit B fileB two &&
 	git tag -d A B &&
-	git reflog expire --expire=now --all &&
-	>empty
+	git reflog expire --expire=now --all
 '
 
 test_expect_success 'loose objects borrowed from alternate are not missing' '
@@ -29,12 +28,12 @@ test_expect_success 'loose objects borrowed from alternate are not missing' '
 		test_commit C fileC one &&
 		git fsck --no-dangling >../actual 2>&1
 	) &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'HEAD is part of refs, valid objects appear valid' '
 	git fsck >actual 2>&1 &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 # Corruption tests follow.  Make sure to remove all traces of the
@@ -346,12 +345,12 @@ test_expect_success 'tag with NUL in header' '
 
 test_expect_success 'cleaned up' '
 	git fsck >actual 2>&1 &&
-	test_cmp empty actual
+	test_must_be_empty actual
 '
 
 test_expect_success 'rev-list --verify-objects' '
 	git rev-list --verify-objects --all >/dev/null 2>out &&
-	test_cmp empty out
+	test_must_be_empty out
 '
 
 test_expect_success 'rev-list --verify-objects with bad sha1' '
@@ -372,7 +371,7 @@ test_expect_success 'rev-list --verify-objects with bad sha1' '
 
 	test_might_fail git rev-list --verify-objects refs/heads/bogus >/dev/null 2>out &&
 	cat out &&
-	grep -q "error: sha1 mismatch 63ffffffffffffffffffffffffffffffffffffff" out
+	test_i18ngrep -q "error: sha1 mismatch 63ffffffffffffffffffffffffffffffffffffff" out
 '
 
 test_expect_success 'force fsck to ignore double author' '
@@ -713,7 +712,7 @@ test_expect_success 'fsck notices dangling objects' '
 
 test_expect_success 'fsck $name notices bogus $name' '
 	test_must_fail git fsck bogus &&
-	test_must_fail git fsck $_z40
+	test_must_fail git fsck $ZERO_OID
 '
 
 test_expect_success 'bogus head does not fallback to all heads' '
@@ -723,7 +722,7 @@ test_expect_success 'bogus head does not fallback to all heads' '
 	blob=$(git rev-parse :foo) &&
 	test_when_finished "git rm --cached foo" &&
 	remove_object $blob &&
-	test_must_fail git fsck $_z40 >out 2>&1 &&
+	test_must_fail git fsck $ZERO_OID >out 2>&1 &&
 	! grep $blob out
 '
 

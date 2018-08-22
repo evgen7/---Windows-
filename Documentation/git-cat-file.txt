@@ -42,8 +42,9 @@ OPTIONS
 	<object>.
 
 -e::
-	Suppress all output; instead exit with zero status if <object>
-	exists and is a valid object.
+	Exit with zero status if <object> exists and is a valid
+	object. If <object> is of an invalid format exit with non-zero and
+	emits an error on stderr.
 
 -p::
 	Pretty-print the contents of <object> based on its type.
@@ -102,6 +103,16 @@ OPTIONS
 	`cat-file`. With this option, the output uses normal stdio
 	buffering; this is much more efficient when invoking
 	`--batch-check` on a large number of objects.
+
+--unordered::
+	When `--batch-all-objects` is in use, visit objects in an
+	order which may be more efficient for accessing the object
+	contents than hash order. The exact details of the order are
+	unspecified, but if you do not require a specific order, this
+	should generally result in faster output, especially with
+	`--batch`.  Note that `cat-file` will still show each object
+	only once, even if it is stored multiple times in the
+	repository.
 
 --allow-unknown-type::
 	Allow -s or -t to query broken/corrupt objects of unknown type.
@@ -168,7 +179,7 @@ If `-t` is specified, one of the <type>.
 
 If `-s` is specified, the size of the <object> in bytes.
 
-If `-e` is specified, no output.
+If `-e` is specified, no output, unless the <object> is malformed.
 
 If `-p` is specified, the contents of <object> are pretty-printed.
 

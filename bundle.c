@@ -1,6 +1,8 @@
 #include "cache.h"
 #include "lockfile.h"
 #include "bundle.h"
+#include "object-store.h"
+#include "repository.h"
 #include "object.h"
 #include "commit.h"
 #include "diff.h"
@@ -134,7 +136,6 @@ int verify_bundle(struct bundle_header *header, int verbose)
 	struct ref_list *p = &header->prerequisites;
 	struct rev_info revs;
 	const char *argv[] = {NULL, "--all", NULL};
-	struct object_array refs;
 	struct commit *commit;
 	int i, ret = 0, req_nr;
 	const char *message = _("Repository lacks these prerequisite commits:");
@@ -142,7 +143,7 @@ int verify_bundle(struct bundle_header *header, int verbose)
 	init_revisions(&revs, NULL);
 	for (i = 0; i < p->nr; i++) {
 		struct ref_list_entry *e = p->list + i;
-		struct object *o = parse_object(&e->oid);
+		struct object *o = parse_object(the_repository, &e->oid);
 		if (o) {
 			o->flags |= PREREQ_MARK;
 			add_pending_object(&revs, o, e->name);
@@ -157,14 +158,6 @@ int verify_bundle(struct bundle_header *header, int verbose)
 	req_nr = revs.pending.nr;
 	setup_revisions(2, argv, &revs, NULL);
 
-	/* Save pending objects, so they can be cleaned up later. */
-	refs = revs.pending;
-	revs.leak_pending = 1;
-
-	/*
-	 * prepare_revision_walk (together with .leak_pending = 1) makes us
-	 * the sole owner of the list of pending objects.
-	 */
 	if (prepare_revision_walk(&revs))
 		die(_("revision walk setup failed"));
 
@@ -173,18 +166,24 @@ int verify_bundle(struct bundle_header *header, int verbose)
 		if (commit->object.flags & PREREQ_MARK)
 			i--;
 
-	for (i = 0; i < req_nr; i++)
-		if (!(refs.objects[i].item->flags & SHOWN)) {
-			if (++ret == 1)
-				error("%s", message);
-			error("%s %s", oid_to_hex(&refs.objects[i].item->oid),
-				refs.objects[i].name);
-		}
+	for (i = 0; i < p->nr; i++) {
+		struct ref_list_entry *e = p->list + i;
+		struct object *o = parse_object(the_repository, &e->oid);
+		assert(o); /* otherwise we'd have returned early */
+		if (o->flags & SHOWN)
+			continue;
+		if (++ret == 1)
+			error("%s", message);
+		error("%s %s", oid_to_hex(&e->oid), e->name);
+	}
 
 	/* Clean up objects used, as they will be reused. */
-	clear_commit_marks_for_object_array(&refs, ALL_REV_FLAGS);
-
-	object_array_clear(&refs);
+	for (i = 0; i < p->nr; i++) {
+		struct ref_list_entry *e = p->list + i;
+		commit = lookup_commit_reference_gently(the_repository, &e->oid, 1);
+		if (commit)
+			clear_commit_marks(commit, ALL_REV_FLAGS);
+	}
 
 	if (verbose) {
 		struct ref_list *r;
@@ -225,7 +224,7 @@ static int is_tag_in_date_range(struct object *tag, struct rev_info *revs)
 	if (revs->max_age == -1 && revs->min_age == -1)
 		goto out;
 
-	buf = read_sha1_file(tag->oid.hash, &type, &size);
+	buf = read_object_file(&tag->oid, &type, &size);
 	if (!buf)
 		goto out;
 	line = memmem(buf, size, "\ntagger ", 8);
@@ -376,7 +375,8 @@ static int write_bundle_refs(int bundle_fd, struct rev_info *revs)
 			 * in terms of a tag (e.g. v2.0 from the range
 			 * "v1.0..v2.0")?
 			 */
-			struct commit *one = lookup_commit_reference(&oid);
+			struct commit *one = lookup_commit_reference(the_repository,
+								     &oid);
 			struct object *obj;
 
 			if (e->item == &(one->object)) {
@@ -412,7 +412,7 @@ static int write_bundle_refs(int bundle_fd, struct rev_info *revs)
 int create_bundle(struct bundle_header *header, const char *path,
 		  int argc, const char **argv)
 {
-	static struct lock_file lock;
+	struct lock_file lock = LOCK_INIT;
 	int bundle_fd = -1;
 	int bundle_to_stdout;
 	int ref_count = 0;
@@ -457,10 +457,11 @@ int create_bundle(struct bundle_header *header, const char *path,
 	object_array_remove_duplicates(&revs.pending);
 
 	ref_count = write_bundle_refs(bundle_fd, &revs);
-	if (!ref_count)
-		die(_("Refusing to create empty bundle."));
-	else if (ref_count < 0)
+	if (ref_count <= 0)  {
+		if (!ref_count)
+			error(_("Refusing to create empty bundle."));
 		goto err;
+	}
 
 	/* write pack */
 	if (write_pack_data(bundle_fd, &revs)) {

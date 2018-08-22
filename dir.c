@@ -11,6 +11,7 @@
 #include "cache.h"
 #include "config.h"
 #include "dir.h"
+#include "object-store.h"
 #include "attr.h"
 #include "refs.h"
 #include "wildmatch.h"
@@ -19,6 +20,7 @@
 #include "varint.h"
 #include "ewah/ewok.h"
 #include "fsmonitor.h"
+#include "submodule-config.h"
 
 /*
  * Tells read_directory_recursive how a file or directory should be treated.
@@ -231,12 +233,10 @@ int within_depth(const char *name, int namelen,
  *     1 along with { data, size } of the (possibly augmented) buffer
  *       when successful.
  *
- * Optionally updates the given sha1_stat with the given OID (when valid).
+ * Optionally updates the given oid_stat with the given OID (when valid).
  */
-static int do_read_blob(const struct object_id *oid,
-			struct sha1_stat *sha1_stat,
-			size_t *size_out,
-			char **data_out)
+static int do_read_blob(const struct object_id *oid, struct oid_stat *oid_stat,
+			size_t *size_out, char **data_out)
 {
 	enum object_type type;
 	unsigned long sz;
@@ -245,15 +245,15 @@ static int do_read_blob(const struct object_id *oid,
 	*size_out = 0;
 	*data_out = NULL;
 
-	data = read_sha1_file(oid->hash, &type, &sz);
+	data = read_object_file(oid, &type, &sz);
 	if (!data || type != OBJ_BLOB) {
 		free(data);
 		return -1;
 	}
 
-	if (sha1_stat) {
-		memset(&sha1_stat->stat, 0, sizeof(sha1_stat->stat));
-		hashcpy(sha1_stat->sha1, oid->hash);
+	if (oid_stat) {
+		memset(&oid_stat->stat, 0, sizeof(oid_stat->stat));
+		oidcpy(&oid_stat->oid, oid);
 	}
 
 	if (sz == 0) {
@@ -276,12 +276,13 @@ static int do_read_blob(const struct object_id *oid,
 #define DO_MATCH_DIRECTORY (1<<1)
 #define DO_MATCH_SUBMODULE (1<<2)
 
-static int match_attrs(const char *name, int namelen,
+static int match_attrs(const struct index_state *istate,
+		       const char *name, int namelen,
 		       const struct pathspec_item *item)
 {
 	int i;
 
-	git_check_attr(name, item->attr_check);
+	git_check_attr(istate, name, item->attr_check);
 	for (i = 0; i < item->attr_match_nr; i++) {
 		const char *value;
 		int matched;
@@ -318,7 +319,8 @@ static int match_attrs(const char *name, int namelen,
  *
  * It returns 0 when there is no match.
  */
-static int match_pathspec_item(const struct pathspec_item *item, int prefix,
+static int match_pathspec_item(const struct index_state *istate,
+			       const struct pathspec_item *item, int prefix,
 			       const char *name, int namelen, unsigned flags)
 {
 	/* name/namelen has prefix cut off by caller */
@@ -358,7 +360,7 @@ static int match_pathspec_item(const struct pathspec_item *item, int prefix,
 	    strncmp(item->match, name - prefix, item->prefix))
 		return 0;
 
-	if (item->attr_match_nr && !match_attrs(name, namelen, item))
+	if (item->attr_match_nr && !match_attrs(istate, name, namelen, item))
 		return 0;
 
 	/* If the match was just the prefix, we matched */
@@ -426,7 +428,8 @@ static int match_pathspec_item(const struct pathspec_item *item, int prefix,
  * pathspec did not match any names, which could indicate that the
  * user mistyped the nth pathspec.
  */
-static int do_match_pathspec(const struct pathspec *ps,
+static int do_match_pathspec(const struct index_state *istate,
+			     const struct pathspec *ps,
 			     const char *name, int namelen,
 			     int prefix, char *seen,
 			     unsigned flags)
@@ -472,7 +475,7 @@ static int do_match_pathspec(const struct pathspec *ps,
 		 */
 		if (seen && ps->items[i].magic & PATHSPEC_EXCLUDE)
 			seen[i] = MATCHED_FNMATCH;
-		how = match_pathspec_item(ps->items+i, prefix, name,
+		how = match_pathspec_item(istate, ps->items+i, prefix, name,
 					  namelen, flags);
 		if (ps->recursive &&
 		    (ps->magic & PATHSPEC_MAXDEPTH) &&
@@ -496,17 +499,18 @@ static int do_match_pathspec(const struct pathspec *ps,
 	return retval;
 }
 
-int match_pathspec(const struct pathspec *ps,
+int match_pathspec(const struct index_state *istate,
+		   const struct pathspec *ps,
 		   const char *name, int namelen,
 		   int prefix, char *seen, int is_dir)
 {
 	int positive, negative;
 	unsigned flags = is_dir ? DO_MATCH_DIRECTORY : 0;
-	positive = do_match_pathspec(ps, name, namelen,
+	positive = do_match_pathspec(istate, ps, name, namelen,
 				     prefix, seen, flags);
 	if (!(ps->magic & PATHSPEC_EXCLUDE) || !positive)
 		return positive;
-	negative = do_match_pathspec(ps, name, namelen,
+	negative = do_match_pathspec(istate, ps, name, namelen,
 				     prefix, seen,
 				     flags | DO_MATCH_EXCLUDE);
 	return negative ? 0 : positive;
@@ -515,11 +519,12 @@ int match_pathspec(const struct pathspec *ps,
 /**
  * Check if a submodule is a superset of the pathspec
  */
-int submodule_path_match(const struct pathspec *ps,
+int submodule_path_match(const struct index_state *istate,
+			 const struct pathspec *ps,
 			 const char *submodule_name,
 			 char *seen)
 {
-	int matched = do_match_pathspec(ps, submodule_name,
+	int matched = do_match_pathspec(istate, ps, submodule_name,
 					strlen(submodule_name),
 					0, seen,
 					DO_MATCH_DIRECTORY |
@@ -561,7 +566,7 @@ int report_path_error(const char *ps_matched,
 		if (found_dup)
 			continue;
 
-		error("pathspec '%s' did not match any file(s) known to git.",
+		error(_("pathspec '%s' did not match any file(s) known to git"),
 		      pathspec->items[num].original);
 		errors++;
 	}
@@ -654,9 +659,8 @@ void add_exclude(const char *string, const char *base,
 
 static int read_skip_worktree_file_from_index(const struct index_state *istate,
 					      const char *path,
-					      size_t *size_out,
-					      char **data_out,
-					      struct sha1_stat *sha1_stat)
+					      size_t *size_out, char **data_out,
+					      struct oid_stat *oid_stat)
 {
 	int pos, len;
 
@@ -667,7 +671,7 @@ static int read_skip_worktree_file_from_index(const struct index_state *istate,
 	if (!ce_skip_worktree(istate->cache[pos]))
 		return -1;
 
-	return do_read_blob(&istate->cache[pos]->oid, sha1_stat, size_out, data_out);
+	return do_read_blob(&istate->cache[pos]->oid, oid_stat, size_out, data_out);
 }
 
 /*
@@ -747,8 +751,8 @@ static struct untracked_cache_dir *lookup_untracked(struct untracked_cache *uc,
 	FLEX_ALLOC_MEM(d, name, name, len);
 
 	ALLOC_GROW(dir->dirs, dir->dirs_nr + 1, dir->dirs_alloc);
-	memmove(dir->dirs + first + 1, dir->dirs + first,
-		(dir->dirs_nr - first) * sizeof(*dir->dirs));
+	MOVE_ARRAY(dir->dirs + first + 1, dir->dirs + first,
+		   dir->dirs_nr - first);
 	dir->dirs_nr++;
 	dir->dirs[first] = d;
 	return d;
@@ -774,7 +778,16 @@ static void invalidate_directory(struct untracked_cache *uc,
 				 struct untracked_cache_dir *dir)
 {
 	int i;
-	uc->dir_invalidated++;
+
+	/*
+	 * Invalidation increment here is just roughly correct. If
+	 * untracked_nr or any of dirs[].recurse is non-zero, we
+	 * should increment dir_invalidated too. But that's more
+	 * expensive to do.
+	 */
+	if (dir->valid)
+		uc->dir_invalidated++;
+
 	dir->valid = 0;
 	dir->untracked_nr = 0;
 	for (i = 0; i < dir->dirs_nr; i++)
@@ -790,14 +803,13 @@ static int add_excludes_from_buffer(char *buf, size_t size,
  * an index if 'istate' is non-null), parse it and store the
  * exclude rules in "el".
  *
- * If "ss" is not NULL, compute SHA-1 of the exclude file and fill
+ * If sha1_stat is not NULL, compute SHA-1 of the exclude file and fill
  * stat data from disk (only valid if add_excludes returns zero). If
- * ss_valid is non-zero, "ss" must contain good value as input.
+ * sha1_stat.valid is non-zero, sha1_stat must contain good value as input.
  */
 static int add_excludes(const char *fname, const char *base, int baselen,
-			struct exclude_list *el,
-			struct index_state *istate,
-			struct sha1_stat *sha1_stat)
+			struct exclude_list *el, struct index_state *istate,
+			struct oid_stat *oid_stat)
 {
 	struct stat st;
 	int r;
@@ -815,16 +827,16 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 			return -1;
 		r = read_skip_worktree_file_from_index(istate, fname,
 						       &size, &buf,
-						       sha1_stat);
+						       oid_stat);
 		if (r != 1)
 			return r;
 	} else {
 		size = xsize_t(st.st_size);
 		if (size == 0) {
-			if (sha1_stat) {
-				fill_stat_data(&sha1_stat->stat, &st);
-				hashcpy(sha1_stat->sha1, EMPTY_BLOB_SHA1_BIN);
-				sha1_stat->valid = 1;
+			if (oid_stat) {
+				fill_stat_data(&oid_stat->stat, &st);
+				oidcpy(&oid_stat->oid, the_hash_algo->empty_blob);
+				oid_stat->valid = 1;
 			}
 			close(fd);
 			return 0;
@@ -837,22 +849,23 @@ static int add_excludes(const char *fname, const char *base, int baselen,
 		}
 		buf[size++] = '\n';
 		close(fd);
-		if (sha1_stat) {
+		if (oid_stat) {
 			int pos;
-			if (sha1_stat->valid &&
-			    !match_stat_data_racy(istate, &sha1_stat->stat, &st))
+			if (oid_stat->valid &&
+			    !match_stat_data_racy(istate, &oid_stat->stat, &st))
 				; /* no content change, ss->sha1 still good */
 			else if (istate &&
 				 (pos = index_name_pos(istate, fname, strlen(fname))) >= 0 &&
 				 !ce_stage(istate->cache[pos]) &&
 				 ce_uptodate(istate->cache[pos]) &&
 				 !would_convert_to_git(istate, fname))
-				hashcpy(sha1_stat->sha1,
-					istate->cache[pos]->oid.hash);
+				oidcpy(&oid_stat->oid,
+				       &istate->cache[pos]->oid);
 			else
-				hash_sha1_file(buf, size, "blob", sha1_stat->sha1);
-			fill_stat_data(&sha1_stat->stat, &st);
-			sha1_stat->valid = 1;
+				hash_object_file(buf, size, "blob",
+						 &oid_stat->oid);
+			fill_stat_data(&oid_stat->stat, &st);
+			oid_stat->valid = 1;
 		}
 	}
 
@@ -930,7 +943,7 @@ struct exclude_list *add_exclude_list(struct dir_struct *dir,
  * Used to set up core.excludesfile and .git/info/exclude lists.
  */
 static void add_excludes_from_file_1(struct dir_struct *dir, const char *fname,
-				     struct sha1_stat *sha1_stat)
+				     struct oid_stat *oid_stat)
 {
 	struct exclude_list *el;
 	/*
@@ -941,8 +954,8 @@ static void add_excludes_from_file_1(struct dir_struct *dir, const char *fname,
 	if (!dir->untracked)
 		dir->unmanaged_exclude_files++;
 	el = add_exclude_list(dir, EXC_FILE, fname);
-	if (add_excludes(fname, "", 0, el, NULL, sha1_stat) < 0)
-		die("cannot use %s as an exclude file", fname);
+	if (add_excludes(fname, "", 0, el, NULL, oid_stat) < 0)
+		die(_("cannot use %s as an exclude file"), fname);
 }
 
 void add_excludes_from_file(struct dir_struct *dir, const char *fname)
@@ -1180,7 +1193,7 @@ static void prep_exclude(struct dir_struct *dir,
 
 	while (current < baselen) {
 		const char *cp;
-		struct sha1_stat sha1_stat;
+		struct oid_stat oid_stat;
 
 		stk = xcalloc(1, sizeof(*stk));
 		if (current < 0) {
@@ -1223,8 +1236,8 @@ static void prep_exclude(struct dir_struct *dir,
 		}
 
 		/* Try to read per-directory file */
-		hashclr(sha1_stat.sha1);
-		sha1_stat.valid = 0;
+		oidclr(&oid_stat.oid);
+		oid_stat.valid = 0;
 		if (dir->exclude_per_dir &&
 		    /*
 		     * If we know that no files have been added in
@@ -1234,11 +1247,11 @@ static void prep_exclude(struct dir_struct *dir,
 		    (!untracked || !untracked->valid ||
 		     /*
 		      * .. and .gitignore does not exist before
-		      * (i.e. null exclude_sha1). Then we can skip
+		      * (i.e. null exclude_oid). Then we can skip
 		      * loading .gitignore, which would result in
 		      * ENOENT anyway.
 		      */
-		     !is_null_sha1(untracked->exclude_sha1))) {
+		     !is_null_oid(&untracked->exclude_oid))) {
 			/*
 			 * dir->basebuf gets reused by the traversal, but we
 			 * need fname to remain unchanged to ensure the src
@@ -1252,7 +1265,7 @@ static void prep_exclude(struct dir_struct *dir,
 			strbuf_addstr(&sb, dir->exclude_per_dir);
 			el->src = strbuf_detach(&sb, NULL);
 			add_excludes(el->src, el->src, stk->baselen, el, istate,
-				     untracked ? &sha1_stat : NULL);
+				     untracked ? &oid_stat : NULL);
 		}
 		/*
 		 * NEEDSWORK: when untracked cache is enabled, prep_exclude()
@@ -1269,9 +1282,9 @@ static void prep_exclude(struct dir_struct *dir,
 		 * order, though, if you do that.
 		 */
 		if (untracked &&
-		    hashcmp(sha1_stat.sha1, untracked->exclude_sha1)) {
+		    oidcmp(&oid_stat.oid, &untracked->exclude_oid)) {
 			invalidate_gitignore(dir->untracked, untracked);
-			hashcpy(untracked->exclude_sha1, sha1_stat.sha1);
+			oidcpy(&untracked->exclude_oid, &oid_stat.oid);
 		}
 		dir->exclude_stack = stk;
 		current = stk->baselen;
@@ -1773,7 +1786,7 @@ static enum path_treatment treat_path(struct dir_struct *dir,
 	if (!de)
 		return treat_path_fast(dir, untracked, cdir, istate, path,
 				       baselen, pathspec);
-	if (is_dot_or_dotdot(de->d_name) || !strcmp(de->d_name, ".git"))
+	if (is_dot_or_dotdot(de->d_name) || !fspathcmp(de->d_name, ".git"))
 		return path_none;
 	strbuf_setlen(path, baselen);
 	strbuf_addstr(path, de->d_name);
@@ -1809,24 +1822,19 @@ static int valid_cached_dir(struct dir_struct *dir,
 	 */
 	refresh_fsmonitor(istate);
 	if (!(dir->untracked->use_fsmonitor && untracked->valid)) {
-		if (stat(path->len ? path->buf : ".", &st)) {
-			invalidate_directory(dir->untracked, untracked);
+		if (lstat(path->len ? path->buf : ".", &st)) {
 			memset(&untracked->stat_data, 0, sizeof(untracked->stat_data));
 			return 0;
 		}
 		if (!untracked->valid ||
 			match_stat_data_racy(istate, &untracked->stat_data, &st)) {
-			if (untracked->valid)
-				invalidate_directory(dir->untracked, untracked);
 			fill_stat_data(&untracked->stat_data, &st);
 			return 0;
 		}
 	}
 
-	if (untracked->check_only != !!check_only) {
-		invalidate_directory(dir->untracked, untracked);
+	if (untracked->check_only != !!check_only)
 		return 0;
-	}
 
 	/*
 	 * prep_exclude will be called eventually on this directory,
@@ -1853,13 +1861,20 @@ static int open_cached_dir(struct cached_dir *cdir,
 			   struct strbuf *path,
 			   int check_only)
 {
+	const char *c_path;
+
 	memset(cdir, 0, sizeof(*cdir));
 	cdir->untracked = untracked;
 	if (valid_cached_dir(dir, untracked, istate, path, check_only))
 		return 0;
-	cdir->fdir = opendir(path->len ? path->buf : ".");
-	if (dir->untracked)
+	c_path = path->len ? path->buf : ".";
+	cdir->fdir = opendir(c_path);
+	if (!cdir->fdir)
+		warning_errno(_("could not open directory '%s'"), c_path);
+	if (dir->untracked) {
+		invalidate_directory(dir->untracked, untracked);
 		dir->untracked->dir_opened++;
+	}
 	if (!cdir->fdir)
 		return -1;
 	return 0;
@@ -2164,8 +2179,13 @@ static struct untracked_cache_dir *validate_untracked_cache(struct dir_struct *d
 						      const struct pathspec *pathspec)
 {
 	struct untracked_cache_dir *root;
+	static int untracked_cache_disabled = -1;
 
-	if (!dir->untracked || getenv("GIT_DISABLE_UNTRACKED_CACHE"))
+	if (!dir->untracked)
+		return NULL;
+	if (untracked_cache_disabled < 0)
+		untracked_cache_disabled = git_env_bool("GIT_DISABLE_UNTRACKED_CACHE", 0);
+	if (untracked_cache_disabled)
 		return NULL;
 
 	/*
@@ -2216,7 +2236,7 @@ static struct untracked_cache_dir *validate_untracked_cache(struct dir_struct *d
 		return NULL;
 
 	if (!ident_in_untracked(dir->untracked)) {
-		warning(_("Untracked cache is disabled on this system or location."));
+		warning(_("untracked cache is disabled on this system or location"));
 		return NULL;
 	}
 
@@ -2228,13 +2248,13 @@ static struct untracked_cache_dir *validate_untracked_cache(struct dir_struct *d
 
 	/* Validate $GIT_DIR/info/exclude and core.excludesfile */
 	root = dir->untracked->root;
-	if (hashcmp(dir->ss_info_exclude.sha1,
-		    dir->untracked->ss_info_exclude.sha1)) {
+	if (oidcmp(&dir->ss_info_exclude.oid,
+		   &dir->untracked->ss_info_exclude.oid)) {
 		invalidate_gitignore(dir->untracked, root);
 		dir->untracked->ss_info_exclude = dir->ss_info_exclude;
 	}
-	if (hashcmp(dir->ss_excludes_file.sha1,
-		    dir->untracked->ss_excludes_file.sha1)) {
+	if (oidcmp(&dir->ss_excludes_file.oid,
+		   &dir->untracked->ss_excludes_file.oid)) {
 		invalidate_gitignore(dir->untracked, root);
 		dir->untracked->ss_excludes_file = dir->ss_excludes_file;
 	}
@@ -2249,8 +2269,12 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 {
 	struct untracked_cache_dir *untracked;
 
-	if (has_symlink_leading_path(path, len))
+	trace_performance_enter();
+
+	if (has_symlink_leading_path(path, len)) {
+		trace_performance_leave("read directory %.*s", len, path);
 		return dir->nr;
+	}
 
 	untracked = validate_untracked_cache(dir, len, pathspec);
 	if (!untracked)
@@ -2286,8 +2310,14 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		dir->nr = i;
 	}
 
+	trace_performance_leave("read directory %.*s", len, path);
 	if (dir->untracked) {
+		static int force_untracked_cache = -1;
 		static struct trace_key trace_untracked_stats = TRACE_KEY_INIT(UNTRACKED_STATS);
+
+		if (force_untracked_cache < 0)
+			force_untracked_cache =
+				git_env_bool("GIT_FORCE_UNTRACKED_CACHE", 0);
 		trace_printf_key(&trace_untracked_stats,
 				 "node creation: %u\n"
 				 "gitignore invalidation: %u\n"
@@ -2297,7 +2327,8 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 				 dir->untracked->gitignore_invalidated,
 				 dir->untracked->dir_invalidated,
 				 dir->untracked->dir_opened);
-		if (dir->untracked == istate->untracked &&
+		if (force_untracked_cache &&
+			dir->untracked == istate->untracked &&
 		    (dir->untracked->dir_opened ||
 		     dir->untracked->gitignore_invalidated ||
 		     dir->untracked->dir_invalidated))
@@ -2475,7 +2506,7 @@ void setup_standard_excludes(struct dir_struct *dir)
 {
 	dir->exclude_per_dir = ".gitignore";
 
-	/* core.excludefile defaulting to $XDG_HOME/git/ignore */
+	/* core.excludesfile defaulting to $XDG_CONFIG_HOME/git/ignore */
 	if (!excludes_file)
 		excludes_file = xdg_config_home("ignore");
 	if (excludes_file && !access_or_warn(excludes_file, R_OK, 0))
@@ -2601,9 +2632,10 @@ static void write_one_dir(struct untracked_cache_dir *untracked,
 		stat_data_to_disk(&stat_data, &untracked->stat_data);
 		strbuf_add(&wd->sb_stat, &stat_data, sizeof(stat_data));
 	}
-	if (!is_null_sha1(untracked->exclude_sha1)) {
+	if (!is_null_oid(&untracked->exclude_oid)) {
 		ewah_set(wd->sha1_valid, i);
-		strbuf_add(&wd->sb_sha1, untracked->exclude_sha1, 20);
+		strbuf_add(&wd->sb_sha1, untracked->exclude_oid.hash,
+			   the_hash_algo->rawsz);
 	}
 
 	intlen = encode_varint(untracked->untracked_nr, intbuf);
@@ -2638,8 +2670,8 @@ void write_untracked_extension(struct strbuf *out, struct untracked_cache *untra
 	FLEX_ALLOC_MEM(ouc, exclude_per_dir, untracked->exclude_per_dir, len);
 	stat_data_to_disk(&ouc->info_exclude_stat, &untracked->ss_info_exclude.stat);
 	stat_data_to_disk(&ouc->excludes_file_stat, &untracked->ss_excludes_file.stat);
-	hashcpy(ouc->info_exclude_sha1, untracked->ss_info_exclude.sha1);
-	hashcpy(ouc->excludes_file_sha1, untracked->ss_excludes_file.sha1);
+	hashcpy(ouc->info_exclude_sha1, untracked->ss_info_exclude.oid.hash);
+	hashcpy(ouc->excludes_file_sha1, untracked->ss_excludes_file.oid.hash);
 	ouc->dir_flags = htonl(untracked->dir_flags);
 
 	varint_len = encode_varint(untracked->ident.len, varbuf);
@@ -2804,25 +2836,24 @@ static void read_stat(size_t pos, void *cb)
 	ud->valid = 1;
 }
 
-static void read_sha1(size_t pos, void *cb)
+static void read_oid(size_t pos, void *cb)
 {
 	struct read_data *rd = cb;
 	struct untracked_cache_dir *ud = rd->ucd[pos];
-	if (rd->data + 20 > rd->end) {
+	if (rd->data + the_hash_algo->rawsz > rd->end) {
 		rd->data = rd->end + 1;
 		return;
 	}
-	hashcpy(ud->exclude_sha1, rd->data);
-	rd->data += 20;
+	hashcpy(ud->exclude_oid.hash, rd->data);
+	rd->data += the_hash_algo->rawsz;
 }
 
-static void load_sha1_stat(struct sha1_stat *sha1_stat,
-			   const unsigned char *data,
-			   const unsigned char *sha1)
+static void load_oid_stat(struct oid_stat *oid_stat, const unsigned char *data,
+			  const unsigned char *sha1)
 {
-	stat_data_from_disk(&sha1_stat->stat, data);
-	hashcpy(sha1_stat->sha1, sha1);
-	sha1_stat->valid = 1;
+	stat_data_from_disk(&oid_stat->stat, data);
+	hashcpy(oid_stat->oid.hash, sha1);
+	oid_stat->valid = 1;
 }
 
 struct untracked_cache *read_untracked_extension(const void *data, unsigned long sz)
@@ -2831,7 +2862,8 @@ struct untracked_cache *read_untracked_extension(const void *data, unsigned long
 	struct read_data rd;
 	const unsigned char *next = data, *end = (const unsigned char *)data + sz;
 	const char *ident;
-	int ident_len, len;
+	int ident_len;
+	ssize_t len;
 	const char *exclude_per_dir;
 
 	if (sz <= 1 || end[-1] != '\0')
@@ -2850,12 +2882,12 @@ struct untracked_cache *read_untracked_extension(const void *data, unsigned long
 	uc = xcalloc(1, sizeof(*uc));
 	strbuf_init(&uc->ident, ident_len);
 	strbuf_add(&uc->ident, ident, ident_len);
-	load_sha1_stat(&uc->ss_info_exclude,
-		       next + ouc_offset(info_exclude_stat),
-		       next + ouc_offset(info_exclude_sha1));
-	load_sha1_stat(&uc->ss_excludes_file,
-		       next + ouc_offset(excludes_file_stat),
-		       next + ouc_offset(excludes_file_sha1));
+	load_oid_stat(&uc->ss_info_exclude,
+		      next + ouc_offset(info_exclude_stat),
+		      next + ouc_offset(info_exclude_sha1));
+	load_oid_stat(&uc->ss_excludes_file,
+		      next + ouc_offset(excludes_file_stat),
+		      next + ouc_offset(excludes_file_sha1));
 	uc->dir_flags = get_be32(next + ouc_offset(dir_flags));
 	exclude_per_dir = (const char *)next + ouc_offset(exclude_per_dir);
 	uc->exclude_per_dir = xstrdup(exclude_per_dir);
@@ -2897,7 +2929,7 @@ struct untracked_cache *read_untracked_extension(const void *data, unsigned long
 	ewah_each_bit(rd.check_only, set_check_only, &rd);
 	rd.data = next + len;
 	ewah_each_bit(rd.valid, read_stat, &rd);
-	ewah_each_bit(rd.sha1_valid, read_sha1, &rd);
+	ewah_each_bit(rd.sha1_valid, read_oid, &rd);
 	next = rd.data;
 
 done:
@@ -2968,9 +3000,11 @@ static int invalidate_one_component(struct untracked_cache *uc,
 }
 
 void untracked_cache_invalidate_path(struct index_state *istate,
-				     const char *path)
+				     const char *path, int safe_path)
 {
 	if (!istate->untracked || !istate->untracked->root)
+		return;
+	if (!safe_path && !verify_path(path, 0))
 		return;
 	invalidate_one_component(istate->untracked, istate->untracked->root,
 				 path, strlen(path));
@@ -2979,17 +3013,66 @@ void untracked_cache_invalidate_path(struct index_state *istate,
 void untracked_cache_remove_from_index(struct index_state *istate,
 				       const char *path)
 {
-	untracked_cache_invalidate_path(istate, path);
+	untracked_cache_invalidate_path(istate, path, 1);
 }
 
 void untracked_cache_add_to_index(struct index_state *istate,
 				  const char *path)
 {
-	untracked_cache_invalidate_path(istate, path);
+	untracked_cache_invalidate_path(istate, path, 1);
 }
 
-/* Update gitfile and core.worktree setting to connect work tree and git dir */
-void connect_work_tree_and_git_dir(const char *work_tree_, const char *git_dir_)
+static void connect_wt_gitdir_in_nested(const char *sub_worktree,
+					const char *sub_gitdir)
+{
+	int i;
+	struct repository subrepo;
+	struct strbuf sub_wt = STRBUF_INIT;
+	struct strbuf sub_gd = STRBUF_INIT;
+
+	const struct submodule *sub;
+
+	/* If the submodule has no working tree, we can ignore it. */
+	if (repo_init(&subrepo, sub_gitdir, sub_worktree))
+		return;
+
+	if (repo_read_index(&subrepo) < 0)
+		die(_("index file corrupt in repo %s"), subrepo.gitdir);
+
+	for (i = 0; i < subrepo.index->cache_nr; i++) {
+		const struct cache_entry *ce = subrepo.index->cache[i];
+
+		if (!S_ISGITLINK(ce->ce_mode))
+			continue;
+
+		while (i + 1 < subrepo.index->cache_nr &&
+		       !strcmp(ce->name, subrepo.index->cache[i + 1]->name))
+			/*
+			 * Skip entries with the same name in different stages
+			 * to make sure an entry is returned only once.
+			 */
+			i++;
+
+		sub = submodule_from_path(&subrepo, &null_oid, ce->name);
+		if (!sub || !is_submodule_active(&subrepo, ce->name))
+			/* .gitmodules broken or inactive sub */
+			continue;
+
+		strbuf_reset(&sub_wt);
+		strbuf_reset(&sub_gd);
+		strbuf_addf(&sub_wt, "%s/%s", sub_worktree, sub->path);
+		submodule_name_to_gitdir(&sub_gd, &subrepo, sub->name);
+
+		connect_work_tree_and_git_dir(sub_wt.buf, sub_gd.buf, 1);
+	}
+	strbuf_release(&sub_wt);
+	strbuf_release(&sub_gd);
+	repo_clear(&subrepo);
+}
+
+void connect_work_tree_and_git_dir(const char *work_tree_,
+				   const char *git_dir_,
+				   int recurse_into_nested)
 {
 	struct strbuf gitfile_sb = STRBUF_INIT;
 	struct strbuf cfg_sb = STRBUF_INIT;
@@ -3019,6 +3102,10 @@ void connect_work_tree_and_git_dir(const char *work_tree_, const char *git_dir_)
 	strbuf_release(&gitfile_sb);
 	strbuf_release(&cfg_sb);
 	strbuf_release(&rel_path);
+
+	if (recurse_into_nested)
+		connect_wt_gitdir_in_nested(work_tree, git_dir);
+
 	free(work_tree);
 	free(git_dir);
 }
@@ -3032,5 +3119,5 @@ void relocate_gitdir(const char *path, const char *old_git_dir, const char *new_
 		die_errno(_("could not migrate git directory from '%s' to '%s'"),
 			old_git_dir, new_git_dir);
 
-	connect_work_tree_and_git_dir(path, new_git_dir);
+	connect_work_tree_and_git_dir(path, new_git_dir, 0);
 }

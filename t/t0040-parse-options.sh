@@ -286,12 +286,10 @@ test_expect_success 'OPT_CALLBACK() and OPT_BIT() work' '
 	test_cmp expect output
 '
 
->expect
-
 test_expect_success 'OPT_CALLBACK() and callback errors work' '
 	test_must_fail test-parse-options --no-length >output 2>output.err &&
-	test_i18ncmp expect output &&
-	test_i18ncmp expect.err output.err
+	test_must_be_empty output &&
+	test_must_be_empty output.err
 '
 
 cat >expect <<\EOF
