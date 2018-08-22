@@ -25,9 +25,11 @@ include compat/vcbuild/MSVC-DEFS-GEN
 	# See if vcpkg and the vcpkg-build versions of the third-party
 	# libraries that we use are installed.  We include the result
 	# to get $(vcpkg_*) variables defined for the Makefile.
+ifeq (,$(SKIP_VCPKG))
 compat/vcbuild/VCPKG-DEFS: compat/vcbuild/vcpkg_install.bat
 	@"$<"
 include compat/vcbuild/VCPKG-DEFS
+endif
 endif
 
 # We choose to avoid "if .. else if .. else .. endif endif"
