@@ -462,28 +462,13 @@ vcxproj:
 	perl contrib/buildsystems/generate -g Vcxproj
 	git add -f git.sln {*,*/lib,t/helper/*}/*.vcxproj
 
-	# Generate the LinkOrCopyBuiltins.targets file
-	(echo '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' && \
-	 echo '  <Target Name="CopyBuiltins_AfterBuild" AfterTargets="AfterBuild">' && \
-	 for name in $(BUILT_INS);\
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\git.exe" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 for name in $(REMOTE_CURL_ALIASES); \
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\'"$(REMOTE_CURL_PRIMARY)"'" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 echo '  </Target>' && \
-	 echo '</Project>') >git/LinkOrCopyBuiltins.targets
-	git add -f git/LinkOrCopyBuiltins.targets
-
-	# Add command-list.h
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 command-list.h
-	git add -f command-list.h
+	# Add common-cmds.h
+	$(MAKE) MSVC=1 prefix=/mingw64 common-cmds.h
+	git add -f common-cmds.h
 
 	# Add scripts
 	rm -f perl/perl.mak
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 \
+	$(MAKE) MSVC=1 prefix=/mingw64 \
 		$(SCRIPT_LIB) $(SCRIPT_SH_GEN) $(SCRIPT_PERL_GEN)
 	# Strip out the sane tool path, needed only for building
 	sed -i '/^git_broken_path_fix ".*/d' git-sh-setup
@@ -495,7 +480,7 @@ vcxproj:
 
 	# Add bin-wrappers, for testing
 	rm -rf bin-wrappers/
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 $(test_bindir_programs)
+	$(MAKE) MSVC=1 prefix=/mingw64 $(test_bindir_programs)
 	# Ensure that the GIT_EXEC_PATH is a Unix-y one, and that the absolute
 	# path of the repository is not hard-coded (GIT_EXEC_PATH will be set
 	# by test-lib.sh according to the current setup)
@@ -518,7 +503,7 @@ vcxproj:
 	git add -f templates/boilerplates.made templates/blt/
 
 	# Add build options
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 GIT-BUILD-OPTIONS
+	$(MAKE) MSVC=1 prefix=/mingw64 GIT-BUILD-OPTIONS
 	git add -f GIT-BUILD-OPTIONS
 
 	# Commit the whole shebang
@@ -652,7 +637,7 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	COMPAT_OBJS += compat/mingw.o compat/winansi.o \
 		compat/win32/pthread.o compat/win32/syslog.o \
 		compat/win32/dirent.o compat/win32/fscache.o
-	BASIC_CFLAGS += -DWIN32 -DPROTECT_NTFS_DEFAULT=1
+	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
 	EXTLIBS += -lws2_32
 	GITLIBS += git.res
 	PTHREAD_LIBS =
