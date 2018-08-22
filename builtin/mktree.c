@@ -7,7 +7,6 @@
 #include "quote.h"
 #include "tree.h"
 #include "parse-options.h"
-#include "object-store.h"
 
 static struct treeent {
 	unsigned mode;

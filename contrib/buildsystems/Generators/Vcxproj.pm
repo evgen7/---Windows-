@@ -123,23 +123,54 @@ sub createProject {
     my $defines = join(";", sort(@{$$build_structure{"$prefix${name}_DEFINES"}}));
     my $includes= join(";", sort(map { s/^-I//; s/\//\\/g; File::Spec->file_name_is_absolute($_) ? $_ : "$rel_dir\\$_" } @{$$build_structure{"$prefix${name}_INCLUDES"}}));
     my $cflags = join(" ", sort(map { s/^-[GLMOZ].*//; s/.* .*/"$&"/; $_; } @{$$build_structure{"$prefix${name}_CFLAGS"}}));
+    $cflags =~ s/\"/&quot;/g;
     $cflags =~ s/</&lt;/g;
     $cflags =~ s/>/&gt;/g;
 
-    my $libs_release = "\n    ";
-    my $libs_debug = "\n    ";
+    my $libs = '';
     if (!$static_library) {
-      $libs_release = join(";", sort(grep /^(?!libgit\.lib|xdiff\/lib\.lib|vcs-svn\/lib\.lib)/, @{$$build_structure{"$prefix${name}_LIBS"}}));
-      $libs_debug = $libs_release;
-      $libs_debug =~ s/zlib\.lib/zlibd\.lib/;
+      $libs = join(";", sort(grep /^(?!libgit\.lib|xdiff\/lib\.lib|vcs-svn\/lib\.lib|libcurl\.lib|libeay32\.lib|libiconv\.lib|ssleay32\.lib|zlib\.lib)/, @{$$build_structure{"$prefix${name}_LIBS"}}));
     }
 
     $defines =~ s/-D//g;
+    $defines =~ s/\"/&quot;/g;
     $defines =~ s/</&lt;/g;
     $defines =~ s/>/&gt;/g;
     $defines =~ s/\'//g;
 
     die "Could not create the directory $target for $label project!\n" unless (-d "$target" || mkdir "$target");
+
+    use File::Copy;
+    copy("$git_dir/compat/vcbuild/packages.config", "$target/packages.config");
+
+    my $needsCurl = grep(/libcurl.lib/, @{$$build_structure{"$prefix${name}_LIBS"}});
+    my $targetsImport = '';
+    my $targetsErrors = '';
+    my $afterTargets = '';
+    open F, "<$git_dir/compat/vcbuild/packages.config";
+    while (<F>) {
+      if (/<package id="([^"]+)" version="([^"]+)"/) {
+        if ($1 eq 'libiconv') {
+	  # we have to link with the Release builds already because libiconv
+	  # is only available targeting v100 and v110, see
+	  # https://github.com/coapp-packages/libiconv/issues/2
+          $libs .= ";$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.$2\\build\\native\\lib\\v110\\\$(Platform)\\Release\\dynamic\\cdecl\\libiconv.lib";
+	  $afterTargets .= "\n    <Copy SourceFiles=\"$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.redist.$2\\build\\native\\bin\\v110\\\$(Platform)\\Release\\dynamic\\cdecl\\libiconv.dll\" DestinationFolder=\"\$(TargetDir)\" SkipUnchangedFiles=\"true\" />";
+        } elsif ($needsCurl && $1 eq 'curl') {
+	  # libcurl is only available targeting v100 and v110
+	  $libs .= ";$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.$2\\build\\native\\lib\\v110\\\$(Platform)\\Release\\dynamic\\libcurl.lib";
+	  $afterTargets .= "\n    <Copy SourceFiles=\"$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.redist.$2\\build\\native\\bin\\v110\\\$(Platform)\\Release\\dynamic\\libcurl.dll\" DestinationFolder=\"\$(TargetDir)\" SkipUnchangedFiles=\"true\" />";
+        } elsif ($needsCurl && $1 eq 'expat') {
+	  # libexpat is only available targeting v100 and v110
+	  $libs .= ";$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.$2\\build\\native\\lib\\v110\\\$(Platform)\\Release\\dynamic\\utf8\\libexpat.lib";
+	}
+        next if ($1 =~  /^(zlib$|openssl(?!.*(x64|x86)$))/);
+        my $targetsFile = "$rel_dir\\compat\\vcbuild\\GEN.PKGS\\$1.$2\\build\\native\\$1.targets";
+        $targetsImport .= "\n    <Import Project=\"$targetsFile\" Condition=\"Exists('$targetsFile')\" />";
+        $targetsErrors .= "\n    <Error Condition=\"!Exists('$targetsFile')\" Text=\"\$([System.String]::Format('\$(ErrorText)', '$targetsFile'))\" />";
+      }
+    }
+    close F;
 
     open F, ">$vcxproj" or die "Could not open $vcxproj for writing!\n";
     binmode F, ":crlf :utf8";
@@ -168,16 +199,6 @@ sub createProject {
   <PropertyGroup Label="Globals">
     <ProjectGuid>$uuid</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <VCPKGArch Condition="'\$(Platform)'=='Win32'">x86-windows</VCPKGArch>
-    <VCPKGArch Condition="'\$(Platform)'!='Win32'">x64-windows</VCPKGArch>
-    <VCPKGArchDirectory>$cdup\\compat\\vcbuild\\vcpkg\\installed\\\$(VCPKGArch)</VCPKGArchDirectory>
-    <VCPKGBinDirectory Condition="'\(Configuration)'=='Debug'">\$(VCPKGArchDirectory)\\debug\\bin</VCPKGBinDirectory>
-    <VCPKGLibDirectory Condition="'\(Configuration)'=='Debug'">\$(VCPKGArchDirectory)\\debug\\lib</VCPKGLibDirectory>
-    <VCPKGBinDirectory Condition="'\(Configuration)'!='Debug'">\$(VCPKGArchDirectory)\\bin</VCPKGBinDirectory>
-    <VCPKGLibDirectory Condition="'\(Configuration)'!='Debug'">\$(VCPKGArchDirectory)\\lib</VCPKGLibDirectory>
-    <VCPKGIncludeDirectory>\$(VCPKGArchDirectory)\\include</VCPKGIncludeDirectory>
-    <VCPKGLibs Condition="'\(Configuration)'=='Debug'">$libs_debug</VCPKGLibs>
-    <VCPKGLibs Condition="'\(Configuration)'!='Debug'">$libs_release</VCPKGLibs>
   </PropertyGroup>
   <Import Project="\$(VCTargetsPath)\\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'\$(Configuration)'=='Debug'" Label="Configuration">
@@ -211,7 +232,7 @@ sub createProject {
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalOptions>$cflags %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$cdup;$cdup\\compat;$cdup\\compat\\regex;$cdup\\compat\\win32;$cdup\\compat\\poll;$cdup\\compat\\vcbuild\\include;\$(VCPKGIncludeDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <EnableParallelCodeGeneration />
       <MinimalRebuild>true</MinimalRebuild>
       <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
@@ -222,22 +243,11 @@ sub createProject {
       <SuppressStartupBanner>true</SuppressStartupBanner>
     </Lib>
     <Link>
-      <AdditionalLibraryDirectories>\$(VCPKGLibDirectory);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>\$(VCPKGLibs);\$(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$libs;\$(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>invalidcontinue.obj %(AdditionalOptions)</AdditionalOptions>
       <ManifestFile>$cdup\\compat\\win32\\git.manifest</ManifestFile>
       <SubSystem>Console</SubSystem>
     </Link>
-EOM
-    if ($target eq 'libgit') {
-        print F << "EOM";
-    <PreBuildEvent Condition="!Exists('$cdup\\compat\\vcbuild\\vcpkg')">
-      <Message>Initialize VCPKG</Message>
-      <Command>call "$cdup\\compat\\vcbuild\\vcpkg_install.bat" </Command>
-    </PreBuildEvent>
-EOM
-    }
-    print F << "EOM";
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'\$(Platform)'=='Win32'">
     <Link>
@@ -279,7 +289,7 @@ EOM
     print F << "EOM";
   </ItemGroup>
 EOM
-    if (!$static_library || $target =~ 'vcs-svn') {
+    if (!$static_library) {
       my $uuid_libgit = $$build_structure{"LIBS_libgit_GUID"};
       my $uuid_xdiff_lib = $$build_structure{"LIBS_xdiff/lib_GUID"};
 
@@ -308,20 +318,23 @@ EOM
 EOM
     }
     print F << "EOM";
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
   <Import Project="\$(VCTargetsPath)\\Microsoft.Cpp.targets" />
-EOM
-    if (!$static_library) {
-      print F << "EOM";
-  <Target Name="${target}_AfterBuild" AfterTargets="AfterBuild">
-    <ItemGroup>
-      <DLLsAndPDBs Include="\$(VCPKGBinDirectory)\\*.dll;\$(VCPKGBinDirectory)\\*.pdb" />
-    </ItemGroup>
-    <Copy SourceFiles="@(DLLsAndPDBs)" DestinationFolder="\$(OutDir)" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />
+  <ImportGroup Label="ExtensionTargets">$targetsImport
+  </ImportGroup>
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>$targetsErrors
   </Target>
 EOM
-    }
-    if ($target eq 'git') {
-      print F "  <Import Project=\"LinkOrCopyBuiltins.targets\" />\n";
+    if (!$static_library && $afterTargets ne '') {
+      print F << "EOM";
+  <Target Name="${target}_AfterBuild" AfterTargets="AfterBuild">$afterTargets
+  </Target>
+EOM
     }
     print F << "EOM";
 </Project>

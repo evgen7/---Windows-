@@ -3,7 +3,6 @@
 #include "progress.h"
 #include "parse-options.h"
 #include "packfile.h"
-#include "object-store.h"
 
 static const char * const prune_packed_usage[] = {
 	N_("git prune-packed [-n | --dry-run] [-q | --quiet]"),

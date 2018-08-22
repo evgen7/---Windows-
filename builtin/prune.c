@@ -6,7 +6,6 @@
 #include "reachable.h"
 #include "parse-options.h"
 #include "progress.h"
-#include "object-store.h"
 
 static const char * const prune_usage[] = {
 	N_("git prune [-n] [-v] [--progress] [--expire <time>] [--] [<head>...]"),
@@ -40,7 +39,7 @@ static int prune_object(const struct object_id *oid, const char *fullpath,
 	 * Do we know about this object?
 	 * It must have been reachable
 	 */
-	if (lookup_object(the_repository, oid->hash))
+	if (lookup_object(oid->hash))
 		return 0;
 
 	if (lstat(fullpath, &st)) {
@@ -118,7 +117,7 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 
 	expire = TIME_MAX;
 	save_commit_buffer = 0;
-	read_replace_refs = 0;
+	check_replace_refs = 0;
 	ref_paranoia = 1;
 	init_revisions(&revs, prefix);
 
@@ -160,7 +159,7 @@ int cmd_prune(int argc, const char **argv, const char *prefix)
 	remove_temporary_files(s);
 	free(s);
 
-	if (is_repository_shallow(the_repository))
+	if (is_repository_shallow())
 		prune_shallow(show_only);
 
 	return 0;

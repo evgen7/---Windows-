@@ -1,7 +1,6 @@
 #include "builtin.h"
 #include "tag.h"
 #include "replace-object.h"
-#include "object-store.h"
 
 /*
  * A signature file has a very simple fixed format: four lines
