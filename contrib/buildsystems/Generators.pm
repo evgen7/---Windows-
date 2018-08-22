@@ -17,7 +17,7 @@ BEGIN {
     $me = dirname($me);
     if (opendir(D,"$me/Generators")) {
         foreach my $gen (readdir(D)) {
-            next unless ($gen  =~ /\.pm$/);
+            next if ($gen  =~ /^\.\.?$/);
             require "${me}/Generators/$gen";
             $gen =~ s,\.pm,,;
             push(@AVAILABLE, $gen);

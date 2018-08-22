@@ -459,6 +459,8 @@ ssize_t strbuf_write(struct strbuf *sb, FILE *f)
 }
 
 
+#define STRBUF_MAXLINK (2*PATH_MAX)
+
 int strbuf_readlink(struct strbuf *sb, const char *path, size_t hint)
 {
 	size_t oldalloc = sb->alloc;
@@ -469,12 +471,12 @@ int strbuf_readlink(struct strbuf *sb, const char *path, size_t hint)
 	while (hint < STRBUF_MAXLINK) {
 		ssize_t len;
 
-		strbuf_grow(sb, hint + 1);
-		len = readlink(path, sb->buf, hint + 1);
+		strbuf_grow(sb, hint);
+		len = readlink(path, sb->buf, hint);
 		if (len < 0) {
 			if (errno != ERANGE)
 				break;
-		} else if (len <= hint) {
+		} else if (len < hint) {
 			strbuf_setlen(sb, len);
 			return 0;
 		}

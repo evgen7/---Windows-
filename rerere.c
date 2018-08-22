@@ -213,7 +213,7 @@ static void read_rr(struct string_list *rr)
 
 		/* There has to be the hash, tab, path and then NUL */
 		if (buf.len < 42 || get_sha1_hex(buf.buf, sha1))
-			die(_("corrupt MERGE_RR"));
+			die("corrupt MERGE_RR");
 
 		if (buf.buf[40] != '.') {
 			variant = 0;
@@ -222,10 +222,10 @@ static void read_rr(struct string_list *rr)
 			errno = 0;
 			variant = strtol(buf.buf + 41, &path, 10);
 			if (errno)
-				die(_("corrupt MERGE_RR"));
+				die("corrupt MERGE_RR");
 		}
 		if (*(path++) != '\t')
-			die(_("corrupt MERGE_RR"));
+			die("corrupt MERGE_RR");
 		buf.buf[40] = '\0';
 		id = new_rerere_id_hex(buf.buf);
 		id->variant = variant;
@@ -260,12 +260,12 @@ static int write_rr(struct string_list *rr, int out_fd)
 				    rr->items[i].string, 0);
 
 		if (write_in_full(out_fd, buf.buf, buf.len) < 0)
-			die(_("unable to write rerere record"));
+			die("unable to write rerere record");
 
 		strbuf_release(&buf);
 	}
 	if (commit_lock_file(&write_lock) != 0)
-		die(_("unable to write rerere record"));
+		die("unable to write rerere record");
 	return 0;
 }
 
@@ -301,6 +301,38 @@ static void rerere_io_putstr(const char *str, struct rerere_io *io)
 {
 	if (io->output)
 		ferr_puts(str, io->output, &io->wrerror);
+}
+
+/*
+ * Write a conflict marker to io->output (if defined).
+ */
+static void rerere_io_putconflict(int ch, int size, struct rerere_io *io)
+{
+	char buf[64];
+
+	while (size) {
+		if (size <= sizeof(buf) - 2) {
+			memset(buf, ch, size);
+			buf[size] = '\n';
+			buf[size + 1] = '\0';
+			size = 0;
+		} else {
+			int sz = sizeof(buf) - 1;
+
+			/*
+			 * Make sure we will not write everything out
+			 * in this round by leaving at least 1 byte
+			 * for the next round, giving the next round
+			 * a chance to add the terminating LF.  Yuck.
+			 */
+			if (size <= sz)
+				sz -= (sz - size) + 1;
+			memset(buf, ch, sz);
+			buf[sz] = '\0';
+			size -= sz;
+		}
+		rerere_io_putstr(buf, io);
+	}
 }
 
 static void rerere_io_putmem(const char *mem, size_t sz, struct rerere_io *io)
@@ -353,71 +385,6 @@ static int is_cmarker(char *buf, int marker_char, int marker_size)
 	return isspace(*buf);
 }
 
-static void rerere_strbuf_putconflict(struct strbuf *buf, int ch, size_t size)
-{
-	strbuf_addchars(buf, ch, size);
-	strbuf_addch(buf, '\n');
-}
-
-static int handle_conflict(struct strbuf *out, struct rerere_io *io,
-			   int marker_size, git_SHA_CTX *ctx)
-{
-	enum {
-		RR_SIDE_1 = 0, RR_SIDE_2, RR_ORIGINAL
-	} hunk = RR_SIDE_1;
-	struct strbuf one = STRBUF_INIT, two = STRBUF_INIT;
-	struct strbuf buf = STRBUF_INIT, conflict = STRBUF_INIT;
-	int has_conflicts = -1;
-
-	while (!io->getline(&buf, io)) {
-		if (is_cmarker(buf.buf, '<', marker_size)) {
-			if (handle_conflict(&conflict, io, marker_size, NULL) < 0)
-				break;
-			if (hunk == RR_SIDE_1)
-				strbuf_addbuf(&one, &conflict);
-			else
-				strbuf_addbuf(&two, &conflict);
-			strbuf_release(&conflict);
-		} else if (is_cmarker(buf.buf, '|', marker_size)) {
-			if (hunk != RR_SIDE_1)
-				break;
-			hunk = RR_ORIGINAL;
-		} else if (is_cmarker(buf.buf, '=', marker_size)) {
-			if (hunk != RR_SIDE_1 && hunk != RR_ORIGINAL)
-				break;
-			hunk = RR_SIDE_2;
-		} else if (is_cmarker(buf.buf, '>', marker_size)) {
-			if (hunk != RR_SIDE_2)
-				break;
-			if (strbuf_cmp(&one, &two) > 0)
-				strbuf_swap(&one, &two);
-			has_conflicts = 1;
-			rerere_strbuf_putconflict(out, '<', marker_size);
-			strbuf_addbuf(out, &one);
-			rerere_strbuf_putconflict(out, '=', marker_size);
-			strbuf_addbuf(out, &two);
-			rerere_strbuf_putconflict(out, '>', marker_size);
-			if (ctx) {
-				git_SHA1_Update(ctx, one.buf ? one.buf : "",
-					    one.len + 1);
-				git_SHA1_Update(ctx, two.buf ? two.buf : "",
-					    two.len + 1);
-			}
-			break;
-		} else if (hunk == RR_SIDE_1)
-			strbuf_addbuf(&one, &buf);
-		else if (hunk == RR_ORIGINAL)
-			; /* discard */
-		else if (hunk == RR_SIDE_2)
-			strbuf_addbuf(&two, &buf);
-	}
-	strbuf_release(&one);
-	strbuf_release(&two);
-	strbuf_release(&buf);
-
-	return has_conflicts;
-}
-
 /*
  * Read contents a file with conflicts, normalize the conflicts
  * by (1) discarding the common ancestor version in diff3-style,
@@ -427,35 +394,80 @@ static int handle_conflict(struct strbuf *out, struct rerere_io *io,
  * one side of the conflict, NUL, the other side of the conflict,
  * and NUL concatenated together.
  *
- * Return 1 if conflict hunks are found, 0 if there are no conflict
- * hunks and -1 if an error occured.
+ * Return the number of conflict hunks found.
+ *
+ * NEEDSWORK: the logic and theory of operation behind this conflict
+ * normalization may deserve to be documented somewhere, perhaps in
+ * Documentation/technical/rerere.txt.
  */
 static int handle_path(unsigned char *sha1, struct rerere_io *io, int marker_size)
 {
 	git_SHA_CTX ctx;
-	struct strbuf buf = STRBUF_INIT, out = STRBUF_INIT;
-	int has_conflicts = 0;
+	int hunk_no = 0;
+	enum {
+		RR_CONTEXT = 0, RR_SIDE_1, RR_SIDE_2, RR_ORIGINAL
+	} hunk = RR_CONTEXT;
+	struct strbuf one = STRBUF_INIT, two = STRBUF_INIT;
+	struct strbuf buf = STRBUF_INIT;
+
 	if (sha1)
 		git_SHA1_Init(&ctx);
 
 	while (!io->getline(&buf, io)) {
 		if (is_cmarker(buf.buf, '<', marker_size)) {
-			has_conflicts = handle_conflict(&out, io, marker_size,
-							sha1 ? &ctx : NULL);
-			if (has_conflicts < 0)
-				break;
-			rerere_io_putmem(out.buf, out.len, io);
-			strbuf_reset(&out);
-		} else
+			if (hunk != RR_CONTEXT)
+				goto bad;
+			hunk = RR_SIDE_1;
+		} else if (is_cmarker(buf.buf, '|', marker_size)) {
+			if (hunk != RR_SIDE_1)
+				goto bad;
+			hunk = RR_ORIGINAL;
+		} else if (is_cmarker(buf.buf, '=', marker_size)) {
+			if (hunk != RR_SIDE_1 && hunk != RR_ORIGINAL)
+				goto bad;
+			hunk = RR_SIDE_2;
+		} else if (is_cmarker(buf.buf, '>', marker_size)) {
+			if (hunk != RR_SIDE_2)
+				goto bad;
+			if (strbuf_cmp(&one, &two) > 0)
+				strbuf_swap(&one, &two);
+			hunk_no++;
+			hunk = RR_CONTEXT;
+			rerere_io_putconflict('<', marker_size, io);
+			rerere_io_putmem(one.buf, one.len, io);
+			rerere_io_putconflict('=', marker_size, io);
+			rerere_io_putmem(two.buf, two.len, io);
+			rerere_io_putconflict('>', marker_size, io);
+			if (sha1) {
+				git_SHA1_Update(&ctx, one.buf ? one.buf : "",
+					    one.len + 1);
+				git_SHA1_Update(&ctx, two.buf ? two.buf : "",
+					    two.len + 1);
+			}
+			strbuf_reset(&one);
+			strbuf_reset(&two);
+		} else if (hunk == RR_SIDE_1)
+			strbuf_addbuf(&one, &buf);
+		else if (hunk == RR_ORIGINAL)
+			; /* discard */
+		else if (hunk == RR_SIDE_2)
+			strbuf_addbuf(&two, &buf);
+		else
 			rerere_io_putstr(buf.buf, io);
+		continue;
+	bad:
+		hunk = 99; /* force error exit */
+		break;
 	}
+	strbuf_release(&one);
+	strbuf_release(&two);
 	strbuf_release(&buf);
-	strbuf_release(&out);
 
 	if (sha1)
 		git_SHA1_Final(sha1, &ctx);
-
-	return has_conflicts;
+	if (hunk != RR_CONTEXT)
+		return -1;
+	return hunk_no;
 }
 
 /*
@@ -464,7 +476,7 @@ static int handle_path(unsigned char *sha1, struct rerere_io *io, int marker_siz
  */
 static int handle_file(const char *path, unsigned char *sha1, const char *output)
 {
-	int has_conflicts = 0;
+	int hunk_no = 0;
 	struct rerere_io_file io;
 	int marker_size = ll_merge_marker_size(path);
 
@@ -473,34 +485,34 @@ static int handle_file(const char *path, unsigned char *sha1, const char *output
 	io.input = fopen(path, "r");
 	io.io.wrerror = 0;
 	if (!io.input)
-		return error_errno(_("could not open '%s'"), path);
+		return error_errno("Could not open %s", path);
 
 	if (output) {
 		io.io.output = fopen(output, "w");
 		if (!io.io.output) {
-			error_errno(_("could not write '%s'"), output);
+			error_errno("Could not write %s", output);
 			fclose(io.input);
 			return -1;
 		}
 	}
 
-	has_conflicts = handle_path(sha1, (struct rerere_io *)&io, marker_size);
+	hunk_no = handle_path(sha1, (struct rerere_io *)&io, marker_size);
 
 	fclose(io.input);
 	if (io.io.wrerror)
-		error(_("there were errors while writing '%s' (%s)"),
+		error("There were errors while writing %s (%s)",
 		      path, strerror(io.io.wrerror));
 	if (io.io.output && fclose(io.io.output))
-		io.io.wrerror = error_errno(_("failed to flush '%s'"), path);
+		io.io.wrerror = error_errno("Failed to flush %s", path);
 
-	if (has_conflicts < 0) {
+	if (hunk_no < 0) {
 		if (output)
 			unlink_or_warn(output);
-		return error(_("could not parse conflict hunks in '%s'"), path);
+		return error("Could not parse conflict hunks in %s", path);
 	}
 	if (io.io.wrerror)
 		return -1;
-	return has_conflicts;
+	return hunk_no;
 }
 
 /*
@@ -557,7 +569,7 @@ static int find_conflict(struct string_list *conflict)
 {
 	int i;
 	if (read_cache() < 0)
-		return error(_("index file corrupt"));
+		return error("Could not read index");
 
 	for (i = 0; i < active_nr;) {
 		int conflict_type;
@@ -590,7 +602,7 @@ int rerere_remaining(struct string_list *merge_rr)
 	if (setup_rerere(merge_rr, RERERE_READONLY))
 		return 0;
 	if (read_cache() < 0)
-		return error(_("index file corrupt"));
+		return error("Could not read index");
 
 	for (i = 0; i < active_nr;) {
 		int conflict_type;
@@ -673,17 +685,17 @@ static int merge(const struct rerere_id *id, const char *path)
 	 * Mark that "postimage" was used to help gc.
 	 */
 	if (utime(rerere_path(id, "postimage"), NULL) < 0)
-		warning_errno(_("failed utime() on '%s'"),
+		warning_errno("failed utime() on %s",
 			      rerere_path(id, "postimage"));
 
 	/* Update "path" with the resolution */
 	f = fopen(path, "w");
 	if (!f)
-		return error_errno(_("could not open '%s'"), path);
+		return error_errno("Could not open %s", path);
 	if (fwrite(result.ptr, result.size, 1, f) != 1)
-		error_errno(_("could not write '%s'"), path);
+		error_errno("Could not write %s", path);
 	if (fclose(f))
-		return error_errno(_("writing '%s' failed"), path);
+		return error_errno("Writing %s failed", path);
 
 out:
 	free(cur.ptr);
@@ -703,13 +715,13 @@ static void update_paths(struct string_list *update)
 		struct string_list_item *item = &update->items[i];
 		if (add_file_to_cache(item->string, 0))
 			exit(128);
-		fprintf_ln(stderr, _("Staged '%s' using previous resolution."),
+		fprintf(stderr, "Staged '%s' using previous resolution.\n",
 			item->string);
 	}
 
 	if (write_locked_index(&the_index, &index_lock,
 			       COMMIT_LOCK | SKIP_IF_UNCHANGED))
-		die(_("unable to write new index file"));
+		die("Unable to write new index file");
 }
 
 static void remove_variant(struct rerere_id *id)
@@ -741,7 +753,7 @@ static void do_rerere_one_path(struct string_list_item *rr_item,
 		if (!handle_file(path, NULL, NULL)) {
 			copy_file(rerere_path(id, "postimage"), path, 0666);
 			id->collection->status[variant] |= RR_HAS_POSTIMAGE;
-			fprintf_ln(stderr, _("Recorded resolution for '%s'."), path);
+			fprintf(stderr, "Recorded resolution for '%s'.\n", path);
 			free_rerere_id(rr_item);
 			rr_item->util = NULL;
 			return;
@@ -775,9 +787,9 @@ static void do_rerere_one_path(struct string_list_item *rr_item,
 		if (rerere_autoupdate)
 			string_list_insert(update, path);
 		else
-			fprintf_ln(stderr,
-				   _("Resolved '%s' using previous resolution."),
-				   path);
+			fprintf(stderr,
+				"Resolved '%s' using previous resolution.\n",
+				path);
 		free_rerere_id(rr_item);
 		rr_item->util = NULL;
 		return;
@@ -791,11 +803,11 @@ static void do_rerere_one_path(struct string_list_item *rr_item,
 	if (id->collection->status[variant] & RR_HAS_POSTIMAGE) {
 		const char *path = rerere_path(id, "postimage");
 		if (unlink(path))
-			die_errno(_("cannot unlink stray '%s'"), path);
+			die_errno("cannot unlink stray '%s'", path);
 		id->collection->status[variant] &= ~RR_HAS_POSTIMAGE;
 	}
 	id->collection->status[variant] |= RR_HAS_PREIMAGE;
-	fprintf_ln(stderr, _("Recorded preimage for '%s'"), path);
+	fprintf(stderr, "Recorded preimage for '%s'\n", path);
 }
 
 static int do_plain_rerere(struct string_list *rr, int fd)
@@ -818,16 +830,15 @@ static int do_plain_rerere(struct string_list *rr, int fd)
 		const char *path = conflict.items[i].string;
 		int ret;
 
+		if (string_list_has_string(rr, path))
+			continue;
+
 		/*
 		 * Ask handle_file() to scan and assign a
 		 * conflict ID.  No need to write anything out
 		 * yet.
 		 */
 		ret = handle_file(path, sha1, NULL);
-		if (ret != 0 && string_list_has_string(rr, path)) {
-			remove_variant(string_list_lookup(rr, path)->util);
-			string_list_remove(rr, path, 1);
-		}
 		if (ret < 1)
 			continue;
 
@@ -868,7 +879,7 @@ static int is_rerere_enabled(void)
 		return rr_cache_exists;
 
 	if (!rr_cache_exists && mkdir_in_gitdir(git_path_rr_cache()))
-		die(_("could not create directory '%s'"), git_path_rr_cache());
+		die("Could not create directory %s", git_path_rr_cache());
 	return 1;
 }
 
@@ -947,7 +958,7 @@ static int handle_cache(const char *path, unsigned char *sha1, const char *outpu
 	mmfile_t mmfile[3] = {{NULL}};
 	mmbuffer_t result = {NULL, 0};
 	const struct cache_entry *ce;
-	int pos, len, i, has_conflicts;
+	int pos, len, i, hunk_no;
 	struct rerere_io_mem io;
 	int marker_size = ll_merge_marker_size(path);
 
@@ -1001,11 +1012,11 @@ static int handle_cache(const char *path, unsigned char *sha1, const char *outpu
 	 * Grab the conflict ID and optionally write the original
 	 * contents with conflict markers out.
 	 */
-	has_conflicts = handle_path(sha1, (struct rerere_io *)&io, marker_size);
+	hunk_no = handle_path(sha1, (struct rerere_io *)&io, marker_size);
 	strbuf_release(&io.input);
 	if (io.io.output)
 		fclose(io.io.output);
-	return has_conflicts;
+	return hunk_no;
 }
 
 static int rerere_forget_one_path(const char *path, struct string_list *rr)
@@ -1022,7 +1033,7 @@ static int rerere_forget_one_path(const char *path, struct string_list *rr)
 	 */
 	ret = handle_cache(path, sha1, NULL);
 	if (ret < 1)
-		return error(_("could not parse conflict hunks in '%s'"), path);
+		return error("Could not parse conflict hunks in '%s'", path);
 
 	/* Nuke the recorded resolution for the conflict */
 	id = new_rerere_id(sha1);
@@ -1040,7 +1051,7 @@ static int rerere_forget_one_path(const char *path, struct string_list *rr)
 		handle_cache(path, sha1, rerere_path(id, "thisimage"));
 		if (read_mmfile(&cur, rerere_path(id, "thisimage"))) {
 			free(cur.ptr);
-			error(_("failed to update conflicted state in '%s'"), path);
+			error("Failed to update conflicted state in '%s'", path);
 			goto fail_exit;
 		}
 		cleanly_resolved = !try_merge(id, path, &cur, &result);
@@ -1051,16 +1062,16 @@ static int rerere_forget_one_path(const char *path, struct string_list *rr)
 	}
 
 	if (id->collection->status_nr <= id->variant) {
-		error(_("no remembered resolution for '%s'"), path);
+		error("no remembered resolution for '%s'", path);
 		goto fail_exit;
 	}
 
 	filename = rerere_path(id, "postimage");
 	if (unlink(filename)) {
 		if (errno == ENOENT)
-			error(_("no remembered resolution for '%s'"), path);
+			error("no remembered resolution for %s", path);
 		else
-			error_errno(_("cannot unlink '%s'"), filename);
+			error_errno("cannot unlink %s", filename);
 		goto fail_exit;
 	}
 
@@ -1070,7 +1081,7 @@ static int rerere_forget_one_path(const char *path, struct string_list *rr)
 	 * the postimage.
 	 */
 	handle_cache(path, sha1, rerere_path(id, "preimage"));
-	fprintf_ln(stderr, _("Updated preimage for '%s'"), path);
+	fprintf(stderr, "Updated preimage for '%s'\n", path);
 
 	/*
 	 * And remember that we can record resolution for this
@@ -1079,7 +1090,7 @@ static int rerere_forget_one_path(const char *path, struct string_list *rr)
 	item = string_list_insert(rr, path);
 	free_rerere_id(item);
 	item->util = id;
-	fprintf(stderr, _("Forgot resolution for '%s'\n"), path);
+	fprintf(stderr, "Forgot resolution for %s\n", path);
 	return 0;
 
 fail_exit:
@@ -1094,7 +1105,7 @@ int rerere_forget(struct pathspec *pathspec)
 	struct string_list merge_rr = STRING_LIST_INIT_DUP;
 
 	if (read_cache() < 0)
-		return error(_("index file corrupt"));
+		return error("Could not read index");
 
 	fd = setup_rerere(&merge_rr, RERERE_NOAUTOUPDATE);
 	if (fd < 0)
@@ -1182,7 +1193,7 @@ void rerere_gc(struct string_list *rr)
 	git_config(git_default_config, NULL);
 	dir = opendir(git_path("rr-cache"));
 	if (!dir)
-		die_errno(_("unable to open rr-cache directory"));
+		die_errno("unable to open rr-cache directory");
 	/* Collect stale conflict IDs ... */
 	while ((e = readdir(dir))) {
 		struct rerere_dir *rr_dir;
