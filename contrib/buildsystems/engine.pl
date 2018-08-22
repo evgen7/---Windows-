@@ -57,6 +57,8 @@ while (@ARGV) {
         open(F, "<$infile") || die "Couldn't open file $infile";
         @makedry = <F>;
         close(F);
+    } else {
+        die "Unknown option: " . $arg;
     }
 }
 
@@ -80,7 +82,7 @@ EOM
 # Capture the make dry stderr to file for review (will be empty for a release build).
 
 my $ErrsFile = "msvc-build-makedryerrors.txt";
-@makedry = `cd $git_dir && make -n MSVC=1 V=1 2>$ErrsFile` if !@makedry;
+@makedry = `make -C $git_dir -n MSVC=1 V=1 2>$ErrsFile` if !@makedry;
 # test for an empty Errors file and remove it
 unlink $ErrsFile if -f -z $ErrsFile;
 
