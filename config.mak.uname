@@ -580,7 +580,7 @@ ifneq (,$(findstring MINGW,$(uname_S)))
 	COMPAT_OBJS += compat/mingw.o compat/winansi.o \
 		compat/win32/pthread.o compat/win32/syslog.o \
 		compat/win32/dirent.o compat/win32/fscache.o
-	BASIC_CFLAGS += -DWIN32 -DPROTECT_NTFS_DEFAULT=1
+	BASIC_CFLAGS += -DPROTECT_NTFS_DEFAULT=1
 	EXTLIBS += -lws2_32
 	GITLIBS += git.res
 	PTHREAD_LIBS =
@@ -726,24 +726,9 @@ vcxproj:
 	perl contrib/buildsystems/generate -g Vcxproj
 	git add -f git.sln {*,*/lib,t/helper/*}/*.vcxproj
 
-	# Generate the LinkOrCopyBuiltins.targets file
-	(echo '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">' && \
-	 echo '  <Target Name="CopyBuiltins_AfterBuild" AfterTargets="AfterBuild">' && \
-	 for name in $(BUILT_INS);\
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\git.exe" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 for name in $(REMOTE_CURL_ALIASES); \
-	 do \
-	   echo '    <Copy SourceFiles="$$(OutDir)\'"$(REMOTE_CURL_PRIMARY)"'" DestinationFiles="$$(OutDir)\'"$$name"'" SkipUnchangedFiles="true" UseHardlinksIfPossible="true" />'; \
-	 done && \
-	 echo '  </Target>' && \
-	 echo '</Project>') >git/LinkOrCopyBuiltins.targets
-	git add -f git/LinkOrCopyBuiltins.targets
-
-	# Add command-list.h
-	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 command-list.h
-	git add -f command-list.h
+	# Add common-cmds.h
+	$(MAKE) MSVC=1 SKIP_VCPKG=1 prefix=/mingw64 common-cmds.h
+	git add -f common-cmds.h
 
 	# Add scripts
 	rm -f perl/perl.mak
