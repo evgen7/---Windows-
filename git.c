@@ -328,7 +328,6 @@ static int handle_alias(int *argcp, const char ***argv)
 			commit_pager_choice();
 
 			child.use_shell = 1;
-			child.slog_child_class = "alias";
 			argv_array_push(&child.args, alias_string + 1);
 			argv_array_pushv(&child.args, (*argv) + 1);
 
@@ -414,7 +413,6 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 		setup_work_tree();
 
 	trace_argv_printf(argv, "trace: built-in: git");
-	slog_set_command_name(p->cmd);
 
 	validate_cache_entries(&the_index);
 	status = p->fn(argc, argv, prefix);
@@ -525,13 +523,7 @@ static struct cmd_struct commands[] = {
 	{ "push", cmd_push, RUN_SETUP },
 	{ "range-diff", cmd_range_diff, RUN_SETUP | USE_PAGER },
 	{ "read-tree", cmd_read_tree, RUN_SETUP | SUPPORT_SUPER_PREFIX},
-	/*
-	 * NEEDSWORK: Until the rebase is independent and needs no redirection
-	 * to rebase shell script this is kept as is, then should be changed to
-	 * RUN_SETUP | NEED_WORK_TREE
-	 */
-	{ "rebase", cmd_rebase },
-	{ "rebase--interactive", cmd_rebase__interactive, RUN_SETUP | NEED_WORK_TREE },
+	{ "rebase--helper", cmd_rebase__helper, RUN_SETUP | NEED_WORK_TREE },
 	{ "receive-pack", cmd_receive_pack },
 	{ "reflog", cmd_reflog, RUN_SETUP },
 	{ "remote", cmd_remote, RUN_SETUP },
@@ -553,7 +545,6 @@ static struct cmd_struct commands[] = {
 	{ "show-index", cmd_show_index },
 	{ "show-ref", cmd_show_ref, RUN_SETUP },
 	{ "stage", cmd_add, RUN_SETUP | NEED_WORK_TREE },
-	{ "stash", cmd_stash, RUN_SETUP | NEED_WORK_TREE },
 	{ "status", cmd_status, RUN_SETUP | NEED_WORK_TREE },
 	{ "stripspace", cmd_stripspace },
 	{ "submodule--helper", cmd_submodule__helper, RUN_SETUP | SUPPORT_SUPER_PREFIX | NO_PARSEOPT },
@@ -665,7 +656,6 @@ static void execv_dashed_external(const char **argv)
 	cmd.clean_on_exit = 1;
 	cmd.wait_after_clean = 1;
 	cmd.silent_exec_failure = 1;
-	cmd.slog_child_class = "alias";
 
 	trace_argv_printf(cmd.args.argv, "trace: exec:");
 
@@ -741,7 +731,7 @@ static int run_argv(int *argcp, const char ***argv)
 	return done_alias;
 }
 
-static int real_cmd_main(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	const char *cmd;
 	int done_help = 0;
@@ -819,9 +809,4 @@ static int real_cmd_main(int argc, const char **argv)
 		cmd, strerror(errno));
 
 	return 1;
-}
-
-int cmd_main(int argc, const char **argv)
-{
-	return slog_wrap_main(real_cmd_main, argc, argv);
 }

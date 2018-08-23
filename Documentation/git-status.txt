@@ -97,7 +97,6 @@ configuration variable documented in linkgit:git-config[1].
 	(and suppresses the output of submodule summaries when the config option
 	`status.submoduleSummary` is set).
 
--i[<mode>]::
 --ignored[=<mode>]::
 	Show ignored files as well.
 +

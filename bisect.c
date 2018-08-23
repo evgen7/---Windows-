@@ -259,10 +259,9 @@ static struct commit_list *best_bisection_sorted(struct commit_list *list, int n
  */
 static struct commit_list *do_find_bisection(struct commit_list *list,
 					     int nr, int *weights,
-					     unsigned bisect_flags)
+					     int find_all)
 {
 	int n, counted;
-	unsigned find_all = bisect_flags & BISECT_FIND_ALL;
 	struct commit_list *p;
 
 	counted = 0;
@@ -371,7 +370,7 @@ static struct commit_list *do_find_bisection(struct commit_list *list,
 }
 
 void find_bisection(struct commit_list **commit_list, int *reaches,
-		    int *all, unsigned bisect_flags)
+		    int *all, int find_all)
 {
 	int nr, on_list;
 	struct commit_list *list, *p, *best, *next, *last;
@@ -407,9 +406,9 @@ void find_bisection(struct commit_list **commit_list, int *reaches,
 	weights = xcalloc(on_list, sizeof(*weights));
 
 	/* Do the real work of finding bisection commit. */
-	best = do_find_bisection(list, nr, weights, bisect_flags);
+	best = do_find_bisection(list, nr, weights, find_all);
 	if (best) {
-		if (!(bisect_flags & BISECT_FIND_ALL)) {
+		if (!find_all) {
 			list->item = best->item;
 			free_commit_list(list->next);
 			best = list;
@@ -951,7 +950,6 @@ int bisect_next_all(const char *prefix, int no_checkout)
 	struct rev_info revs;
 	struct commit_list *tried;
 	int reaches = 0, all = 0, nr, steps;
-	unsigned bisect_flags = 0;
 	struct object_id *bisect_rev;
 	char *steps_msg;
 
@@ -966,10 +964,7 @@ int bisect_next_all(const char *prefix, int no_checkout)
 
 	bisect_common(&revs);
 
-	if (skipped_revs.nr)
-		bisect_flags |= BISECT_FIND_ALL;
-
-	find_bisection(&revs.commits, &reaches, &all, bisect_flags);
+	find_bisection(&revs.commits, &reaches, &all, !!skipped_revs.nr);
 	revs.commits = managed_skipped(revs.commits, &tried);
 
 	if (!revs.commits) {

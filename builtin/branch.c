@@ -694,12 +694,10 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		setup_auto_pager("branch", 1);
 
 	if (delete) {
-		slog_set_sub_command_name("delete");
 		if (!argc)
 			die(_("branch name required"));
 		return delete_branches(argc, argv, delete > 1, filter.kind, quiet);
 	} else if (list) {
-		slog_set_sub_command_name("list");
 		/*  git branch --local also shows HEAD when it is detached */
 		if ((filter.kind & FILTER_REFS_BRANCHES) && filter.detached)
 			filter.kind |= FILTER_REFS_DETACHED_HEAD;
@@ -723,7 +721,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		const char *branch_name;
 		struct strbuf branch_ref = STRBUF_INIT;
 
-		slog_set_sub_command_name("edit");
 		if (!argc) {
 			if (filter.detached)
 				die(_("Cannot give description to detached HEAD"));
@@ -749,7 +746,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		if (edit_branch_description(branch_name))
 			return 1;
 	} else if (copy) {
-		slog_set_sub_command_name("copy");
 		if (!argc)
 			die(_("branch name required"));
 		else if (argc == 1)
@@ -759,7 +755,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		else
 			die(_("too many branches for a copy operation"));
 	} else if (rename) {
-		slog_set_sub_command_name("rename");
 		if (!argc)
 			die(_("branch name required"));
 		else if (argc == 1)
@@ -771,7 +766,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 	} else if (new_upstream) {
 		struct branch *branch = branch_get(argv[0]);
 
-		slog_set_sub_command_name("new_upstream");
 		if (argc > 1)
 			die(_("too many arguments to set new upstream"));
 
@@ -795,7 +789,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 		struct branch *branch = branch_get(argv[0]);
 		struct strbuf buf = STRBUF_INIT;
 
-		slog_set_sub_command_name("unset_upstream");
 		if (argc > 1)
 			die(_("too many arguments to unset upstream"));
 
@@ -818,7 +811,6 @@ int cmd_branch(int argc, const char **argv, const char *prefix)
 	} else if (argc > 0 && argc <= 2) {
 		struct branch *branch = branch_get(argv[0]);
 
-		slog_set_sub_command_name("create");
 		if (!branch)
 			die(_("no such branch '%s'"), argv[0]);
 

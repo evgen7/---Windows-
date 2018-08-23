@@ -6,8 +6,7 @@
 #include "repository.h"
 #include "commit.h"
 
-static int register_replace_ref(struct repository *r,
-				const char *refname,
+static int register_replace_ref(const char *refname,
 				const struct object_id *oid,
 				int flag, void *cb_data)
 {
@@ -26,13 +25,13 @@ static int register_replace_ref(struct repository *r,
 	oidcpy(&repl_obj->replacement, oid);
 
 	/* Register new object */
-	if (oidmap_put(r->objects->replace_map, repl_obj))
+	if (oidmap_put(the_repository->objects->replace_map, repl_obj))
 		die(_("duplicate replace ref: %s"), refname);
 
 	return 0;
 }
 
-void prepare_replace_object(struct repository *r)
+static void prepare_replace_object(struct repository *r)
 {
 	if (r->objects->replace_map)
 		return;
