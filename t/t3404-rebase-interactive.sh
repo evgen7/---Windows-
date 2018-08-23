@@ -75,6 +75,16 @@ test_expect_success 'rebase --keep-empty' '
 	test_line_count = 6 actual
 '
 
+cat > expect <<EOF
+error: nothing to do
+EOF
+
+test_expect_success 'rebase -i with empty HEAD' '
+	set_fake_editor &&
+	test_must_fail env FAKE_LINES="1 exec_true" git rebase -i HEAD^ >actual 2>&1 &&
+	test_i18ncmp expect actual
+'
+
 test_expect_success 'rebase -i with the exec command' '
 	git checkout master &&
 	(
@@ -796,16 +806,15 @@ test_expect_success 'always cherry-pick with --no-ff' '
 	git tag original-no-ff-branch &&
 	set_fake_editor &&
 	git rebase -i --no-ff A &&
-	touch empty &&
 	for p in 0 1 2
 	do
 		test ! $(git rev-parse HEAD~$p) = $(git rev-parse original-no-ff-branch~$p) &&
 		git diff HEAD~$p original-no-ff-branch~$p > out &&
-		test_cmp empty out
+		test_must_be_empty out
 	done &&
 	test $(git rev-parse HEAD~3) = $(git rev-parse original-no-ff-branch~3) &&
 	git diff HEAD~3 original-no-ff-branch~3 > out &&
-	test_cmp empty out
+	test_must_be_empty out
 '
 
 test_expect_success 'set up commits with funny messages' '
@@ -1427,9 +1436,21 @@ test_expect_success 'rebase -i --gpg-sign=<key-id> overrides commit.gpgSign' '
 test_expect_success 'valid author header after --root swap' '
 	rebase_setup_and_clean author-header no-conflict-branch &&
 	set_fake_editor &&
-	FAKE_LINES="2 1" git rebase -i --root &&
-	git cat-file commit HEAD^ >out &&
-	grep "^author ..*> [0-9][0-9]* [-+][0-9][0-9][0-9][0-9]$" out
+	git commit --amend --author="Au ${SQ}thor <author@example.com>" --no-edit &&
+	git cat-file commit HEAD | grep ^author >expected &&
+	FAKE_LINES="5 1" git rebase -i --root &&
+	git cat-file commit HEAD^ | grep ^author >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'valid author header when author contains single quote' '
+	rebase_setup_and_clean author-header no-conflict-branch &&
+	set_fake_editor &&
+	git commit --amend --author="Au ${SQ}thor <author@example.com>" --no-edit &&
+	git cat-file commit HEAD | grep ^author >expected &&
+	FAKE_LINES="2" git rebase -i HEAD~2 &&
+	git cat-file commit HEAD | grep ^author >actual &&
+	test_cmp expected actual
 '
 
 test_done

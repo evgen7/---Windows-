@@ -33,6 +33,7 @@
 #include "sequencer.h"
 #include "mailmap.h"
 #include "help.h"
+#include "commit-reach.h"
 
 static const char * const builtin_commit_usage[] = {
 	N_("git commit [<options>] [--] <pathspec>..."),
@@ -1320,7 +1321,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		  N_("mode"),
 		  N_("show untracked files, optional modes: all, normal, no. (Default: all)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"all" },
-		{ OPTION_STRING, 0, "ignored", &ignored_arg,
+		{ OPTION_STRING, 'i', "ignored", &ignored_arg,
 		  N_("mode"),
 		  N_("show ignored files, optional modes: traditional, matching, no. (Default: traditional)"),
 		  PARSE_OPT_OPTARG, NULL, (intptr_t)"traditional" },

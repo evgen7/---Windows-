@@ -803,9 +803,9 @@ static int add_excludes_from_buffer(char *buf, size_t size,
  * an index if 'istate' is non-null), parse it and store the
  * exclude rules in "el".
  *
- * If "ss" is not NULL, compute SHA-1 of the exclude file and fill
+ * If sha1_stat is not NULL, compute SHA-1 of the exclude file and fill
  * stat data from disk (only valid if add_excludes returns zero). If
- * ss_valid is non-zero, "ss" must contain good value as input.
+ * sha1_stat.valid is non-zero, sha1_stat must contain good value as input.
  */
 static int add_excludes(const char *fname, const char *base, int baselen,
 			struct exclude_list *el, struct index_state *istate,
@@ -2268,10 +2268,13 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		   const char *path, int len, const struct pathspec *pathspec)
 {
 	struct untracked_cache_dir *untracked;
-	uint64_t start = getnanotime();
 
-	if (has_symlink_leading_path(path, len))
+	trace_performance_enter();
+
+	if (has_symlink_leading_path(path, len)) {
+		trace_performance_leave("read directory %.*s", len, path);
 		return dir->nr;
+	}
 
 	untracked = validate_untracked_cache(dir, len, pathspec);
 	if (!untracked)
@@ -2307,7 +2310,7 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		dir->nr = i;
 	}
 
-	trace_performance_since(start, "read directory %.*s", len, path);
+	trace_performance_leave("read directory %.*s", len, path);
 	if (dir->untracked) {
 		static int force_untracked_cache = -1;
 		static struct trace_key trace_untracked_stats = TRACE_KEY_INIT(UNTRACKED_STATS);
@@ -3058,7 +3061,7 @@ static void connect_wt_gitdir_in_nested(const char *sub_worktree,
 		strbuf_reset(&sub_wt);
 		strbuf_reset(&sub_gd);
 		strbuf_addf(&sub_wt, "%s/%s", sub_worktree, sub->path);
-		strbuf_addf(&sub_gd, "%s/modules/%s", sub_gitdir, sub->name);
+		submodule_name_to_gitdir(&sub_gd, &subrepo, sub->name);
 
 		connect_work_tree_and_git_dir(sub_wt.buf, sub_gd.buf, 1);
 	}

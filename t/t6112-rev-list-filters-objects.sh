@@ -113,12 +113,11 @@ test_expect_success 'verify blob:limit=1k' '
 '
 
 test_expect_success 'verify blob:limit=1m' '
-	cat </dev/null >expected &&
 	git -C r2 rev-list HEAD --quiet --objects --filter-print-omitted --filter=blob:limit=1m \
 		| awk -f print_1.awk \
 		| sed "s/~//" \
 		| sort >observed &&
-	test_cmp observed expected
+	test_must_be_empty observed
 '
 
 # Test sparse:path=<path> filter.
@@ -194,6 +193,35 @@ test_expect_success 'verify sparse:oid=oid-ish omits top-level files' '
 		| sed "s/~//" \
 		| sort >observed &&
 	test_cmp observed expected
+'
+
+test_expect_success 'rev-list W/ --missing=print and --missing=allow-any for trees' '
+	TREE=$(git -C r3 rev-parse HEAD:dir1) &&
+
+	rm r3/.git/objects/$(echo $TREE | sed "s|^..|&/|") &&
+
+	git -C r3 rev-list --quiet --missing=print --objects HEAD >missing_objs 2>rev_list_err &&
+	echo "?$TREE" >expected &&
+	test_cmp expected missing_objs &&
+
+	# do not complain when a missing tree cannot be parsed
+	test_line_count = 0 rev_list_err &&
+
+	git -C r3 rev-list --missing=allow-any --objects HEAD >objs 2>rev_list_err &&
+	! grep $TREE objs &&
+	test_line_count = 0 rev_list_err
+'
+
+# Test tree:0 filter.
+
+test_expect_success 'verify tree:0 includes trees in "filtered" output' '
+	git -C r3 rev-list HEAD --quiet --objects --filter-print-omitted --filter=tree:0 \
+		| awk -f print_1.awk \
+		| sed s/~// \
+		| xargs -n1 git -C r3 cat-file -t \
+		| sort -u >filtered_types &&
+	printf "blob\ntree\n" > expected &&
+	test_cmp filtered_types expected
 '
 
 # Delete some loose objects and use rev-list, but WITHOUT any filtering.

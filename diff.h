@@ -194,6 +194,11 @@ struct diff_options {
 	FILE *file;
 	int close_file;
 
+#define OUTPUT_INDICATOR_NEW 0
+#define OUTPUT_INDICATOR_OLD 1
+#define OUTPUT_INDICATOR_CONTEXT 2
+	char output_indicators[3];
+
 	struct pathspec pathspec;
 	pathchange_fn_t pathchange;
 	change_fn_t change;
@@ -415,6 +420,8 @@ const char *diff_aligned_abbrev(const struct object_id *sha1, int);
 #define DIFF_SILENT_ON_REMOVED 01
 /* report racily-clean paths as modified */
 #define DIFF_RACY_IS_MODIFIED 02
+/* skip loading the fsmonitor data */
+#define DIFF_SKIP_FSMONITOR 04
 int run_diff_files(struct rev_info *revs, unsigned int option);
 int run_diff_index(struct rev_info *revs, int cached);
 

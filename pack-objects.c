@@ -99,7 +99,7 @@ static void prepare_in_pack_by_idx(struct packing_data *pdata)
 	 * (i.e. in_pack_idx also zero) should return NULL.
 	 */
 	mapping[cnt++] = NULL;
-	for (p = get_packed_git(the_repository); p; p = p->next, cnt++) {
+	for (p = get_all_packs(the_repository); p; p = p->next, cnt++) {
 		if (cnt == nr) {
 			free(mapping);
 			return;
@@ -146,6 +146,8 @@ void prepare_packing_data(struct packing_data *pdata)
 
 	pdata->oe_size_limit = git_env_ulong("GIT_TEST_OE_SIZE",
 					     1U << OE_SIZE_BITS);
+	pdata->oe_delta_size_limit = git_env_ulong("GIT_TEST_OE_DELTA_SIZE",
+						   1UL << OE_DELTA_SIZE_BITS);
 }
 
 struct object_entry *packlist_alloc(struct packing_data *pdata,
@@ -160,6 +162,14 @@ struct object_entry *packlist_alloc(struct packing_data *pdata,
 
 		if (!pdata->in_pack_by_idx)
 			REALLOC_ARRAY(pdata->in_pack, pdata->nr_alloc);
+		if (pdata->delta_size)
+			REALLOC_ARRAY(pdata->delta_size, pdata->nr_alloc);
+
+		if (pdata->tree_depth)
+			REALLOC_ARRAY(pdata->tree_depth, pdata->nr_alloc);
+
+		if (pdata->layer)
+			REALLOC_ARRAY(pdata->layer, pdata->nr_alloc);
 	}
 
 	new_entry = pdata->objects + pdata->nr_objects++;
@@ -175,5 +185,30 @@ struct object_entry *packlist_alloc(struct packing_data *pdata,
 	if (pdata->in_pack)
 		pdata->in_pack[pdata->nr_objects - 1] = NULL;
 
+	if (pdata->tree_depth)
+		pdata->tree_depth[pdata->nr_objects - 1] = 0;
+
+	if (pdata->layer)
+		pdata->layer[pdata->nr_objects - 1] = 0;
+
 	return new_entry;
+}
+
+void oe_set_delta_ext(struct packing_data *pdata,
+		      struct object_entry *delta,
+		      const unsigned char *sha1)
+{
+	struct object_entry *base;
+
+	ALLOC_GROW(pdata->ext_bases, pdata->nr_ext + 1, pdata->alloc_ext);
+	base = &pdata->ext_bases[pdata->nr_ext++];
+	memset(base, 0, sizeof(*base));
+	hashcpy(base->idx.oid.hash, sha1);
+
+	/* These flags mark that we are not part of the actual pack output. */
+	base->preferred_base = 1;
+	base->filled = 1;
+
+	delta->ext_base = 1;
+	delta->delta_idx = base - pdata->ext_bases + 1;
 }

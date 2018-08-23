@@ -171,6 +171,7 @@ Format of STDIN stream:
 #include "packfile.h"
 #include "object-store.h"
 #include "mem-pool.h"
+#include "commit-reach.h"
 
 #define PACK_ID_BITS 16
 #define MAX_PACK_ID ((1<<PACK_ID_BITS)-1)
@@ -1068,7 +1069,7 @@ static int store_object(
 		duplicate_count_by_type[type]++;
 		return 1;
 	} else if (find_sha1_pack(oid.hash,
-				  get_packed_git(the_repository))) {
+				  get_all_packs(the_repository))) {
 		e->type = type;
 		e->pack_id = MAX_PACK_ID;
 		e->idx.offset = 1; /* just not zero! */
@@ -1266,7 +1267,7 @@ static void stream_blob(uintmax_t len, struct object_id *oidout, uintmax_t mark)
 		truncate_pack(&checkpoint);
 
 	} else if (find_sha1_pack(oid.hash,
-				  get_packed_git(the_repository))) {
+				  get_all_packs(the_repository))) {
 		e->type = OBJ_BLOB;
 		e->pack_id = MAX_PACK_ID;
 		e->idx.offset = 1; /* just not zero! */

@@ -582,13 +582,11 @@ test_expect_success 'same tree (merge and amend merge)' '
 
 	git merge -s ours side -m "empty ok" &&
 	git diff HEAD^ HEAD >actual &&
-	: >expected &&
-	test_cmp expected actual &&
+	test_must_be_empty actual &&
 
 	git commit --amend -m "empty really ok" &&
 	git diff HEAD^ HEAD >actual &&
-	: >expected &&
-	test_cmp expected actual
+	test_must_be_empty actual
 
 '
 
@@ -677,7 +675,7 @@ test_expect_success '--dry-run with conflicts fixed from a merge' '
 	git checkout -b branch-2 HEAD^1 &&
 	echo "commit-2-state" >test-file &&
 	git commit -m "commit 2" -i test-file &&
-	! $(git merge --no-commit commit-1) &&
+	test_must_fail git merge --no-commit commit-1 &&
 	echo "commit-2-state" >test-file &&
 	git add test-file &&
 	git commit --dry-run &&

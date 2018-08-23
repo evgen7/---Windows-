@@ -52,6 +52,12 @@ struct commit_graph {
 
 struct commit_graph *load_commit_graph_one(const char *graph_file);
 
+/*
+ * Return 1 if and only if the repository has a commit-graph
+ * file and generation numbers are computed in that file.
+ */
+int generation_numbers_enabled(struct repository *r);
+
 void write_commit_graph_reachable(const char *obj_dir, int append);
 void write_commit_graph(const char *obj_dir,
 			struct string_list *pack_indexes,
@@ -60,6 +66,7 @@ void write_commit_graph(const char *obj_dir,
 
 int verify_commit_graph(struct repository *r, struct commit_graph *g);
 
+void close_commit_graph(struct repository *);
 void free_commit_graph(struct commit_graph *);
 
 #endif

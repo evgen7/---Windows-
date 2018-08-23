@@ -2,6 +2,7 @@
 #define PACK_OBJECTS_H
 
 #include "object-store.h"
+#include "thread-utils.h"
 #include "pack.h"
 
 #define DEFAULT_DELTA_CACHE_SIZE (256 * 1024 * 1024)
@@ -15,7 +16,7 @@
  * above this limit. Don't lower it too much.
  */
 #define OE_SIZE_BITS		31
-#define OE_DELTA_SIZE_BITS	20
+#define OE_DELTA_SIZE_BITS	23
 
 /*
  * State flags for depth-first search used for analyzing delta cycles.
@@ -95,12 +96,14 @@ struct object_entry {
 				     */
 	unsigned delta_size_:OE_DELTA_SIZE_BITS; /* delta data size (uncompressed) */
 	unsigned delta_size_valid:1;
+	unsigned char in_pack_header_size;
 	unsigned in_pack_idx:OE_IN_PACK_BITS;	/* already in pack */
 	unsigned z_delta_size:OE_Z_DELTA_BITS;
 	unsigned type_valid:1;
-	unsigned type_:TYPE_BITS;
 	unsigned no_try_delta:1;
+	unsigned type_:TYPE_BITS;
 	unsigned in_pack_type:TYPE_BITS; /* could be delta */
+
 	unsigned preferred_base:1; /*
 				    * we do not pack this, but is available
 				    * to be used as the base object to delta
@@ -109,17 +112,17 @@ struct object_entry {
 	unsigned tagged:1; /* near the very tip of refs */
 	unsigned filled:1; /* assigned write-order */
 	unsigned dfs_state:OE_DFS_STATE_BITS;
-	unsigned char in_pack_header_size;
 	unsigned depth:OE_DEPTH_BITS;
+	unsigned ext_base:1; /* delta_idx points outside packlist */
 
 	/*
 	 * pahole results on 64-bit linux (gcc and clang)
 	 *
-	 *   size: 80, bit_padding: 20 bits, holes: 8 bits
+	 *   size: 80, bit_padding: 9 bits
 	 *
 	 * and on 32-bit (gcc)
 	 *
-	 *   size: 76, bit_padding: 20 bits, holes: 8 bits
+	 *   size: 76, bit_padding: 9 bits
 	 */
 };
 
@@ -131,6 +134,7 @@ struct packing_data {
 	uint32_t index_size;
 
 	unsigned int *in_pack_pos;
+	unsigned long *delta_size;
 
 	/*
 	 * Only one of these can be non-NULL and they have different
@@ -141,10 +145,41 @@ struct packing_data {
 	struct packed_git **in_pack_by_idx;
 	struct packed_git **in_pack;
 
+#ifndef NO_PTHREADS
+	pthread_mutex_t lock;
+#endif
+
+	/*
+	 * This list contains entries for bases which we know the other side
+	 * has (e.g., via reachability bitmaps), but which aren't in our
+	 * "objects" list.
+	 */
+	struct object_entry *ext_bases;
+	uint32_t nr_ext, alloc_ext;
+
 	uintmax_t oe_size_limit;
+	uintmax_t oe_delta_size_limit;
+
+	/* delta islands */
+	unsigned int *tree_depth;
+	unsigned char *layer;
 };
 
 void prepare_packing_data(struct packing_data *pdata);
+
+static inline void packing_data_lock(struct packing_data *pdata)
+{
+#ifndef NO_PTHREADS
+	pthread_mutex_lock(&pdata->lock);
+#endif
+}
+static inline void packing_data_unlock(struct packing_data *pdata)
+{
+#ifndef NO_PTHREADS
+	pthread_mutex_unlock(&pdata->lock);
+#endif
+}
+
 struct object_entry *packlist_alloc(struct packing_data *pdata,
 				    const unsigned char *sha1,
 				    uint32_t index_pos);
@@ -228,9 +263,12 @@ static inline struct object_entry *oe_delta(
 		const struct packing_data *pack,
 		const struct object_entry *e)
 {
-	if (e->delta_idx)
+	if (!e->delta_idx)
+		return NULL;
+	if (e->ext_base)
+		return &pack->ext_bases[e->delta_idx - 1];
+	else
 		return &pack->objects[e->delta_idx - 1];
-	return NULL;
 }
 
 static inline void oe_set_delta(struct packing_data *pack,
@@ -242,6 +280,10 @@ static inline void oe_set_delta(struct packing_data *pack,
 	else
 		e->delta_idx = 0;
 }
+
+void oe_set_delta_ext(struct packing_data *pack,
+		      struct object_entry *e,
+		      const unsigned char *sha1);
 
 static inline struct object_entry *oe_delta_child(
 		const struct packing_data *pack,
@@ -333,18 +375,68 @@ static inline unsigned long oe_delta_size(struct packing_data *pack,
 {
 	if (e->delta_size_valid)
 		return e->delta_size_;
-	return oe_size(pack, e);
+
+	/*
+	 * pack->detla_size[] can't be NULL because oe_set_delta_size()
+	 * must have been called when a new delta is saved with
+	 * oe_set_delta().
+	 * If oe_delta() returns NULL (i.e. default state, which means
+	 * delta_size_valid is also false), then the caller must never
+	 * call oe_delta_size().
+	 */
+	return pack->delta_size[e - pack->objects];
 }
 
 static inline void oe_set_delta_size(struct packing_data *pack,
 				     struct object_entry *e,
 				     unsigned long size)
 {
-	e->delta_size_ = size;
-	e->delta_size_valid = e->delta_size_ == size;
-	if (!e->delta_size_valid && size != oe_size(pack, e))
-		BUG("this can only happen in check_object() "
-		    "where delta size is the same as entry size");
+	if (size < pack->oe_delta_size_limit) {
+		e->delta_size_ = size;
+		e->delta_size_valid = 1;
+	} else {
+		packing_data_lock(pack);
+		if (!pack->delta_size)
+			ALLOC_ARRAY(pack->delta_size, pack->nr_alloc);
+		packing_data_unlock(pack);
+
+		pack->delta_size[e - pack->objects] = size;
+		e->delta_size_valid = 0;
+	}
+}
+
+static inline unsigned int oe_tree_depth(struct packing_data *pack,
+					 struct object_entry *e)
+{
+	if (!pack->tree_depth)
+		return 0;
+	return pack->tree_depth[e - pack->objects];
+}
+
+static inline void oe_set_tree_depth(struct packing_data *pack,
+				     struct object_entry *e,
+				     unsigned int tree_depth)
+{
+	if (!pack->tree_depth)
+		ALLOC_ARRAY(pack->tree_depth, pack->nr_objects);
+	pack->tree_depth[e - pack->objects] = tree_depth;
+}
+
+static inline unsigned char oe_layer(struct packing_data *pack,
+				     struct object_entry *e)
+{
+	if (!pack->layer)
+		return 0;
+	return pack->layer[e - pack->objects];
+}
+
+static inline void oe_set_layer(struct packing_data *pack,
+				struct object_entry *e,
+				unsigned char layer)
+{
+	if (!pack->layer)
+		ALLOC_ARRAY(pack->layer, pack->nr_objects);
+	pack->layer[e - pack->objects] = layer;
 }
 
 #endif
