@@ -101,6 +101,7 @@ inspect() {
 
 test_expect_success 'submodule add' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -122,7 +123,7 @@ test_expect_success 'submodule add' '
 	inspect addtest/submod ../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'setup parent and one repository' '
@@ -188,6 +189,7 @@ test_expect_success 'submodule add --branch' '
 	refs/heads/initial
 	refs/heads/master
 	EOF
+	>empty &&
 
 	(
 		cd addtest &&
@@ -200,11 +202,12 @@ test_expect_success 'submodule add --branch' '
 	inspect addtest/submod-branch ../.. &&
 	test_cmp expect-heads heads &&
 	test_cmp expect-head head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add with ./ in path' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -216,11 +219,12 @@ test_expect_success 'submodule add with ./ in path' '
 	inspect addtest/dotsubmod/frotz ../../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add with /././ in path' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -232,11 +236,12 @@ test_expect_success 'submodule add with /././ in path' '
 	inspect addtest/dotslashdotsubmod/frotz ../../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add with // in path' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -248,11 +253,12 @@ test_expect_success 'submodule add with // in path' '
 	inspect addtest/slashslashsubmod/frotz ../../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add with /.. in path' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -264,11 +270,12 @@ test_expect_success 'submodule add with /.. in path' '
 	inspect addtest/realsubmod ../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add with ./, /.. and // in path' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	(
 		cd addtest &&
@@ -280,7 +287,7 @@ test_expect_success 'submodule add with ./, /.. and // in path' '
 	inspect addtest/realsubmod2 ../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success !CYGWIN 'submodule add with \\ in path' '
@@ -299,6 +306,7 @@ test_expect_success !CYGWIN 'submodule add with \\ in path' '
 
 test_expect_success 'submodule add in subdirectory' '
 	echo "refs/heads/master" >expect &&
+	>empty &&
 
 	mkdir addtest/sub &&
 	(
@@ -311,7 +319,7 @@ test_expect_success 'submodule add in subdirectory' '
 	inspect addtest/realsubmod3 ../.. &&
 	test_cmp expect heads &&
 	test_cmp expect head &&
-	test_must_be_empty untracked
+	test_cmp empty untracked
 '
 
 test_expect_success 'submodule add in subdirectory with relative path should fail' '
@@ -494,6 +502,8 @@ test_expect_success 'checkout superproject with subproject already present' '
 '
 
 test_expect_success 'apply submodule diff' '
+	>empty &&
+
 	git branch second &&
 	(
 		cd init &&
@@ -508,7 +518,7 @@ test_expect_success 'apply submodule diff' '
 	git apply --index P.diff &&
 
 	git diff --cached master >staged &&
-	test_must_be_empty staged
+	test_cmp empty staged
 '
 
 test_expect_success 'update --init' '
@@ -923,7 +933,7 @@ test_expect_success 'recursive relative submodules stay relative' '
 		cd clone2 &&
 		git submodule update --init --recursive &&
 		echo "gitdir: ../.git/modules/sub3" >./sub3/.git_expect &&
-		echo "gitdir: ../../../.git/modules/sub3/modules/dirdir%2fsubsub" >./sub3/dirdir/subsub/.git_expect
+		echo "gitdir: ../../../.git/modules/sub3/modules/dirdir/subsub" >./sub3/dirdir/subsub/.git_expect
 	) &&
 	test_cmp clone2/sub3/.git_expect clone2/sub3/.git &&
 	test_cmp clone2/sub3/dirdir/subsub/.git_expect clone2/sub3/dirdir/subsub/.git
@@ -1312,36 +1322,6 @@ test_expect_success 'recursive clone respects -q' '
 	test_when_finished "rm -rf multisuper_clone" &&
 	git clone -q --recurse-submodules multisuper multisuper_clone >actual &&
 	test_must_be_empty actual
-'
-
-test_expect_success 'resolve submodule gitdir in superprojects modules directory' '
-	test_when_finished "rm -rf superproject submodule" &&
-
-	# Create a superproject with a submodule which contains a "/"
-	test_create_repo submodule &&
-	test_commit -C submodule one &&
-	test_create_repo superproject &&
-	git -C superproject submodule add ../submodule sub/module &&
-	git -C superproject commit -m "add submodule" &&
-
-	# "/" characters in submodule names are properly urlencoded before
-	# being used to construct a path to the submodules gitdir.
-	cat >expect <<-EOF &&
-	$(git -C superproject rev-parse --git-common-dir)/modules/sub%2fmodule
-	EOF
-	git -C superproject submodule--helper gitdir "sub/module" >actual &&
-	test_cmp expect actual &&
-	test_path_is_dir "superproject/.git/modules/sub%2fmodule" &&
-
-	# Test the old-fashioned way of storing submodules in the
-	# "modules" directory by directly renaming the submodules gitdir
-	mkdir superproject/.git/modules/sub/ &&
-	mv superproject/.git/modules/sub%2fmodule superproject/.git/modules/sub/module &&
-	cat >expect <<-EOF &&
-	$(git -C superproject rev-parse --git-common-dir)/modules/sub/module
-	EOF
-	git -C superproject submodule--helper gitdir "sub/module" >actual &&
-	test_cmp expect actual
 '
 
 test_done

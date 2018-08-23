@@ -464,20 +464,10 @@ core.untrackedCache::
 	See linkgit:git-update-index[1]. `keep` by default.
 
 core.checkStat::
-	When missing or is set to `default`, many fields in the stat
-	structure are checked to detect if a file has been modified
-	since Git looked at it.  When this configuration variable is
-	set to `minimal`, sub-second part of mtime and ctime, the
-	uid and gid of the owner of the file, the inode number (and
-	the device number, if Git was compiled to use it), are
-	excluded from the check among these fields, leaving only the
-	whole-second part of mtime (and ctime, if `core.trustCtime`
-	is set) and the filesize to be checked.
-+
-There are implementations of Git that do not leave usable values in
-some fields (e.g. JGit); by excluding these fields from the
-comparison, the `minimal` mode may help interoperability when the
-same repository is used by these other systems at the same time.
+	Determines which stat fields to match between the index
+	and work tree. The user can set this to 'default' or
+	'minimal'. Default (or explicitly 'default'), is to check
+	all fields, including the sub-second part of mtime and ctime.
 
 core.quotePath::
 	Commands that output paths (e.g. 'ls-files', 'diff'), will
@@ -960,11 +950,6 @@ core.useReplaceRefs::
 	option was given on the command line. See linkgit:git[1] and
 	linkgit:git-replace[1] for more information.
 
-core.multiPackIndex::
-	Use the multi-pack-index file to track multiple packfiles using a
-	single index. See link:technical/multi-pack-index.html[the
-	multi-pack-index design document].
-
 core.sparseCheckout::
 	Enable "sparse checkout" feature. See section "Sparse checkout" in
 	linkgit:git-read-tree[1] for more information.
@@ -1079,12 +1064,6 @@ branch.autoSetupRebase::
 	See "branch.autoSetupMerge" for details on how to set up a
 	branch to track another branch.
 	This option defaults to never.
-
-branch.sort::
-	This variable controls the sort ordering of branches when displayed by
-	linkgit:git-branch[1]. Without the "--sort=<value>" option provided, the
-	value of this variable will be used as the default.
-	See linkgit:git-for-each-ref[1] field names for valid values.
 
 branch.<name>.remote::
 	When on branch <name>, it tells 'git fetch' and 'git push'
@@ -1244,6 +1223,18 @@ color.diff::
 This does not affect linkgit:git-format-patch[1] or the
 'git-diff-{asterisk}' plumbing commands.  Can be overridden on the
 command line with the `--color[=<when>]` option.
+
+diff.colorMoved::
+	If set to either a valid `<mode>` or a true value, moved lines
+	in a diff are colored differently, for details of valid modes
+	see '--color-moved' in linkgit:git-diff[1]. If simply set to
+	true the default color mode will be used. When set to false,
+	moved lines are not colored.
+
+diff.colorMovedWS::
+	When moved lines are colored using e.g. the `diff.colorMoved` setting,
+	this option controls the `<mode>` how spaces are treated
+	for details of valid modes see '--color-moved-ws' in linkgit:git-diff[1].
 
 color.diff.<slot>::
 	Use customized color for diff colorization.  `<slot>` specifies

@@ -31,7 +31,6 @@
 #include "progress.h"
 #include "commit-slab.h"
 #include "repository.h"
-#include "commit-reach.h"
 
 #define MAIL_DEFAULT_WRAP 72
 

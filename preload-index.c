@@ -76,6 +76,7 @@ void preload_index(struct index_state *index, const struct pathspec *pathspec)
 {
 	int threads, i, work, offset;
 	struct thread_data data[MAX_PARALLEL];
+	uint64_t start = getnanotime();
 
 	if (!core_preload_index)
 		return;
@@ -85,7 +86,6 @@ void preload_index(struct index_state *index, const struct pathspec *pathspec)
 		threads = 2;
 	if (threads < 2)
 		return;
-	trace_performance_enter();
 	if (threads > MAX_PARALLEL)
 		threads = MAX_PARALLEL;
 	offset = 0;
@@ -108,7 +108,7 @@ void preload_index(struct index_state *index, const struct pathspec *pathspec)
 		if (pthread_join(p->pthread, NULL))
 			die("unable to join threaded lstat");
 	}
-	trace_performance_leave("preload index");
+	trace_performance_since(start, "preload index");
 	enable_fscache(0);
 }
 #endif

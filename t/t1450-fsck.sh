@@ -16,7 +16,8 @@ test_expect_success setup '
 	git checkout HEAD^0 &&
 	test_commit B fileB two &&
 	git tag -d A B &&
-	git reflog expire --expire=now --all
+	git reflog expire --expire=now --all &&
+	>empty
 '
 
 test_expect_success 'loose objects borrowed from alternate are not missing' '
@@ -28,12 +29,12 @@ test_expect_success 'loose objects borrowed from alternate are not missing' '
 		test_commit C fileC one &&
 		git fsck --no-dangling >../actual 2>&1
 	) &&
-	test_must_be_empty actual
+	test_cmp empty actual
 '
 
 test_expect_success 'HEAD is part of refs, valid objects appear valid' '
 	git fsck >actual 2>&1 &&
-	test_must_be_empty actual
+	test_cmp empty actual
 '
 
 # Corruption tests follow.  Make sure to remove all traces of the
@@ -345,12 +346,12 @@ test_expect_success 'tag with NUL in header' '
 
 test_expect_success 'cleaned up' '
 	git fsck >actual 2>&1 &&
-	test_must_be_empty actual
+	test_cmp empty actual
 '
 
 test_expect_success 'rev-list --verify-objects' '
 	git rev-list --verify-objects --all >/dev/null 2>out &&
-	test_must_be_empty out
+	test_cmp empty out
 '
 
 test_expect_success 'rev-list --verify-objects with bad sha1' '

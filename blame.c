@@ -337,7 +337,9 @@ static void fill_origin_blob(struct diff_options *opt,
 
 static void drop_origin_blob(struct blame_origin *o)
 {
-	FREE_AND_NULL(o->file.ptr);
+	if (o->file.ptr) {
+		FREE_AND_NULL(o->file.ptr);
+	}
 }
 
 /*

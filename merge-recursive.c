@@ -27,7 +27,6 @@
 #include "dir.h"
 #include "submodule.h"
 #include "revision.h"
-#include "commit-reach.h"
 
 struct path_hashmap_entry {
 	struct hashmap_entry e;

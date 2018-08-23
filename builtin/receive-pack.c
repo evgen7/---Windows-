@@ -27,7 +27,6 @@
 #include "packfile.h"
 #include "object-store.h"
 #include "protocol.h"
-#include "commit-reach.h"
 
 static const char * const receive_pack_usage[] = {
 	N_("git receive-pack <git-dir>"),

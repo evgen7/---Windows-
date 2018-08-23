@@ -33,7 +33,6 @@
 #include "sequencer.h"
 #include "mailmap.h"
 #include "help.h"
-#include "commit-reach.h"
 
 static const char * const builtin_commit_usage[] = {
 	N_("git commit [<options>] [--] <pathspec>..."),

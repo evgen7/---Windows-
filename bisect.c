@@ -13,7 +13,6 @@
 #include "sha1-array.h"
 #include "argv-array.h"
 #include "commit-slab.h"
-#include "commit-reach.h"
 
 static struct oid_array good_revs;
 static struct oid_array skipped_revs;

@@ -25,7 +25,9 @@ static int find_tracked_branch(struct remote *remote, void *priv)
 			tracking->remote = remote->name;
 		} else {
 			free(tracking->spec.src);
-			FREE_AND_NULL(tracking->src);
+			if (tracking->src) {
+				FREE_AND_NULL(tracking->src);
+			}
 		}
 		tracking->spec.src = NULL;
 	}

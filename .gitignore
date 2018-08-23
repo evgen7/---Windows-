@@ -99,9 +99,8 @@
 /git-mergetool--lib
 /git-mktag
 /git-mktree
-/git-multi-pack-index
-/git-mv
 /git-name-rev
+/git-mv
 /git-notes
 /git-p4
 /git-pack-redundant

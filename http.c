@@ -2485,7 +2485,9 @@ void release_http_object_request(struct http_object_request *freq)
 		close(freq->localfile);
 		freq->localfile = -1;
 	}
-	FREE_AND_NULL(freq->url);
+	if (freq->url != NULL) {
+		FREE_AND_NULL(freq->url);
+	}
 	if (freq->slot != NULL) {
 		freq->slot->callback_func = NULL;
 		freq->slot->callback_data = NULL;

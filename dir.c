@@ -2268,13 +2268,10 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		   const char *path, int len, const struct pathspec *pathspec)
 {
 	struct untracked_cache_dir *untracked;
+	uint64_t start = getnanotime();
 
-	trace_performance_enter();
-
-	if (has_symlink_leading_path(path, len)) {
-		trace_performance_leave("read directory %.*s", len, path);
+	if (has_symlink_leading_path(path, len))
 		return dir->nr;
-	}
 
 	untracked = validate_untracked_cache(dir, len, pathspec);
 	if (!untracked)
@@ -2310,7 +2307,7 @@ int read_directory(struct dir_struct *dir, struct index_state *istate,
 		dir->nr = i;
 	}
 
-	trace_performance_leave("read directory %.*s", len, path);
+	trace_performance_since(start, "read directory %.*s", len, path);
 	if (dir->untracked) {
 		static int force_untracked_cache = -1;
 		static struct trace_key trace_untracked_stats = TRACE_KEY_INIT(UNTRACKED_STATS);
@@ -3061,7 +3058,7 @@ static void connect_wt_gitdir_in_nested(const char *sub_worktree,
 		strbuf_reset(&sub_wt);
 		strbuf_reset(&sub_gd);
 		strbuf_addf(&sub_wt, "%s/%s", sub_worktree, sub->path);
-		submodule_name_to_gitdir(&sub_gd, &subrepo, sub->name);
+		strbuf_addf(&sub_gd, "%s/modules/%s", sub_gitdir, sub->name);
 
 		connect_work_tree_and_git_dir(sub_wt.buf, sub_gd.buf, 1);
 	}

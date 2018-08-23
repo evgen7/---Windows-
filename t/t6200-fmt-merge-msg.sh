@@ -366,6 +366,8 @@ test_expect_success 'merge-msg with nothing to merge' '
 	test_unconfig merge.log &&
 	test_config merge.summary yes &&
 
+	>empty &&
+
 	(
 		cd remote &&
 		git checkout -b unrelated &&
@@ -374,7 +376,7 @@ test_expect_success 'merge-msg with nothing to merge' '
 		git fmt-merge-msg <.git/FETCH_HEAD >../actual
 	) &&
 
-	test_must_be_empty actual
+	test_cmp empty actual
 '
 
 test_expect_success 'merge-msg tag' '

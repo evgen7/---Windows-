@@ -14,7 +14,6 @@
 #include "revision.h"
 #include "split-index.h"
 #include "submodule.h"
-#include "commit-reach.h"
 
 #define DO_REVS		1
 #define DO_NOREV	2

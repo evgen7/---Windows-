@@ -346,9 +346,12 @@ test_expect_success 'working --list' '
 	git config --list > output &&
 	test_cmp expect output
 '
+cat > expect << EOF
+EOF
+
 test_expect_success '--list without repo produces empty output' '
 	git --git-dir=nonexistent config --list >output &&
-	test_must_be_empty output
+	test_cmp expect output
 '
 
 cat > expect << EOF

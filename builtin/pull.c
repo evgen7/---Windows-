@@ -22,7 +22,6 @@
 #include "tempfile.h"
 #include "lockfile.h"
 #include "wt-status.h"
-#include "commit-reach.h"
 
 enum rebase_type {
 	REBASE_INVALID = -1,
@@ -136,7 +135,7 @@ static struct option pull_options[] = {
 	/* Options passed to git-merge or git-rebase */
 	OPT_GROUP(N_("Options related to merging")),
 	{ OPTION_CALLBACK, 'r', "rebase", &opt_rebase,
-	  "(false|true|merges|preserve|interactive)",
+	  "false|true|merges|preserve|interactive",
 	  N_("incorporate changes by rebasing rather than merging"),
 	  PARSE_OPT_OPTARG, parse_opt_rebase },
 	OPT_PASSTHRU('n', NULL, &opt_diffstat, NULL,
