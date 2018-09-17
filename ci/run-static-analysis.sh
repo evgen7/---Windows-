@@ -3,7 +3,7 @@
 # Perform various static code analysis checks
 #
 
-. ${0%/*}/lib.sh
+. ${0%/*}/lib-travisci.sh
 
 make --jobs=2 coccicheck
 

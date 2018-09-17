@@ -3,9 +3,8 @@
 # Perform sanity checks on documentation and build it.
 #
 
-. ${0%/*}/lib.sh
+. ${0%/*}/lib-travisci.sh
 
-test -n "$ALREADY_HAVE_ASCIIDOCTOR" ||
 gem install asciidoctor
 
 make check-builtins
